@@ -145,17 +145,30 @@ print(NitroHttp.supportsBrotli);
 print(NitroHttp.supportsZstd);
 ```
 
-On hot restart the Dart isolate is torn down without cancelling subscriptions
-while native threads keep running. Call `NitroHttp.reset()` at startup and every
-straggling transfer is aborted, the engine threads joined, and the cookie jars
-flushed, so a reloaded app does not inherit ghost sockets:
+**Hot restart needs nothing from you.** A hot restart replaces the Dart isolate
+while the plugin's native side keeps running — engine threads, in-flight
+transfers, cookie jars and cancellation state all survive it, and Flutter tells
+a plugin nothing. The library notices by itself: the first time an incarnation
+touches native, it aborts every straggling transfer, joins the engine threads,
+flushes the cookie jars and clears cancellation state. There is no call to add
+to `main()`.
 
 ```dart
 void main() {
-  NitroHttp.reset();
-  runApp(const MyApp());
+  runApp(const MyApp());       // that's it
 }
 ```
+
+`NitroHttp.reset()` still exists for the explicit case — a test that wants a
+known-clean engine between cases, or an app deliberately dropping everything
+mid-run. It is no longer something you have to remember, which matters because
+the failure mode was invisible: ghost sockets, or a request that cancelled
+itself because a cancellation token id from the previous incarnation was still
+live in the engine.
+
+A background isolate is skipped deliberately: its statics are fresh too, so it
+cannot tell a hot restart from simply being new, and resetting there would abort
+the transfers the root isolate has in flight.
 ## How it compares
 
 The feature target was: everything **rhttp** has (Rust/`reqwest`, the most

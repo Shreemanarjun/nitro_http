@@ -1,13 +1,22 @@
 <!--
   This README is for people USING the library. Keep it example-led and short.
   Deep material — TLS/proxy/DNS detail, the native build, the full benchmark
-  record — belongs in docs/ADVANCED.md.
+  record — belongs in doc/ADVANCED.md.
 -->
 
-# nitro_http
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="doc/logo-dark.svg">
+    <img alt="nitro_http" src="doc/logo-light.svg" width="420">
+  </picture>
+</p>
 
-A fast HTTP client for Flutter. One C++ engine, five platforms, and the same
-behaviour on all of them.
+<h1 align="center">nitro_http</h1>
+
+<p align="center">
+  A fast HTTP client for Flutter. One C++ engine, five platforms, and the same
+  behaviour on all of them.
+</p>
 
 ```dart
 final client = NitroHttpClient(settings: const ClientSettings(
@@ -38,30 +47,81 @@ there is no second implementation to disagree with the first.
 
 ## How fast is it
 
-Measured in **release** builds on real hardware against `dart:io`,
-`package:http`, `dio` and `rhttp` (Rust/reqwest), all five hitting the same
-in-process server. Lower is better; **bold** is the winner.
-
-**Apple M1 Pro (macOS)**
+Measured in **release** builds on real hardware — an M1 Pro, a physical iPhone 12
+and a physical OnePlus — against `dart:io`, `package:http`, `dio` and `rhttp`
+(Rust/reqwest), all five hitting the same in-process server. p50, lower is better,
+**bold** is the fastest of the five.
 
 | Scenario | nitro_http | dart:io | package:http | dio | rhttp |
 |---|--:|--:|--:|--:|--:|
-| 1 KiB GET, one at a time | 0.16 ms | **0.13 ms** | 0.14 ms | 0.18 ms | 0.18 ms |
-| 512 GETs at once | **27 ms** | 31 ms | 55 ms | 68 ms | 33 ms |
-| Mixed workload | **0.78 ms** | 1.13 ms | 1.02 ms | 1.28 ms | 0.98 ms |
-| 256 MiB download | 1111 ms | 1119 ms | 1132 ms | 1126 ms | **1030 ms** |
-| 128 MiB upload | 1714 ms | 1718 ms | 1755 ms | **1707 ms** | 1836 ms |
+| **macOS** — M1 Pro | | | | | |
+| 1 KiB GET | 0.17 ms | **0.15 ms** | 0.15 ms | 0.21 ms | 0.18 ms |
+| 64 GETs at once | **3.60 ms** | 5.15 ms | 5.11 ms | 7.40 ms | 4.14 ms |
+| 32 MiB download | 128 ms | 140 ms | 137 ms | 138 ms | **128 ms** |
+| 8 MiB upload | 108 ms | 110 ms | 109 ms | **107 ms** | 116 ms |
+| Mixed workload | **1.08 ms** | 1.33 ms | 1.54 ms | 1.44 ms | 1.46 ms |
+| **iOS** — iPhone 12 (A14) | | | | | |
+| 1 KiB GET | 0.15 ms | **0.14 ms** | 0.14 ms | 0.20 ms | 0.17 ms |
+| 64 GETs at once | **4.28 ms** | 5.20 ms | 5.18 ms | 6.70 ms | 4.39 ms |
+| 32 MiB download | 136 ms | 148 ms | 147 ms | 146 ms | **135 ms** |
+| 8 MiB upload | 115 ms | 112 ms | **112 ms** | 113 ms | 119 ms |
+| Mixed workload | **1.23 ms** | 1.73 ms | 1.57 ms | 2.40 ms | 1.39 ms |
+| **Android** — OnePlus, Android 16 | | | | | |
+| 1 KiB GET | 0.40 ms | **0.33 ms** | 0.33 ms | 0.64 ms | 0.89 ms |
+| 64 GETs at once | **15 ms** | 18 ms | 27 ms | 37 ms | 22 ms |
+| 32 MiB download | **215 ms** | 286 ms | 265 ms | 273 ms | 295 ms |
+| 8 MiB upload | 202 ms | **173 ms** | 178 ms | 215 ms | 239 ms |
+| Mixed workload | **2.18 ms** | 5.14 ms | 5.04 ms | 4.20 ms | 3.57 ms |
 
-**iPhone 12 (A14)** — 64 requests at once: **4.8 ms**, ahead of every other
-client including rhttp. Upload and mixed land within 1 % of the fastest.
+<details>
+<summary><b>The same data as charts, plus how the dispatch modes compare</b></summary>
 
-**Read it honestly.** This client wins when requests overlap, because the engine
-runs its own event loop and connection pool off your UI isolate. On a single
-small request it is a few tens of microseconds behind `dart:io` — that is the
-FFI hop, and any real network erases it. On one huge transfer everyone converges,
-because at that point you are measuring the socket.
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="doc/bench-macos-dark.svg">
+    <img alt="macOS benchmark, Apple M1 Pro" src="doc/bench-macos-light.svg">
+  </picture>
+</p>
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="doc/bench-ios-dark.svg">
+    <img alt="iOS benchmark, iPhone 12" src="doc/bench-ios-light.svg">
+  </picture>
+</p>
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="doc/bench-android-dark.svg">
+    <img alt="Android benchmark, OnePlus" src="doc/bench-android-light.svg">
+  </picture>
+</p>
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="doc/bench-android-modes-dark.svg">
+    <img alt="Serial, concurrent and parallel dispatch on Android" src="doc/bench-android-modes-light.svg">
+  </picture>
+</p>
+</details>
 
-Numbers, method, and how to reproduce them: [docs/ADVANCED.md](docs/ADVANCED.md#benchmarks).
+**Read it honestly.**
+
+- **Concurrency is the win, on every platform.** 64 requests in flight finish
+  fastest here — ahead of rhttp on all three, and 1.2x to 2.5x ahead of the other
+  Dart clients. That is the engine running its own event loop and connection pool
+  off your UI isolate, and it is the shape a real screen has.
+- **The mixed workload is also fastest on every platform**, by the widest margin on
+  Android. That is the closest thing here to an app rather than a microbenchmark.
+- **One small request is a wash and slightly behind.** 0.02 ms on Apple, 0.07 ms on
+  Android — the FFI hop. Any real network erases it.
+- **Large transfers are a tie**, except the Android download, which this client
+  wins by 20 %.
+- **rhttp is the closest competitor** and costs its users a Rust toolchain; it has
+  no cache, no interceptors and no WebSockets.
+
+These come from a loopback server, deliberately: what is left when you remove the
+network is the client's own cost. They say nothing about behaviour over a real
+link, where latency dominates and everything converges. Method and how to
+reproduce: [doc/ADVANCED.md](doc/ADVANCED.md#benchmarks).
+
 
 ## Install
 
@@ -120,9 +180,56 @@ client.dispose(); // closes pooled connections
 One client per API is the intended shape: it owns the connection pool, the cookie
 jar and the cache, so reusing it is what makes the second request fast.
 
-## Cookbook
+## Features
 
-### Query parameters and headers
+Grouped by what you are trying to do. Every snippet was type-checked against the
+API as it stands, so the names here are the real ones.
+
+- [Making requests](#making-requests)
+- [Sending a body](#sending-a-body)
+- [Reading a response](#reading-a-response)
+- [Errors](#errors)
+- [Streaming](#streaming)
+- [Progress and timings](#progress-and-timings)
+- [Cancelling and timeouts](#cancelling-and-timeouts)
+- [Retries](#retries)
+- [Interceptors](#interceptors)
+- [Cookies](#cookies)
+- [Caching and prefetch](#caching-and-prefetch)
+- [TLS and certificates](#tls-and-certificates)
+- [Proxies and DNS](#proxies-and-dns)
+- [HTTP versions and the connection pool](#http-versions-and-the-connection-pool)
+- [WebSockets](#websockets)
+- [Using it with package:http or dio](#using-it-with-packagehttp-or-dio)
+- [Engine capabilities and hot restart](#engine-capabilities-and-hot-restart)
+
+---
+
+### Making requests
+
+Every verb has a method, and `options_` is spelled with a trailing underscore
+because `options` is a Dart keyword in that position:
+
+```dart
+await client.get('/users');
+await client.head('/users');
+await client.post('/users', body: HttpBody.json({'name': 'Ada'}));
+await client.put('/users/1', body: HttpBody.json({'name': 'Ada'}));
+await client.patch('/users/1', body: HttpBody.json({'name': 'Grace'}));
+await client.delete('/users/1');
+await client.options_('/users');
+await client.trace('/users');
+```
+
+Anything else — including verbs nobody has standardised — goes through `request`:
+
+```dart
+await client.requestText(HttpMethod.custom, '/graph', customMethod: 'PURGE');
+```
+
+Query parameters and headers are per call. `HttpHeaders` is case-insensitive, and
+a header you set replaces the client default of the same name rather than
+appending to it:
 
 ```dart
 final res = await client.get(
@@ -132,26 +239,39 @@ final res = await client.get(
 );
 ```
 
-### Request bodies
+### Sending a body
+
+Seven shapes, and the last three never load the payload into the Dart heap:
 
 ```dart
-await client.post('/echo', body: HttpBody.json({'hello': 'world'}));
-await client.post('/echo', body: HttpBody.text('plain text'));
-await client.post('/echo', body: HttpBody.bytes(bytes));
-await client.post('/login', body: HttpBody.form({'user': 'ada', 'pass': 'lovelace'}));
+// UTF-8 text.
+HttpBody.text('hello', contentType: 'text/plain; charset=utf-8');
 
-// Multipart, including a file that never loads into memory
-await client.post('/upload', body: HttpBody.multipart([
-  MultipartItem.text('caption', 'holiday'),
-  MultipartItem.file('photo', '/path/to/photo.jpg', contentType: 'image/jpeg'),
-]));
+// jsonEncode-ed, with application/json; charset=utf-8.
+HttpBody.json({'name': 'Ada', 'roles': ['admin']});
+
+// Raw bytes.
+HttpBody.bytes(Uint8List.fromList([0xDE, 0xAD, 0xBE, 0xEF]));
+
+// application/x-www-form-urlencoded.
+HttpBody.form({'grant_type': 'refresh_token', 'token': token});
+
+// multipart/form-data; file parts stream off disk, never through the Dart heap.
+HttpBody.multipart([
+  MultipartItem.text('caption', 'Sunset'),
+  MultipartItem.file('photo', '/tmp/sunset.jpg', contentType: 'image/jpeg'),
+]);
+
+// A Dart stream, chunked when the length is unknown.
+HttpBody.stream(source, contentLength: 4096);
+
+// A path handed straight to the engine.
+HttpBody.file('/tmp/backup.zip');
 ```
 
 ### Reading a response
 
 ```dart
-final res = await client.get('/users/42');
-
 res.statusCode;              // 200
 res.body;                    // String, decoded using the response charset
 res.bodyBytes;               // Uint8List
@@ -160,87 +280,156 @@ res.headers['etag'];         // case-insensitive lookup
 res.isSuccess;               // 2xx
 ```
 
-### Errors are typed, not strings
+Responses are a sealed family, so a `switch` over them is checked for
+completeness — add a response kind and the compiler finds every place that needs
+updating:
 
-Every failure is a subclass of `NitroHttpException`, so you can handle the case
-you care about and let the rest bubble:
+```dart
+String describe(HttpResponse res) => switch (res) {
+  HttpTextResponse(:final body) => 'text: ${body.length} chars',
+  HttpBytesResponse(:final bodyBytes) => 'bytes: ${bodyBytes.length}',
+  HttpStreamResponse(:final contentLength) => 'stream: ${contentLength ?? -1}',
+};
+```
+
+There is more on the response than the body. `fromCache` and `revalidated` tell
+you whether the network was touched at all:
+
+```dart
+final res = await client.get('/users');
+print(res.version.label);        // HTTP/2
+print(res.reasonPhrase);         // OK — '' over HTTP/2 and HTTP/3, which dropped it
+print(res.finalUrl);
+print(res.redirectCount);
+print(res.primaryIp);
+print(res.fromCache);
+print(res.headers.getAll('set-cookie'));
+```
+
+### Errors
+
+Every failure is a `NitroHttpException` subtype, and the family is sealed — so you
+can switch exhaustively instead of matching on message strings:
 
 ```dart
 try {
-  await client.get('/users/42');
-} on NitroHttpTimeoutException catch (e) {
-  showRetry(e.message);
-} on NitroHttpConnectionException {
-  showOffline();
-} on NitroHttpStatusCodeException catch (e) {
-  if (e.statusCode == 404) showNotFound();
+  await client.get('/users');
+} on NitroHttpException catch (e) {
+  final detail = switch (e) {
+    NitroHttpTimeoutException(:final stage) => 'timeout at ${stage.name}',
+    NitroHttpCancelException(:final reason) => 'cancelled: ${reason ?? ''}',
+    NitroHttpStatusCodeException(:final statusCode) => 'status $statusCode',
+    NitroHttpCertificateException(:final isPinMismatch) =>
+      isPinMismatch ? 'pin mismatch' : 'bad certificate',
+    NitroHttpConnectionException(:final failure) => 'connection ${failure.name}',
+    NitroHttpRedirectException(:final redirectCount) => '$redirectCount hops',
+    NitroHttpProtocolException() => 'protocol error',
+    NitroHttpDecodingException() => 'undecodable body',
+    NitroHttpCacheMissException() => 'nothing cached',
+    NitroHttpDisposedException() => 'client disposed',
+    NitroHttpUnknownException(:final engineErrorCode) => 'CURLcode $engineErrorCode',
+  };
+  print(detail);
 }
 ```
 
-By default a 4xx or 5xx is returned, not thrown — check `res.statusCode`. Set
-`throwOnStatusCode: true` in `ClientSettings` if you would rather it threw.
+A 4xx or 5xx is **returned, not thrown**, so check `res.statusCode`. Set
+`throwOnStatusCode: true` in `ClientSettings` if you would rather have it thrown.
 
-### Downloading with progress
+### Streaming
+
+Downloads stream with real backpressure: the engine stops reading the socket when
+you stop consuming, so a slow consumer slows the network instead of filling
+memory.
 
 ```dart
-final res = await client.get(
-  '/big.zip',
-  onReceiveProgress: (received, total) {
-    setState(() => _progress = total == null ? null : received / total);
-  },
+final res = await client.requestStream(HttpMethod.get, '/dataset.ndjson');
+
+await for (final chunk in res.body) {
+  sink.add(chunk);              // a slow consumer stalls the socket, not the heap
+}
+```
+
+Uploads stream the same way, from any Dart stream:
+
+```dart
+await client.post(
+  '/ingest',
+  body: HttpBody.stream(source, contentLength: totalBytes),
 );
 ```
 
-### Streaming a response
-
-For anything large, stream it — the body never has to fit in memory, and a slow
-consumer slows the network down instead of filling the heap:
+And a file goes straight from disk to the socket, with the engine doing the
+reading — a 2 GB upload costs a few KB of Dart memory:
 
 ```dart
-final res = await client.requestStream(HttpMethod.get, '/big.zip');
-final sink = File('big.zip').openWrite();
-await res.body.pipe(sink);
+await client.put('/backups/nightly.zip', body: HttpBody.file('/var/tmp/nightly.zip'));
 ```
 
-### Uploading a file without a Dart buffer
+### Progress and timings
+
+Both directions, on any request:
 
 ```dart
-await client.post('/upload', body: HttpBody.file('/path/to/video.mp4'));
+await client.post(
+  '/upload',
+  body: HttpBody.file('/tmp/video.mp4'),
+  onSendProgress: (sent, total) => print('$sent / ${total ?? -1}'),
+  onReceiveProgress: (received, total) => print('down $received'),
+);
 ```
 
-The engine reads the file itself, so a 2 GB upload uses a few KB of Dart memory.
-
-### Cancelling
+Phase timings are on by default and cost nothing measurable. No other Dart client
+reports these, because they come from inside the engine:
 
 ```dart
-final cancelToken = CancelToken();
-final future = client.get('/slow', cancelToken: cancelToken);
-
-cancelToken.cancel('user left the screen');
-// `future` completes with NitroHttpCancelException, whose .reason is that string
+final res = await client.get('/ping');
+print(res.timings.dns);
+print(res.timings.tls);
+print(res.timings.firstByte);
+print(res.timings.total);
 ```
 
-### Timeouts and retries
+### Cancelling and timeouts
+
+```dart
+final token = CancelToken();
+Timer(const Duration(seconds: 2), () => token.cancel('user navigated away'));
+
+try {
+  await client.get('/slow', cancelToken: token);
+} on NitroHttpCancelException catch (e) {
+  print(e.reason);              // user navigated away
+}
+```
+
+Three separate deadlines, because "it timed out" is three different problems:
+
+```dart
+const ClientSettings(
+  connectTimeout: Duration(seconds: 10),   // DNS + TCP + TLS
+  timeout: Duration(seconds: 30),          // the whole request
+  idleTimeout: Duration(seconds: 90),      // aborts a transfer that goes quiet
+);
+```
+
+### Retries
 
 ```dart
 final client = NitroHttpClient(
-  settings: const ClientSettings(
-    baseUrl: 'https://api.example.com',
-    connectTimeout: Duration(seconds: 5),
-    timeout: Duration(seconds: 30),
-  ),
   interceptors: [
     RetryInterceptor(
       maxRetries: 4,
       baseDelay: const Duration(milliseconds: 250),
+      maxDelay: const Duration(seconds: 10),
       respectRetryAfter: true,
     ),
   ],
 );
 ```
 
-`RetryPolicy` retries only what is safe to retry — connection failures, timeouts,
-429 and 5xx — with exponential backoff and jitter, and honours `Retry-After`.
+It retries only what is safe to retry — connection failures, timeouts, 429 and
+5xx — with exponential backoff and jitter, and it honours `Retry-After`.
 
 ### Interceptors
 
@@ -255,38 +444,67 @@ class AuthInterceptor extends Interceptor {
     request.headers.set('authorization', 'Bearer ${await tokens.access()}');
     return Interceptor.next();
   }
+
+  @override
+  Future<InterceptorResult<HttpResponse>> onError(NitroHttpException exception) async {
+    if (exception is NitroHttpStatusCodeException && exception.statusCode == 401) {
+      await tokens.refresh();
+    }
+    return Interceptor.next();
+  }
 }
 ```
 
-Pass them as `NitroHttpClient(interceptors: [...])`. They run in order on the way
-out and in reverse on the way back, and one can short-circuit a request
-entirely — which is how you fake a response in tests.
+They run in order on the way out and in reverse on the way back. One can
+short-circuit a request and answer it itself, which is how you fake a response in
+a test:
+
+```dart
+final logger = DelegatingInterceptor(
+  onResponse: (res) async {
+    print('${res.statusCode} ${res.finalUrl} in ${res.timings.total}');
+    return Interceptor.next();
+  },
+);
+```
 
 ### Cookies
 
-On by default and per client:
+On by default, one jar per client, and persistable as a Netscape file:
 
 ```dart
 final client = NitroHttpClient(
   settings: ClientSettings(
     cookieSettings: CookieSettings(
       storeCookies: true,
-      persistPath: '$appSupportDir/cookies.txt',   // Netscape jar, survives restarts
+      persistPath: '$appSupportDir/cookies.txt',   // Netscape jar
     ),
   ),
 );
 
+// After some traffic:
 for (final c in client.cookiesFor(Uri.parse('https://api.example.com/'))) {
-  print('${c.name}=${c.value}');
+  print('${c.name}=${c.value} (${c.domain}${c.path})');
 }
+
+client.setCookie(const Cookie(
+  name: 'consent',
+  value: 'granted',
+  domain: 'api.example.com',
+));
+client.flushCookies();      // also happens automatically on dispose()
 ```
 
-### Disk cache
+### Caching and prefetch
+
+An RFC 9111 subset: `Cache-Control`, `ETag`, `Last-Modified`, and 304
+revalidation that refreshes metadata without re-downloading the body.
 
 ```dart
 NitroHttp.configureCache(HttpCacheConfig(
-  directory: cacheDir,                  // a String path, e.g. from path_provider
+  directory: cacheDir,            // e.g. path_provider's getApplicationCacheDirectory()
   maxSizeBytes: 128 * 1024 * 1024,
+  maxEntryBytes: 8 * 1024 * 1024,
 ));
 
 final client = NitroHttpClient(
@@ -294,38 +512,182 @@ final client = NitroHttpClient(
 );
 ```
 
-An RFC 9111 subset: `Cache-Control`, `ETag`, `Last-Modified`, revalidation with
-304s. Per request you can force `CacheMode.refresh` or `CacheMode.onlyIfCached`
-for an offline screen.
+Per request you can override the policy — `refresh` to force revalidation,
+`onlyIfCached` for an offline screen:
+
+```dart
+await NitroHttp.prefetchOnAppStart([
+  'https://api.example.com/v1/feed',
+  'https://api.example.com/v1/me',
+]);
+```
+
+Warm it before the user asks for anything:
+
+```dart
+await client.get('/feed', options: const RequestOptions(cacheMode: CacheMode.onlyIfCached));
+await client.get('/feed', options: const RequestOptions(cacheMode: CacheMode.refresh));
+
+final stats = NitroHttp.cacheStats();
+print('${stats.entryCount} entries, hit rate ${stats.hitRate}');
+NitroHttp.clearCache();
+```
+
+### TLS and certificates
+
+Versions, root sources, SPKI pinning and mutual TLS, all per client:
+
+```dart
+final client = NitroHttpClient(
+  settings: ClientSettings(
+    tlsSettings: TlsSettings(
+      minVersion: TlsVersion.tls13,
+      rootCaSource: RootCaSource.platform,
+      pinnedSpkiSha256: const ['YLh1dUR9y6Kja30RrAn7JKnbQG/uEtLMkBgFF2Fuihg='],
+      clientCertificate: ClientCertificate(
+        certificatePem: certPem,
+        privateKeyPem: keyPem,
+      ),
+    ),
+  ),
+);
+```
+
+Pinning is per request too, which is what you want for one sensitive endpoint in
+an otherwise ordinary app:
+
+```dart
+await client.post(
+  '/payments',
+  options: const RequestOptions(pinnedSpkiSha256: 'YLh1dUR9y6Kja30RrAn7JKnbQG/uEtLMkBgFF2Fuihg='),
+);
+```
+
+### Proxies and DNS
+
+```dart
+const ClientSettings(proxySettings: ProxySettings.system());     // default
+const ClientSettings(proxySettings: ProxySettings.noProxy());
+
+ClientSettings(
+  proxySettings: const ProxySettings.http(
+    'proxy.corp.example:3128',
+    username: 'svc',
+    password: 'hunter2',
+    noProxy: 'localhost,127.0.0.1,*.internal',
+  ),
+);
+
+const ProxySettings.socks5('127.0.0.1:1080');           // resolve locally
+const ProxySettings.socks5Hostname('127.0.0.1:1080');   // let the proxy resolve
+```
+
+Static DNS overrides and DNS-over-HTTPS, without touching the device's resolver:
+
+```dart
+ClientSettings(
+  dnsSettings: DnsSettings.static({
+    'api.example.com': ['203.0.113.10', '2001:db8::10'],
+  }, port: 443),
+);
+
+const ClientSettings(
+  dnsSettings: DnsSettings.doh('https://cloudflare-dns.com/dns-query'),
+);
+```
+
+### HTTP versions and the connection pool
+
+```dart
+const ClientSettings(
+  // auto, http11Only, http2, http2Only, http3, http3Only
+  httpVersionPref: HttpVersionPref.http2,
+  poolSettings: PoolSettings(
+    maxConnections: 64,        // across all hosts
+    maxConnectionsPerHost: 6,
+    idleTimeout: Duration(seconds: 90),
+    maxLifetime: Duration(minutes: 10),
+  ),
+);
+```
+
+The `*Only` variants fail the request rather than silently downgrading, which is
+what you want when a downgrade would be worse than an error. Check `NitroHttp.supportsHttp3` first — a system libcurl usually has
+no QUIC backend.
 
 ### WebSockets
 
 ```dart
-final ws = await NitroWebSocket.connect(Uri.parse('wss://example.com/socket'));
+final ws = await NitroWebSocket.connect(
+  Uri.parse('wss://echo.example.com/socket'),
+  protocols: ['chat'],
+  pingInterval: const Duration(seconds: 30),
+);
 
-ws.events.listen((e) => switch (e) {
-  TextDataReceived(:final text) => handleText(text),
-  BinaryDataReceived(:final data) => handleBinary(data),
-  CloseReceived(:final code, :final reason) => handleClose(code, reason),
+ws.events.listen((event) {
+  switch (event) {
+    case TextDataReceived(:final text):
+      print('text $text');
+    case BinaryDataReceived(:final data):
+      print('binary ${data.length}');
+    case CloseReceived(:final code, :final reason):
+      print('closed $code $reason');
+  }
 });
 
 ws.sendText('hello');
 await ws.close(1000, 'done');
 ```
 
-### Already using package:http or dio?
+`NitroWebSocket` implements `package:web_socket`'s `WebSocket` interface, so it
+drops into code written against that.
+
+### Using it with package:http or dio
 
 ```dart
-// package:http — anywhere a http.Client is expected
-final http.Client client = NitroHttpCompatClient();
+final client = NitroHttpCompatClient();
+final res = await client.get(Uri.parse('https://example.com/'));
+print(res.statusCode);
+client.close();
+```
 
-// dio
+```dart
 final dio = Dio()..useNitroHttp();
+
+// or, with settings or a shared client:
+final dio = Dio()
+  ..httpClientAdapter = NitroHttpDioAdapter(
+    settings: const ClientSettings(timeout: Duration(seconds: 30)),
+  );
 ```
 
 The `package:http` adapter is checked against the official
-`package:http_client_conformance_tests` suite. The dio adapter lives in the
-separate `nitro_http_dio` package.
+`package:http_client_conformance_tests` suite. The dio adapter is the separate
+`nitro_http_dio` package.
+
+### Engine capabilities and hot restart
+
+Ask the engine what it can actually do, rather than assuming:
+
+```dart
+print(NitroHttp.engineVersion);      // libcurl/8.21.0 ... nghttp2/1.70.0 ...
+print(NitroHttp.supportsHttp3);
+print(NitroHttp.supportsWebSockets);
+print(NitroHttp.supportsBrotli);
+print(NitroHttp.supportsZstd);
+```
+
+Hot restart leaves the native engine threads running while the Dart isolate is
+replaced. You do not have to do anything about it: the first time the reloaded
+app touches the engine, it joins those threads, aborts the stragglers, flushes
+the cookie jars and clears cancellation state.
+
+```dart
+void main() {
+  runApp(const MyApp());       // nothing to add
+}
+```
+
 
 ## Configuration
 
@@ -334,19 +696,35 @@ The settings you are most likely to touch:
 | Setting | Default | What it does |
 |---|---|---|
 | `baseUrl` | none | Prefix for relative paths |
-| `connectTimeout` | 10 s | Connect phase only |
-| `timeout` | 30 s | Whole request |
-| `idleTimeout` | 90 s | Abort a transfer that goes quiet |
-| `maxRedirects` | 5 | 0 disables following |
+| `connectTimeout` | 10 s | DNS + TCP + TLS only |
+| `timeout` | 30 s | The whole request |
+| `idleTimeout` | 90 s | Aborts a transfer that goes quiet |
+| `httpVersionPref` | `auto` | Negotiate, prefer, or require a version |
+| `headers` | none | Default headers a request can override |
+| `userAgent` | package default | `User-Agent` |
 | `throwOnStatusCode` | `false` | Throw on 4xx/5xx instead of returning |
 | `enableCompression` | `true` | Advertise and decode gzip/deflate/br/zstd |
-| `maxConnections` | 64 | Pool size across all hosts |
-| `cacheSettings` | off | Disk cache, after `NitroHttp.configureCache` |
+| `redirectSettings` | follow, max 5 | Whether and how far to follow 3xx |
+| `poolSettings` | 64 total, 6 per host | Pool size and connection lifetimes |
+| `tlsSettings` | system | Versions, pinning, roots, mTLS |
+| `proxySettings` | system | HTTP or SOCKS5 proxy |
+| `dnsSettings` | system | Static overrides or DNS-over-HTTPS |
 | `cookieSettings` | on | Jar behaviour and persistence |
-| `tlsSettings` | system | Versions, pinning, custom roots, mTLS |
+| `cacheSettings` | off | Disk cache, after `NitroHttp.configureCache` |
+| `streamChunks` | tuned | How streamed chunks are batched |
+
+Interceptors are **not** a setting — they are a `NitroHttpClient` argument, because
+they are behaviour rather than configuration:
+
+```dart
+final client = NitroHttpClient(
+  settings: const ClientSettings(baseUrl: 'https://api.example.com'),
+  interceptors: [RetryInterceptor(maxRetries: 3)],
+);
+```
 
 TLS, proxies and DNS-over-HTTPS have more to them than fits here — see
-[docs/ADVANCED.md](docs/ADVANCED.md).
+[doc/ADVANCED.md](doc/ADVANCED.md).
 
 ## Limitations
 
@@ -359,7 +737,7 @@ TLS, proxies and DNS-over-HTTPS have more to them than fits here — see
   boundary against a hostile server.
 - **Binary size is roughly 1.5–3 MB per ABI** with the bundled native stack.
 - **No prebuilt binaries are published yet.** Until then you build a slice or
-  link a system libcurl — see [docs/ADVANCED.md](docs/ADVANCED.md#native-dependencies).
+  link a system libcurl — see [doc/ADVANCED.md](doc/ADVANCED.md#native-dependencies).
 
 ## Try it
 
@@ -373,8 +751,11 @@ flutter run
 
 ## Docs
 
-- [docs/ADVANCED.md](docs/ADVANCED.md) — TLS, proxies, DNS, the native build,
-  testing, and the complete benchmark record
+- [doc/ADVANCED.md](doc/ADVANCED.md) — TLS, proxies, DNS, HTTP versions, the
+  native build, testing, and the complete benchmark record
+- [doc/ARCHITECTURE.md](doc/ARCHITECTURE.md) — how the engine works inside: the
+  ack protocol, the credit loop, the threading contract. Read this before
+  changing native code.
 - [CHANGELOG.md](CHANGELOG.md)
 
 ## Contributing

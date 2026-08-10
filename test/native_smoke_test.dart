@@ -588,6 +588,57 @@ void main() {
       expect(response.statusCode, 200, reason: 'the new client still works');
     }, skip: skipReason);
 
+    test('disposing a client completes its in-flight requests', () async {
+      final doomed = NitroHttpClient(
+        settings: ClientSettings(baseUrl: server.url('')),
+      );
+      final pending = doomed
+          .get('/slow/5000')
+          .then<Object?>((r) => r, onError: (Object e) => e);
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+
+      doomed.dispose();
+
+      // Regression: the completions native posts on shutdown were queued but
+      // undelivered when `NitroCoalescer.dispose()` closed the port and cleared
+      // its completers, so this Future never resolved AT ALL. A request that
+      // hangs forever is worse than one that fails, and exactly-once completion
+      // is the invariant the whole engine is built around.
+      final result = await pending.timeout(
+        const Duration(seconds: 6),
+        onTimeout: () => 'TIMED OUT — disposal dropped the completion',
+      );
+      expect(result, isA<NitroHttpException>(), reason: '$result');
+    }, skip: skipReason);
+
+    test('cancelling a token after its client is disposed is inert', () async {
+      final doomed = NitroHttpClient(
+        settings: ClientSettings(baseUrl: server.url('')),
+      );
+      final token = CancelToken();
+      final pending = doomed
+          .get('/slow/5000', cancelToken: token)
+          .then<Object?>((r) => r, onError: (Object e) => e);
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+
+      doomed.dispose();
+      await pending.timeout(
+        const Duration(seconds: 6),
+        onTimeout: () => 'timed out',
+      );
+
+      // The token listener outlives the request by design, so this fires
+      // against a disposed client. Routing token calls through the per-client
+      // instance made it throw out of a listener — an uncaught zone error on an
+      // ordinary teardown path.
+      Object? escaped;
+      runZonedGuarded(
+        () => token.cancel('after disposal'),
+        (Object error, StackTrace _) => escaped = error,
+      );
+      expect(escaped, isNull, reason: 'cancel threw: $escaped');
+    }, skip: skipReason);
+
     test('a background isolate never reconciles native state', () async {
       // The root isolate has work in flight.
       final inFlight = client

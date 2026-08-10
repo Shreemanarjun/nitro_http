@@ -2,6 +2,26 @@
 
 ### Fixed
 
+* **Disposing a client no longer strands its in-flight requests.** With
+  completion batching on — the default — a request still running when
+  `dispose()` was called never completed at all: not with an error, not at
+  ever. The engine posts its shutdown completions correctly, but `dispose()` is
+  synchronous, so the isolate has had no turn to deliver those messages by the
+  time `NitroCoalescer.dispose()` closes the port and drops the completers it is
+  holding. Disposal now lets the queued completions land first, and reports a
+  definite failure for anything that still has not arrived, so every request
+  ends exactly once. This affected any client disposed mid-request — closing a
+  screen with a request outstanding is the ordinary case.
+
+* **Cancelling a token after its client was disposed threw.** The token
+  listener deliberately outlives any one request, so tripping a token on the way
+  out of a disposed screen called into a disposed native instance and threw from
+  inside a listener — surfacing as an uncaught error rather than doing nothing.
+  Token operations and record release now go through the engine role, a process
+  singleton no client owns; both are process-wide operations that never belonged
+  on a per-client instance. That also fixes a quieter bug: two clients sharing a
+  token would lose cancellation entirely once the first was disposed.
+
 * **A hot restart no longer needs anything from you, and no longer breaks
   cancellation.** A hot restart replaces the Dart isolate while the plugin's
   native side keeps running, and Flutter tells a plugin nothing. That used to be

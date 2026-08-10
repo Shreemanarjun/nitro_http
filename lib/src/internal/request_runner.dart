@@ -137,6 +137,11 @@ final class NativeRequestExecutor implements RequestExecutor {
   /// a port for this.
   NitroCoalescer? _coalescer;
 
+  /// Completers this executor owns, one per coalesced send still awaiting its
+  /// result. See `_sendCoalesced` for why the coalescer's own completers are
+  /// not enough.
+  final Set<Completer<int>> _inFlightCoalesced = <Completer<int>>{};
+
   @override
   void configureClient(RawClientConfig config) =>
       _native.configureClient(config);
@@ -160,10 +165,40 @@ final class NativeRequestExecutor implements RequestExecutor {
   /// through the engine's own allocator.
   Future<RawResponse> _sendCoalesced(RawRequest request, Uint8List body) async {
     final coalescer = _coalescer ??= NitroCoalescer();
-    final address = await coalescer.submit(
-      (int callId, int port) =>
-          _native.sendBufferedCoalesced(callId, request, body, port),
-    );
+
+    // The caller awaits OUR completer, not the coalescer's.
+    //
+    // `NitroCoalescer.dispose()` closes the port and then `_pending.clear()`s —
+    // it drops the completers it is holding without completing them, which is
+    // documented but fatal here: a Future that never resolves is worse than one
+    // that fails. Native posts its shutdown completions before the port closes,
+    // but `dispose()` is synchronous, so the isolate has not had a turn to
+    // deliver them and closing discards the lot. Owning the completer is what
+    // lets disposal report a definite outcome for every request instead of
+    // leaving the caller waiting forever.
+    final completer = Completer<int>();
+    _inFlightCoalesced.add(completer);
+    coalescer
+        .submit(
+          (int callId, int port) =>
+              _native.sendBufferedCoalesced(callId, request, body, port),
+        )
+        .then(
+          (int value) {
+            if (!completer.isCompleted) completer.complete(value);
+          },
+          onError: (Object error, StackTrace stack) {
+            if (!completer.isCompleted) completer.completeError(error, stack);
+          },
+        );
+
+    final int address;
+    try {
+      address = await completer.future;
+    } finally {
+      _inFlightCoalesced.remove(completer);
+    }
+
     if (address == 0) {
       // The batch wire has no null, so zero is how native says "could not even
       // encode the error envelope" — the coalesced twin of `postNull`.
@@ -174,7 +209,7 @@ final class NativeRequestExecutor implements RequestExecutor {
     try {
       return RawResponseRecordExt.fromNative(Pointer<Uint8>.fromAddress(address));
     } finally {
-      _native.releaseRecord(address);
+      _shared.releaseRecord(address);
     }
   }
 
@@ -188,12 +223,40 @@ final class NativeRequestExecutor implements RequestExecutor {
   @override
   void cancelAll() => _native.cancelAll();
 
-  @override
-  void cancelToken(int tokenId, String reason) =>
-      _native.cancelToken(tokenId, reason);
+  /// Process-wide operations go through the ENGINE role, not this client's
+  /// instance.
+  ///
+  /// A token is process-wide: cancelling it reaches every client, and the
+  /// engine resolves it through a global registry that no client owns. Routing
+  /// it through the client that happened to bind it first is wrong twice over.
+  /// It is silently wrong when two clients share a token and that first client
+  /// is disposed — the cancel would then be dropped for the others. And it is
+  /// loudly wrong on its own: the listener is registered per token and lives as
+  /// long as the token does, so a token tripped after its client was disposed
+  /// called into a disposed native instance, which hangs the app rather than
+  /// throwing. Disposing a screen's client and then cancelling its token on the
+  /// way out is a perfectly ordinary thing to do.
+  ///
+  /// `releaseRecord` rides here for the same reason: natively it is a bare
+  /// `std::free` on the module's allocator, with nothing client-specific about
+  /// it. Freeing through the client meant a completion that arrived DURING
+  /// disposal — exactly the shutdown-abort case — threw `has been disposed`
+  /// from the `finally`, replacing the real error with a StateError and leaking
+  /// the blob it was trying to free.
+  ///
+  /// The engine role is a process singleton, so it is alive whenever any client
+  /// is, and this static is cleared by a hot restart along with everything else.
+  static NitroHttpNative? _sharedRoute;
+  static NitroHttpNative get _shared =>
+      _sharedRoute ??= attachedNative(kEngineKey);
 
   @override
-  void releaseCancelToken(int tokenId) => _native.releaseCancelToken(tokenId);
+  void cancelToken(int tokenId, String reason) =>
+      _shared.cancelToken(tokenId, reason);
+
+  @override
+  void releaseCancelToken(int tokenId) =>
+      _shared.releaseCancelToken(tokenId);
 
   @override
   void grantCredit(int requestId, int chunkCount, int ackedChunks) =>
@@ -239,8 +302,42 @@ final class NativeRequestExecutor implements RequestExecutor {
     // the coalescer first would drop the port they are posted to, and every one
     // of those blobs would leak with its Future left hanging.
     _native.dispose();
-    unawaited(_coalescer?.dispose() ?? Future<void>.value());
+
+    final coalescer = _coalescer;
     _coalescer = null;
+    if (coalescer != null) unawaited(_drainThenCloseCoalescer(coalescer));
+  }
+
+  /// Lets the shutdown completions land, then closes the port and fails
+  /// whatever never arrived.
+  ///
+  /// `_native.dispose()` joins the engine thread, so by the time it returns
+  /// every completion has been POSTED — but posting only queues a message, and
+  /// this isolate cannot deliver one until it reaches the event loop. Closing
+  /// the port in the same turn therefore throws away results that already
+  /// exist. Yielding first is what turns "hangs forever" into "resolves with
+  /// the real abort error".
+  ///
+  /// The loop is bounded because a lost message must not strand the caller
+  /// either: anything still outstanding afterwards is completed with a definite
+  /// failure, so every request ends exactly once no matter which way it went.
+  Future<void> _drainThenCloseCoalescer(NitroCoalescer coalescer) async {
+    for (var turn = 0; turn < 8 && coalescer.pendingCount > 0; turn++) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    await coalescer.dispose();
+
+    for (final completer in _inFlightCoalesced.toList()) {
+      if (completer.isCompleted) continue;
+      completer.completeError(
+        NitroHttpDisposedException(
+          engineMessage:
+              'the client was disposed before this request completed, and its '
+              'result did not arrive in time to be delivered',
+        ),
+      );
+    }
+    _inFlightCoalesced.clear();
   }
 }
 

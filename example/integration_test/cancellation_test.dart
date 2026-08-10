@@ -258,6 +258,211 @@ void main() {
     });
   });
 
+  group('edge cases', () {
+    testWidgets('a transfer paused on the credit window still cancels', (
+      _,
+    ) async {
+      final http = client();
+      final token = CancelToken();
+
+      // The one case the shared flag CANNOT settle by itself. A paused transfer
+      // runs no write, read or progress callback, so nothing observes the flag;
+      // only the per-engine sweep reaches it. Without that sweep this hangs
+      // until the request timeout.
+      final response = await http.requestStream(
+        HttpMethod.get,
+        '/bytes/${64 * 1024 * 1024}',
+        cancelToken: token,
+      );
+
+      Object? error;
+      final done = Completer<void>();
+      final sub = response.body.listen(
+        null,
+        onError: (Object e) => error = e,
+        onDone: done.complete,
+      );
+      // Withhold credits until native has actually paused.
+      sub.pause();
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+
+      token.cancel('cancelled while parked');
+      sub.resume();
+
+      await done.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => fail('a paused transfer was never cancelled'),
+      );
+      expect(error, isA<NitroHttpCancelException>());
+      await sub.cancel();
+    });
+
+    testWidgets('cancelling in the same turn as the send keeps it off the wire', (
+      _,
+    ) async {
+      final http = client();
+      final token = CancelToken();
+
+      // No await between the two: the classic race the engine used to paper
+      // over with a bounded "cancelled before I saw the submit" list. The
+      // cancel reaches native before the submit does.
+      final pending = outcome(http.get('/slow/3000', cancelToken: token));
+      token.cancel('changed my mind instantly');
+
+      expect(await pending, isA<NitroHttpCancelException>());
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      expect(
+        server.totalRequests,
+        0,
+        reason: 'the request must never have been sent',
+      );
+    });
+
+    testWidgets('one token cancels requests across two clients', (_) async {
+      final a = client();
+      final b = client();
+      final token = CancelToken();
+
+      final fromA = outcome(a.get('/slow/3000', cancelToken: token));
+      final fromB = outcome(b.get('/slow/3000', cancelToken: token));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+
+      // Each client owns its own engine and loop thread, so this only works
+      // because the token registry is process-global and the sweep visits
+      // every live client rather than just the one that was asked.
+      token.cancel('both of them');
+
+      expect(await fromA, isA<NitroHttpCancelException>());
+      expect(await fromB, isA<NitroHttpCancelException>());
+    });
+
+    testWidgets('cancelling after the client is disposed does not throw', (
+      _,
+    ) async {
+      final disposable = NitroHttpClient(
+        settings: ClientSettings(baseUrl: server.baseUrl),
+      );
+      final token = CancelToken();
+      final pending = outcome(disposable.get('/slow/3000', cancelToken: token));
+
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      disposable.dispose();
+      await pending;
+
+      // The engine this token was bound to is gone. Cancelling now must be a
+      // no-op, not a crash: an app that disposes a screen's client and then
+      // trips its cancel token on the way out is doing nothing wrong.
+      expect(() => token.cancel('after disposal'), returnsNormally);
+    });
+
+    testWidgets('a cancel racing a natural completion still completes once', (
+      _,
+    ) async {
+      final http = client();
+
+      // Fast endpoint, cancel immediately after: sometimes the response wins,
+      // sometimes the cancel does. Either is correct — hanging, completing
+      // twice, or throwing something else is not. Repeated to shake the race.
+      for (var i = 0; i < 25; i++) {
+        final token = CancelToken();
+        final pending = outcome(http.get('/echo', cancelToken: token));
+        token.cancel('racing');
+
+        final result = await pending.timeout(
+          const Duration(seconds: 10),
+          onTimeout: () => fail('iteration $i never completed'),
+        );
+        expect(
+          result is HttpTextResponse || result is NitroHttpCancelException,
+          isTrue,
+          reason: 'iteration $i produced ${result.runtimeType}',
+        );
+      }
+    });
+
+    testWidgets('a token survives many sequential requests', (_) async {
+      final http = client();
+      final token = CancelToken();
+
+      // The registration is per token and deliberately never torn down when a
+      // request finishes. Re-binding per request would reintroduce the fan-out
+      // this replaced, and dropping it would leave a later cancel unheard.
+      for (var i = 0; i < 25; i++) {
+        final response = await http.get('/echo', cancelToken: token);
+        expect(response.statusCode, 200);
+      }
+
+      final pending = outcome(http.get('/slow/3000', cancelToken: token));
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      token.cancel('finally');
+      expect(await pending, isA<NitroHttpCancelException>());
+    });
+
+    testWidgets('many distinct tokens do not interfere', (_) async {
+      final http = client();
+
+      // Every request gets its own token and only the even ones are cancelled.
+      // A registry that leaked state between ids — or an id allocator that
+      // repeated — would show up as an odd-numbered request dying too.
+      final tokens = <CancelToken>[for (var i = 0; i < 40; i++) CancelToken()];
+      final pending = <Future<Object?>>[
+        for (var i = 0; i < 40; i++)
+          outcome(
+            http.get(i.isEven ? '/slow/3000' : '/echo', cancelToken: tokens[i]),
+          ),
+      ];
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+
+      for (var i = 0; i < 40; i += 2) {
+        tokens[i].cancel('even only');
+      }
+
+      final results = await Future.wait(pending);
+      for (var i = 0; i < 40; i++) {
+        if (i.isEven) {
+          expect(results[i], isA<NitroHttpCancelException>(), reason: 'i=$i');
+        } else {
+          expect(results[i], isA<HttpTextResponse>(), reason: 'i=$i');
+        }
+      }
+    });
+
+    testWidgets('a reason with newlines and unicode survives intact', (
+      _,
+    ) async {
+      final http = client();
+      final token = CancelToken();
+      const reason = 'user\n離開了 🚪 "quoted" \\backslash';
+
+      final pending = outcome(http.get('/slow/3000', cancelToken: token));
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      token.cancel(reason);
+
+      final result = await pending;
+      expect(result, isA<NitroHttpCancelException>());
+      // The reason crosses the FFI boundary as a UTF-8 string and comes back
+      // inside an error record; anything that mangles it shows up here.
+      expect((result! as NitroHttpCancelException).toString(), contains(reason));
+    });
+
+    testWidgets('cancelAll and a token cancel coexist', (_) async {
+      final http = client();
+      final token = CancelToken();
+
+      final tokened = outcome(http.get('/slow/3000', cancelToken: token));
+      final plain = outcome(http.get('/slow/3000'));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+
+      // Both mechanisms hit the same task set; each transfer must still post
+      // exactly one completion rather than being failed twice.
+      token.cancel('token first');
+      http.cancelAll();
+
+      expect(await tokened, isA<NitroHttpCancelException>());
+      expect(await plain, isA<NitroHttpCancelException>());
+    });
+  });
+
   group('hot restart', () {
     testWidgets('the first native touch of a new incarnation aborts stragglers', (
       _,

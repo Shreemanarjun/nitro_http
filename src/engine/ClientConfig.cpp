@@ -264,15 +264,40 @@ EngineError ClientConfig::applyTo(CURL* easy) const {
   // engine that runs transfers off the main thread.
   curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L);
 
-  // Deliberately NOT set: `CURLOPT_BUFFERSIZE` and `CURLOPT_UPLOAD_BUFFERSIZE`.
+  // Deliberately NOT set either: `CURLOPT_UPLOAD_BUFFERSIZE`, the SEND buffer.
+  //
+  // curl's docs say a larger upload buffer can be "a huge performance benefit",
+  // and the reasoning transfers cleanly on paper: the 64 KiB default costs 128
+  // read callbacks and 128 socket writes per 8 MiB body, each callback taking
+  // `BodyPipe`'s mutex, which curl's own performance guide warns against doing
+  // in a callback at all. 256 KiB quarters all three counts.
+  //
+  // Measured, it does nothing. Two 10-run sets through tool/bench-macos.sh,
+  // same machine, same binary except this option, 8 MiB streamed upload:
+  //
+  //     64 KiB (default)   nitro_http 106.90 ms   package:http 104.09 ms
+  //     256 KiB            nitro_http 107.07 ms   package:http 104.11 ms
+  //
+  // The control moved 0.02 ms, so the machine was steady and that really is a
+  // null rather than noise covering an effect. It fits what the ring itself
+  // measures: its cost is 0.47-0.85 ms per 8 MiB whatever the pull size, so it
+  // is bound by copying bytes, not by how often it is asked for them.
+  //
+  // Caveat worth keeping, because it is the reason not to treat this as closed:
+  // that was loopback on an M1, where a socket write is nearly free. curl's
+  // "some setups" are presumably ones where it is not — a real network, or a
+  // slower phone. Re-test on Android before concluding it never helps.
+
+  // Deliberately NOT set: `CURLOPT_BUFFERSIZE`, the RECEIVE buffer.
   // Tried three times on a 32 MiB streamed download, and it loses every time:
   //
   //   16 KiB (curl's default)               147 ms
   //   64 KiB, credit window cut to 16       157 ms
   //   256 KiB, credit window cut to 4       176 ms
   //
-  // The window is denominated in chunks, so a bigger buffer has to be paid for
-  // with fewer credits to keep the same ~1 MiB of memory in flight — and the
+  // That measurement is about DOWNLOADS specifically: the window is denominated
+  // in chunks, so a bigger receive buffer has to be paid for with fewer credits
+  // to keep the same ~1 MiB of memory in flight — and the
   // engine would rather have many small chunks it can hand over as they arrive
   // than few large ones it has to fill before Dart sees anything. Fewer, larger
   // crossings buy nothing because the cost here is per byte, not per chunk (a

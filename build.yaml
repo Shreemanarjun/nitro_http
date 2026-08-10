@@ -1,0 +1,25 @@
+# Optimized Nitrogen configuration.
+# Restricts the generator to lib/src/**/*.native.dart for faster builds.
+#
+# sources.exclude keeps build_runner's file-discovery walk out of the
+# example app's platform build output. Once example/ has been built,
+# example/ios|macos/.symlinks/plugins/<name> symlinks straight back to this
+# plugin's root — build_runner follows symlinks with no cycle detection and
+# hangs FOREVER with no output. `nitrogen generate` deletes those dirs
+# before every run, but a plain `dart run build_runner build` has no such
+# guard — these excludes make it safe too.
+targets:
+  $default:
+    sources:
+      include:
+        - lib/**
+        - $package$
+        - pubspec.yaml
+      exclude:
+        - example/**
+        - "**/.symlinks/**"
+        - "**/ephemeral/**"
+    builders:
+      nitro_generator:
+        generate_for:
+          - lib/src/**.native.dart

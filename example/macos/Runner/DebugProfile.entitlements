@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Sandbox OFF in debug/profile only. A sandboxed app that is not
+	     codesigned (a CI runner, a fresh checkout) trips a system consent
+	     prompt on launch, and `flutter test -d macos integration_test` then
+	     dies with "Dart VM Service was not discovered after 5 minutes".
+	     Release.entitlements keeps the sandbox on, which is what ships. -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<!-- nitro_http drives libcurl from inside the app, so every request is an
+	     OUTGOING sandbox connection. Without this key the App Sandbox refuses
+	     them and every transfer fails with CURLcode 7 (connection refused),
+	     including to 127.0.0.1. network.server below is separately needed only
+	     because this example hosts its own local test server. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>

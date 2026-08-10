@@ -1,0 +1,89 @@
+/// Cooperative request cancellation.
+library;
+
+import 'dart:async';
+
+import 'exceptions.dart';
+
+/// A one-shot cancellation signal shared by one or more requests.
+///
+/// A token can be handed to any number of requests; cancelling it aborts all
+/// of them. Cancellation is cooperative and idempotent — the first [cancel]
+/// wins, later ones are no-ops, and a request that has already completed is
+/// unaffected.
+class CancelToken {
+  final Completer<void> _completer = Completer<void>();
+  final List<void Function()> _listeners = [];
+  bool _isCancelled = false;
+  String? _reason;
+
+  /// Whether [cancel] has been called.
+  bool get isCancelled => _isCancelled;
+
+  /// The reason passed to [cancel], or `null`.
+  String? get reason => _reason;
+
+  /// Completes when the token is cancelled.
+  ///
+  /// Never completes with an error, so it is safe to `await` or to race with
+  /// `Future.any` without a `catchError`.
+  Future<void> get whenCancelled => _completer.future;
+
+  /// Cancels every request bound to this token.
+  ///
+  /// Calling this more than once has no further effect; the first [reason]
+  /// is the one that is kept.
+  void cancel([String? reason]) {
+    if (_isCancelled) return;
+    _isCancelled = true;
+    _reason = reason;
+    // Detach before notifying: a listener may cancel again or remove itself,
+    // and neither may mutate the list being iterated.
+    final pending = List<void Function()>.of(_listeners);
+    _listeners.clear();
+    if (!_completer.isCompleted) _completer.complete();
+    for (final listener in pending) {
+      _notify(listener);
+    }
+  }
+
+  /// Registers [callback] to run when the token is cancelled.
+  ///
+  /// Runs exactly once. Registering on an already-cancelled token invokes
+  /// [callback] immediately, so a request that starts after cancellation is
+  /// still torn down instead of hanging.
+  void addListener(void Function() callback) {
+    if (_isCancelled) {
+      _notify(callback);
+      return;
+    }
+    _listeners.add(callback);
+  }
+
+  /// Unregisters a callback previously passed to [addListener].
+  void removeListener(void Function() callback) {
+    _listeners.remove(callback);
+  }
+
+  /// Throws [NitroHttpCancelException] when the token is already cancelled.
+  void throwIfCancelled() {
+    if (!_isCancelled) return;
+    throw NitroHttpCancelException(reason: _reason);
+  }
+
+  /// A listener that throws must not abort the cancellation of the remaining
+  /// requests, but the failure is real and belongs in the zone's error
+  /// handler rather than swallowed.
+  void _notify(void Function() listener) {
+    try {
+      listener();
+    } catch (error, stackTrace) {
+      Zone.current.handleUncaughtError(error, stackTrace);
+    }
+  }
+
+  @override
+  String toString() => _isCancelled
+      ? 'CancelToken(cancelled${_reason == null ? '' : ': $_reason'})'
+      : 'CancelToken(active)';
+}

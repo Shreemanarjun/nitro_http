@@ -1,0 +1,46 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+# Libraries should not include pubspec.lock, per https://dart.dev/guides/libraries/private-files#pubspeclock.
+/pubspec.lock
+**/doc/api/
+.dart_tool/
+.flutter-plugins-dependencies
+/build/
+/coverage/
+
+# Prebuilt native dependencies, fetched and SHA-256-verified at build time.
+/ios/Frameworks/
+/macos/Frameworks/
+/.nitro_http_deps/
+
+# The dependency superbuild's output. `tool/deps/build.sh` defaults its --out to
+# `tool/deps/out`, and that tree is the ENTIRE vendored stack — BoringSSL, curl,
+# nghttp2, brotli and zstd sources, their build directories, the staged slices and
+# the merged Apple xcframeworks. Roughly 2 GB and 65,000 files per full run, all of
+# it reproducible from `deps/versions.cmake`, none of it belonging in history.
+# Without this rule a `git add -A` after building a slice stages the lot.
+/tool/deps/out/

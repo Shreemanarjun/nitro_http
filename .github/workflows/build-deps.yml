@@ -1,0 +1,251 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Build the prebuilt native dependency slices that src/deps.cmake downloads.
+#
+# Runs on three occasions:
+#   • pushing a `deps-vN` tag   → builds everything and cuts/updates the release
+#   • manual dispatch           → builds everything, publishes nothing
+#   • weekly, Monday 06:17 UTC  → builds everything against the *existing* pins
+#
+# The weekly run is the point of this file being scheduled at all. Upstream
+# breakage (a moved tarball, a compiler bump on the runner image, an NDK
+# deprecation) otherwise surfaces the day someone tries to cut a release, which
+# is the worst possible moment. Catching it on a Monday costs nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+name: build-deps
+
+on:
+  push:
+    tags: ['deps-v*']
+  workflow_dispatch:
+    inputs:
+      http3:
+        description: 'Build with HTTP/3 (ngtcp2 + nghttp3)'
+        type: boolean
+        default: true
+  schedule:
+    - cron: '17 6 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-deps-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # `false` only through a manual dispatch that explicitly asks for it; the
+  # released slices are always HTTP/3-capable so nothing needs re-vendoring
+  # when an app opts into h3.
+  EXTRA_FLAGS: ${{ (github.event_name == 'workflow_dispatch' && inputs.http3 == false) && '--no-http3' || '' }}
+
+jobs:
+  # ── Android: three ABIs, cross-compiled from x86_64 Linux with NDK r27 ──────
+  android:
+    name: android-${{ matrix.abi }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a, x86_64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      # BoringSSL verifies its symbol prefixing with util/audit_symbols.go.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          # `local-cache: true` persists the NDK through the Actions cache under
+          # one key, and the three ABI jobs here start simultaneously and race to
+          # write it: the first run logged `Failed to save: Unable to reserve
+          # cache with key setup-ndk-r27c-linux, another job may be creating this
+          # cache`, and what did get stored was a 618 MB tree with no
+          # toolchains/llvm in it. Every later run then restored that, reported
+          # `Cache hit`, and died with `CMAKE_C_COMPILER … clang is not a full
+          # path to an existing compiler tool` — a poisoned entry that fails
+          # every Android build until someone deletes it by hand.
+          #
+          # Downloading the NDK per job costs ~30s and cannot go stale.
+          local-cache: false
+
+      - name: Build slice
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: ./tool/deps/build.sh --platform android --arch ${{ matrix.abi }} $EXTRA_FLAGS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nitro-curl-android-${{ matrix.abi }}
+          path: tool/deps/out/nitro-curl-android-${{ matrix.abi }}.tar.gz
+          if-no-files-found: error
+
+  # ── Linux: one runner per architecture, no cross-compilation ───────────────
+  linux:
+    name: ${{ matrix.slice }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+            slice: linux-x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            slice: linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build slice
+        run: ./tool/deps/build.sh --platform linux --arch ${{ matrix.arch }} $EXTRA_FLAGS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nitro-curl-${{ matrix.slice }}
+          path: tool/deps/out/nitro-curl-${{ matrix.slice }}.tar.gz
+          if-no-files-found: error
+
+  # ── Apple: five single-architecture builds, then one merge ─────────────────
+  # BoringSSL cannot produce fat binaries, so each architecture is configured
+  # separately and combined afterwards with lipo + xcodebuild.
+  apple:
+    name: apple-xcframework
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: brew install ninja
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build all Apple architectures
+        run: |
+          set -euo pipefail
+          ./tool/deps/build.sh --platform ios     --arch arm64  $EXTRA_FLAGS
+          ./tool/deps/build.sh --platform ios-sim --arch arm64  $EXTRA_FLAGS
+          ./tool/deps/build.sh --platform ios-sim --arch x86_64 $EXTRA_FLAGS
+          ./tool/deps/build.sh --platform macos   --arch arm64  $EXTRA_FLAGS
+          ./tool/deps/build.sh --platform macos   --arch x86_64 $EXTRA_FLAGS
+
+      - name: Merge into xcframework and CMake slice
+        run: ./tool/deps/merge_apple.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nitro-curl-apple
+          path: |
+            tool/deps/out/NitroCurl.xcframework.zip
+            tool/deps/out/nitro-curl-apple-xcframework.tar.gz
+          if-no-files-found: error
+
+  # ── Windows x64 ────────────────────────────────────────────────────────────
+  # Windows arm64 is deliberately deferred: Flutter Windows arm64 is still
+  # niche, and enabling it here is one matrix entry plus one ValidateSet value
+  # in build.ps1 once a runner exists.
+  windows:
+    name: windows-x64
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Install NASM and Ninja
+        run: choco install nasm ninja -y --no-progress
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build slice
+        shell: pwsh
+        run: |
+          # NASM's installer does not update the PATH of the running shell, and
+          # Git Bash supplies the POSIX shell prefix_symbols.sh needs.
+          $env:PATH = "C:\Program Files\NASM;C:\Program Files\Git\usr\bin;$env:PATH"
+          $extra = @()
+          if ($env:EXTRA_FLAGS -eq '--no-http3') { $extra += '-NoHttp3' }
+          ./tool/deps/build.ps1 @extra
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nitro-curl-windows-x64
+          path: tool/deps/out/nitro-curl-windows-x64.tar.gz
+          if-no-files-found: error
+
+  # ── Publish ────────────────────────────────────────────────────────────────
+  # Tag pushes only. A weekly or dispatch run proves the pins still build and
+  # then throws the artifacts away.
+  release:
+    name: release ${{ github.ref_name }}
+    needs: [android, linux, apple, windows]
+    if: startsWith(github.ref, 'refs/tags/deps-v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Pin checksums in deps/versions.cmake
+        run: |
+          set -euo pipefail
+          ./tool/deps/publish.sh --dir dist
+          {
+            echo '## Dependency pins for `${{ github.ref_name }}`'
+            echo
+            echo '```cmake'
+            sed -n '/^set(NH_SLICE_/p' deps/versions.cmake
+            echo '```'
+            echo
+            echo 'Commit the updated `deps/versions.cmake` — until it lands,'
+            echo '`src/deps.cmake` refuses to download these archives.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The workflow cannot push to a protected branch, so the updated pin file
+      # travels as an artifact for a human to commit alongside the release.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: versions.cmake
+          path: deps/versions.cmake
+          if-no-files-found: error
+
+      - name: Create or update the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Native dependencies ${{ github.ref_name }}
+          body: |
+            Prebuilt libcurl + BoringSSL + nghttp2/ngtcp2/nghttp3 + brotli + zstd,
+            consumed by `src/deps.cmake`, the CocoaPods podspecs and the SwiftPM
+            manifests.
+
+            Each archive carries a `manifest.json` recording the exact component
+            versions, compile flags and build timestamp. Attach it to bug reports.
+
+            SHA-256 pins for `deps/versions.cmake` are in this run's job summary.
+          files: dist/*
+          fail_on_unmatched_files: true

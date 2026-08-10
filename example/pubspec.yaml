@@ -1,0 +1,77 @@
+name: nitro_http_example
+description: "Demonstrates how to use the nitro_http plugin."
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  nitro_http:
+    # The example app is bundled with the plugin so we use a path dependency on
+    # the parent directory to use the current plugin's version.
+    path: ../
+
+  cupertino_icons: ^1.0.8
+  signals_flutter: ^7.1.0
+  nitro: ^0.6.0
+
+  # The demo and the integration suite both talk to an in-process `shelf`
+  # server on 127.0.0.1. Nothing here ever reaches the public internet, so the
+  # app is useful on a plane and the tests cannot flake on someone's DNS.
+  shelf: ^1.4.0
+  shelf_router: ^1.1.0
+  shelf_web_socket: ^3.0.0
+  web_socket_channel: ^3.0.0
+
+  # SHA-256 over request and response bodies is how the streaming tests prove
+  # the credit window never drops a byte, and how /upload reports what it got.
+  crypto: ^3.0.0
+
+  # `marshal_cost_test` builds its own `Arena` to time the record encode/decode
+  # path in isolation, which needs `package:ffi` directly rather than through
+  # nitro_http's own use of it.
+  ffi: ^2.1.0
+
+  # The cache tab needs a real, OS-sanctioned cache directory: nitro_http
+  # deliberately refuses to guess one.
+  path_provider: ^2.1.0
+
+  # Benchmark baselines. `dart:io HttpClient` needs no dependency; `package:http`
+  # does.
+  http: ^1.2.0
+  # Benchmark comparison targets. Both are dev-only in spirit but must be real
+  # dependencies because the benchmark ships in the example app's lib/.
+  dio: ^5.7.0
+  # rhttp builds its Rust core from source through cargokit, so a Rust toolchain
+  # is required to compile the example app. Comment this out (and the two
+  # `rhttp` entries in benchmark.dart) if you do not have one.
+  rhttp: ^0.18.0
+
+dev_dependencies:
+  # The measurement loop for `matrix_benchmark_test`: `AsyncBenchmarkBase`
+  # auto-calibrates how many times it runs a case to reach a stable sample,
+  # which is the part worth not hand-rolling. The percentile, throughput and
+  # cross-client reporting stay in `benchmark/` — `measure()` returns a single
+  # mean, and a mean is the statistic a lone GC pause destroys.
+  benchmark_harness: ^2.4.0
+
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+
+  # `StreamQueue` in the WebSocket suite: awaiting the next event beats racing a
+  # listener against a timer.
+  async: ^2.11.0
+
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

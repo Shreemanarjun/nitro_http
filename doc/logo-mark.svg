@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- nitro_http mark: a bolt (the nitro) over streamed chunks (the http).
+       The bars reuse the benchmark charts' visual language - left-anchored,
+       rounded data-ends - and the blues are the validated palette steps used
+       throughout the docs (#2a78d6 light / #3987e5 dark). -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3987e5"/>
+      <stop offset="1" stop-color="#1c5cab"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- three chunks, widths deliberately uneven: a stream, not a queue -->
+  <rect x="64" y="150" width="118" height="40" rx="20" fill="#ffffff" opacity="0.55"/>
+  <rect x="64" y="236" width="84"  height="40" rx="20" fill="#ffffff" opacity="0.75"/>
+  <rect x="64" y="322" width="132" height="40" rx="20" fill="#ffffff" opacity="0.55"/>
+  <!-- the bolt -->
+  <path d="M310 56 L196 290 h74 L242 456 L400 212 h-88 z" fill="#ffffff"/>
+</svg>

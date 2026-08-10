@@ -1,0 +1,19 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    # Owned by nitro_generator (0.5.17) and rewritten on every codegen run, so
+    # a hand fix would not survive. Its async unpack thunks declare untyped
+    # `(raw)` parameters, which strict-inference rejects.
+    - lib/src/nitro_http.g.dart
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+  errors:
+    # an inexhaustive switch over a sealed type must not be a warning
+    non_exhaustive_switch_statement: error
+    non_exhaustive_switch_expression: error
+
+# Additional information about this file can be found at
+# https://dart.dev/guides/language/analysis-options

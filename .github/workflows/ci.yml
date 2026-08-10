@@ -1,0 +1,397 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# nitro_http CI.
+#
+# Independent checks, because a break in any one of them is invisible to the
+# others:
+#
+#   analyze         every package analyses; 621 unit tests pass; coverage holds
+#                   the 92 % floor (tool/coverage.sh — README snippets are part
+#                   of the suite, so documented examples cannot rot)
+#   codegen         `nitrogen generate` from a cold cache and `nitrogen link`
+#                   leave every tracked file byte-identical
+#   native          the C++ engine compiles and its tests pass against a plain
+#                   SYSTEM libcurl — no prebuilt slice required, which also
+#                   proves feature detection is runtime, not compile-time
+#   linux/macos/    the example app builds on every desktop platform; macOS
+#   windows         additionally runs the integration suite against the real
+#                   engine (in-process server, real transfers)
+#   android/ios     the example app builds in release against a vendored slice
+#                   the job builds itself (cached on deps/versions.cmake +
+#                   tool/deps, so only a dependency bump pays the cold build)
+# ─────────────────────────────────────────────────────────────────────────────
+name: ci
+
+# PR-gated by design: direct pushes to main do not run CI. Use a pull request
+# to get the gates, or `workflow_dispatch` (the Actions tab's "Run workflow")
+# to run them manually against any branch.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze + tests + coverage floor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Pub get (all packages)
+        run: |
+          flutter pub get
+          (cd example && flutter pub get)
+          (cd nitro_http_dio && flutter pub get)
+
+      # The conformance suite, the native smoke test and the compression probe
+      # all run only when the engine library exists — and together they carry
+      # the runner-internals coverage the 92 % floor counts on. Two minutes of
+      # cmake here buys ~110 extra tests against the real engine.
+      - name: Build the engine (system libcurl)
+        run: |
+          sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev ninja-build
+          cmake -S src -B build/lib -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DNITRO_HTTP_ALLOW_SYSTEM_CURL=ON
+          cmake --build build/lib --parallel
+
+      - name: Analyze
+        run: |
+          dart analyze --fatal-infos
+          (cd example && flutter analyze lib integration_test)
+          (cd nitro_http_dio && flutter analyze lib test)
+
+      - name: Unit tests + 92 % coverage floor
+        run: bash tool/coverage.sh
+
+      - name: nitro_http_dio tests
+        run: cd nitro_http_dio && flutter test
+
+  # ── Regeneration must be a no-op ───────────────────────────────────────────
+  # Two halves. `nitrogen generate` re-emits every *.g.* file from the spec —
+  # run from a cold cache, because its incremental cache keys on the spec hash
+  # alone and would otherwise skip a changed generator (nitro_ecosystem#42).
+  # `nitrogen link` rewrites the managed sections of src/CMakeLists.txt, the
+  # podspecs, the SPM manifests and the Gradle wiring; our own logic lives
+  # outside those sections (src/deps.cmake, src/engine.cmake) and this job is
+  # the proof. If either half leaves a diff, a hand edit landed somewhere a
+  # regeneration will silently destroy.
+  codegen:
+    name: nitrogen generate + link are no-ops
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - name: Install the nitrogen CLI
+        run: |
+          dart pub global activate nitrogen_cli 0.6.0
+          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+
+      # nitrogen unconditionally runs `pod install` for the example's Apple
+      # platforms; on Linux the binary does not exist and the failed SPAWN
+      # (unlike a failed run) crashes generation. A no-op shim keeps this job on
+      # the cheap runner. Upstream: nitro_ecosystem — spawn failure should warn
+      # and continue like a non-zero exit does.
+      - name: Shim CocoaPods
+        run: |
+          sudo tee /usr/local/bin/pod >/dev/null <<'EOF'
+          #!/bin/sh
+          echo "pod shim: skipping '$*' on Linux"
+          EOF
+          sudo chmod +x /usr/local/bin/pod
+
+      - name: nitrogen generate (cold cache)
+        run: |
+          rm -f .dart_tool/nitro/cache.json
+          nitrogen generate
+
+      - name: nitrogen link
+        run: nitrogen link
+
+      - name: Nothing changed
+        run: |
+          if ! git diff --exit-code; then
+            echo '::error::nitrogen generate/link modified tracked files.'
+            echo 'Either commit the regenerated output, or move the hand-written'
+            echo 'logic out of a nitrogen-managed section (see src/deps.cmake and'
+            echo 'src/engine.cmake for the pattern).'
+            exit 1
+          fi
+
+  # ── Native engine against a SYSTEM libcurl ─────────────────────────────────
+  # Deliberately not the vendored slice: this job must stay green before any
+  # deps-vN release exists, and building against a stock libcurl also proves the
+  # engine's runtime feature detection (curl_version_info) really is runtime and
+  # not a compile-time assumption. macOS ships curl 8.7.1 without HTTP/3 or
+  # WebSockets, which is exactly the configuration we need to keep working.
+  native:
+    name: native (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libcurl (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev ninja-build
+
+      - name: Install libcurl (macOS)
+        if: runner.os == 'macOS'
+        run: brew install curl ninja
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            # Homebrew's curl is keg-only, so it is not on the default search
+            # path; without this find_package picks the 8.7.1 in the SDK.
+            extra+=("-DCMAKE_PREFIX_PATH=$(brew --prefix curl)")
+          fi
+          cmake -S src -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DNITRO_HTTP_BUILD_TESTS=ON \
+            -DNITRO_HTTP_ALLOW_SYSTEM_CURL=ON \
+            "${extra[@]}"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --no-tests=error
+
+  # ── Example app: desktop platforms, system libcurl ─────────────────────────
+  # The example depends on rhttp for the benchmark comparison, and rhttp builds
+  # a Rust crate — hence the toolchain step on every example job.
+  linux:
+    name: example linux (system libcurl)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev ninja-build \
+            libgtk-3-dev liblzma-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build
+        working-directory: example
+        run: |
+          flutter pub get
+          flutter build linux --release
+
+  macos:
+    name: example macos + integration tests (real engine)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build
+        working-directory: example
+        run: |
+          flutter pub get
+          flutter build macos --release
+
+      # The one CI job that exercises the engine end to end: in-process server,
+      # real transfers, on the SDK's libcurl fallback. The FUNCTIONAL suites
+      # only — integration_test/ also holds the benchmark and profiling
+      # harnesses (stall_soak, size_sweep, chunk_ladder, …), which run for tens
+      # of minutes and measure performance, not correctness.
+      # One `flutter test` invocation per suite: when a single invocation runs
+      # several integration files, the macOS tool loses its log reader on the
+      # second app launch ("The log reader stopped unexpectedly") and every
+      # suite after the first fails to load. A fresh tool process per file
+      # sidesteps it; the rebuild between files is incremental and cheap.
+      - name: Integration tests
+        working-directory: example
+        run: |
+          for t in http streaming cache cookies websocket; do
+            flutter test -d macos "integration_test/${t}_test.dart"
+          done
+
+  windows:
+    name: example windows (vendored slice)
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache libcurl slice
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: tool/deps/out/stage/windows-x64
+          key: deps-win-x64-${{ hashFiles('deps/versions.cmake', 'tool/deps/**') }}
+
+      - uses: actions/setup-go@v5
+        if: steps.deps.outputs.cache-hit != 'true'
+        with:
+          go-version: '1.23'
+
+      - name: Install NASM and Ninja
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: choco install nasm ninja -y --no-progress
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: steps.deps.outputs.cache-hit != 'true'
+        with:
+          arch: x64
+
+      - name: Build slice (cache miss)
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Program Files\NASM;C:\Program Files\Git\usr\bin;$env:PATH"
+          pwsh tool/deps/build.ps1
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build
+        shell: pwsh
+        working-directory: example
+        run: |
+          $env:NITRO_HTTP_DEPS_DIR = "$env:GITHUB_WORKSPACE\tool\deps\out\stage"
+          flutter pub get
+          flutter build windows --release
+
+  # ── Example app: mobile platforms, vendored slice built in-job ─────────────
+  android:
+    name: example android (vendored slice)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache libcurl slice
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: tool/deps/out/stage/android-arm64-v8a
+          key: deps-android-arm64-${{ hashFiles('deps/versions.cmake', 'tool/deps/**') }}
+
+      - name: Slice build tools (cache miss)
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - uses: actions/setup-go@v5
+        if: steps.deps.outputs.cache-hit != 'true'
+        with:
+          go-version: '1.23'
+
+      - name: Build slice (cache miss)
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          tool/deps/build.sh --platform android --arch arm64-v8a
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build release APK
+        working-directory: example
+        run: |
+          export NITRO_HTTP_DEPS_DIR="$GITHUB_WORKSPACE/tool/deps/out/stage"
+          flutter pub get
+          flutter build apk --release --target-platform android-arm64
+
+  ios:
+    name: example ios (vendored xcframework)
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Apple slices
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: tool/deps/out/stage
+          key: deps-apple-${{ hashFiles('deps/versions.cmake', 'tool/deps/**') }}
+
+      - name: Slice build tools (cache miss)
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: brew install ninja
+
+      - uses: actions/setup-go@v5
+        if: steps.deps.outputs.cache-hit != 'true'
+        with:
+          go-version: '1.23'
+
+      - name: Build Apple slices (cache miss)
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: tool/build-curl.sh apple
+
+      # With SwiftPM enabled (the Flutter default) the podspec never runs, so
+      # Package.swift must find ios/Frameworks/NitroCurl.xcframework by path —
+      # merge_apple.sh vendors it there. A cache saved by an older script holds
+      # only the per-arch slices; re-merging is seconds when those exist.
+      - name: Ensure NitroCurl.xcframework is vendored
+        run: |
+          [ -d ios/Frameworks/NitroCurl.xcframework ] || tool/deps/merge_apple.sh
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build iOS (no codesign)
+        working-directory: example
+        run: |
+          export NITRO_HTTP_DEPS_DIR="$GITHUB_WORKSPACE/tool/deps/out/stage"
+          flutter pub get
+          flutter build ios --release --no-codesign

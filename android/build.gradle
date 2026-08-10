@@ -1,0 +1,62 @@
+plugins {
+    id "com.android.library"
+    // No Kotlin plugin: nitro_http has no JVM code. The Nitro spec declares
+    // `AndroidNativeImpl.cpp`, so Android talks to the engine through
+    // dart:ffi and never through JNI. Flutter's build infrastructure would
+    // apply KGP automatically anyway — adding "org.jetbrains.kotlin.android"
+    // here triggers a deprecation warning and will break in future Flutter
+    // versions.
+    // See: https://docs.flutter.dev/release/breaking-changes/migrate-to-built-in-kotlin
+}
+
+group = "dev.shreeman.nitro_http"
+version = "1.0"
+
+android {
+    kotlinOptions { jvmTarget = "17" }
+    sourceSets {
+        main {
+            kotlin.srcDirs += "${project.projectDir}/../lib/src/generated/kotlin"
+        }
+    }
+    namespace = "dev.shreeman.nitro_http"
+    compileSdk = 36
+    ndkVersion = "27.0.12077973"
+
+    externalNativeBuild {
+        // src/CMakeLists.txt includes deps.cmake (resolves the prebuilt
+        // libcurl slice for ANDROID_ABI) and engine.cmake (compiles
+        // src/engine/*.cpp). No `arguments` are needed: AGP already passes
+        // ANDROID_ABI/ANDROID_PLATFORM, and ANDROID_STL defaults to
+        // c++_shared, which is what a Flutter app wants — every plugin .so in
+        // the APK then shares one libc++_shared.so instead of statically
+        // duplicating the runtime. Nor are abiFilters set: restricting ABIs is
+        // the *app's* call, not a plugin's.
+        cmake { path = "../src/CMakeLists.txt" }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        // Flutter's profile variant: without an explicit profile buildType,
+        // AGP builds the plugin's CMake code with the DEBUG config — the
+        // whole native library ships at -O0 in profile mode. Inherit release
+        // so profile builds measure optimized native code.
+        profile {
+            initWith release
+        }
+    }
+
+    defaultConfig {
+        consumerProguardFiles "consumer-rules.pro"
+        minSdk = 24
+    }
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3"
+}

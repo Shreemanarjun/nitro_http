@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="882" height="546" viewBox="0 0 882 546" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+<rect width="882" height="546" fill="#fcfcfb" rx="8"/>
+<text x="16" y="26" font-size="15" font-weight="600" fill="#0b0b0b">Android — OnePlus CPH2447</text>
+<text x="16" y="42" font-size="11" fill="#52514e">p50, release, median of 3 runs — lower is better · <tspan fill="#2a78d6" font-weight="600">▮ nitro_http</tspan> · ▮ other clients</text>
+<rect x="14" y="60" width="420" height="148" fill="#f0efec" rx="6"/>
+<text x="24" y="78" font-size="12" font-weight="600" fill="#0b0b0b">small GET</text>
+<text x="114" y="100" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">dart:io</text>
+<path d="M120 90 h61.258426966292134 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-61.258426966292134 z" fill="#b8b7b2"/>
+<text x="189.25842696629212" y="100" font-size="10.5" fill="#0b0b0b" font-weight="600">0.33 ms · fastest</text>
+<text x="114" y="120" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">package:http</text>
+<path d="M120 110 h61.258426966292134 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-61.258426966292134 z" fill="#b8b7b2"/>
+<text x="189.25842696629212" y="120" font-size="10.5" fill="#52514e" font-weight="400">0.33 ms</text>
+<text x="114" y="140" font-size="10.5" text-anchor="end" fill="#0b0b0b" font-weight="600">nitro_http</text>
+<path d="M120 130 h75.10112359550563 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-75.10112359550563 z" fill="#2a78d6"/>
+<text x="203.1011235955056" y="140" font-size="10.5" fill="#52514e" font-weight="400">0.4 ms</text>
+<text x="114" y="160" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">dio</text>
+<path d="M120 150 h122.56179775280899 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-122.56179775280899 z" fill="#b8b7b2"/>
+<text x="250.56179775280899" y="160" font-size="10.5" fill="#52514e" font-weight="400">0.64 ms</text>
+<text x="114" y="180" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">rhttp</text>
+<path d="M120 170 h172.0 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-172.0 z" fill="#b8b7b2"/>
+<text x="300.0" y="180" font-size="10.5" fill="#52514e" font-weight="400">0.89 ms</text>
+<rect x="448" y="60" width="420" height="148" fill="#f0efec" rx="6"/>
+<text x="458" y="78" font-size="12" font-weight="600" fill="#0b0b0b">64 concurrent GETs</text>
+<text x="548" y="100" font-size="10.5" text-anchor="end" fill="#0b0b0b" font-weight="600">nitro_http</text>
+<path d="M554 90 h66.10571736785329 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-66.10571736785329 z" fill="#2a78d6"/>
+<text x="628.1057173678532" y="100" font-size="10.5" fill="#0b0b0b" font-weight="600">15 ms · fastest</text>
+<text x="548" y="120" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">dart:io</text>
+<path d="M554 110 h81.76914778856528 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-81.76914778856528 z" fill="#b8b7b2"/>
+<text x="643.7691477885653" y="120" font-size="10.5" fill="#52514e" font-weight="400">18 ms</text>
+<text x="548" y="140" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">rhttp</text>
+<path d="M554 130 h98.5242718446602 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-98.5242718446602 z" fill="#b8b7b2"/>
+<text x="660.5242718446602" y="140" font-size="10.5" fill="#52514e" font-weight="400">22 ms</text>
+<text x="548" y="160" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">package:http</text>
+<path d="M554 150 h123.01618122977348 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-123.01618122977348 z" fill="#b8b7b2"/>
+<text x="685.0161812297735" y="160" font-size="10.5" fill="#52514e" font-weight="400">27 ms</text>
+<text x="548" y="180" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">dio</text>
+<path d="M554 170 h172.0 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-172.0 z" fill="#b8b7b2"/>
+<text x="734.0" y="180" font-size="10.5" fill="#52514e" font-weight="400">37 ms</text>
+<rect x="14" y="222" width="420" height="148" fill="#f0efec" rx="6"/>
+<text x="24" y="240" font-size="12" font-weight="600" fill="#0b0b0b">32 MiB download</text>
+<text x="114" y="262" font-size="10.5" text-anchor="end" fill="#0b0b0b" font-weight="600">nitro_http</text>
+<path d="M120 252 h123.94307207481955 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-123.94307207481955 z" fill="#2a78d6"/>
+<text x="251.94307207481955" y="262" font-size="10.5" fill="#0b0b0b" font-weight="600">215 ms · fastest</text>
+<text x="114" y="282" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">package:http</text>
+<path d="M120 272 h154.17396902849785 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-154.17396902849785 z" fill="#b8b7b2"/>
+<text x="282.1739690284978" y="282" font-size="10.5" fill="#52514e" font-weight="400">265 ms</text>
+<text x="114" y="302" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">dio</text>
+<path d="M120 292 h158.8257937718139 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-158.8257937718139 z" fill="#b8b7b2"/>
+<text x="286.8257937718139" y="302" font-size="10.5" fill="#52514e" font-weight="400">273 ms</text>
+<text x="114" y="322" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">dart:io</text>
+<path d="M120 312 h166.81739012571583 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-166.81739012571583 z" fill="#b8b7b2"/>
+<text x="294.81739012571586" y="322" font-size="10.5" fill="#52514e" font-weight="400">286 ms</text>
+<text x="114" y="342" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">rhttp</text>
+<path d="M120 332 h172.0 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-172.0 z" fill="#b8b7b2"/>
+<text x="300.0" y="342" font-size="10.5" fill="#52514e" font-weight="400">295 ms</text>
+<rect x="448" y="222" width="420" height="148" fill="#f0efec" rx="6"/>
+<text x="458" y="240" font-size="12" font-weight="600" fill="#0b0b0b">8 MiB upload</text>
+<text x="548" y="262" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">dart:io</text>
+<path d="M554 252 h123.90950605387742 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-123.90950605387742 z" fill="#b8b7b2"/>
+<text x="685.9095060538774" y="262" font-size="10.5" fill="#0b0b0b" font-weight="600">173 ms · fastest</text>
+<text x="548" y="282" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">package:http</text>
+<path d="M554 272 h127.27923247727176 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-127.27923247727176 z" fill="#b8b7b2"/>
+<text x="689.2792324772718" y="282" font-size="10.5" fill="#52514e" font-weight="400">178 ms</text>
+<text x="548" y="302" font-size="10.5" text-anchor="end" fill="#0b0b0b" font-weight="600">nitro_http</text>
+<path d="M554 292 h145.13804516318234 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-145.13804516318234 z" fill="#2a78d6"/>
+<text x="707.1380451631824" y="302" font-size="10.5" fill="#52514e" font-weight="400">202 ms</text>
+<text x="548" y="322" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">dio</text>
+<path d="M554 312 h154.89329255519715 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-154.89329255519715 z" fill="#b8b7b2"/>
+<text x="716.8932925551971" y="322" font-size="10.5" fill="#52514e" font-weight="400">215 ms</text>
+<text x="548" y="342" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">rhttp</text>
+<path d="M554 332 h172.0 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-172.0 z" fill="#b8b7b2"/>
+<text x="734.0" y="342" font-size="10.5" fill="#52514e" font-weight="400">239 ms</text>
+<rect x="14" y="384" width="420" height="148" fill="#f0efec" rx="6"/>
+<text x="24" y="402" font-size="12" font-weight="600" fill="#0b0b0b">mixed workload</text>
+<text x="114" y="424" font-size="10.5" text-anchor="end" fill="#0b0b0b" font-weight="600">nitro_http</text>
+<path d="M120 414 h70.64591439688716 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-70.64591439688716 z" fill="#2a78d6"/>
+<text x="198.64591439688718" y="424" font-size="10.5" fill="#0b0b0b" font-weight="600">2.18 ms · fastest</text>
+<text x="114" y="444" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">rhttp</text>
+<path d="M120 434 h118.24124513618676 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-118.24124513618676 z" fill="#b8b7b2"/>
+<text x="246.24124513618676" y="444" font-size="10.5" fill="#52514e" font-weight="400">3.57 ms</text>
+<text x="114" y="464" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">dio</text>
+<path d="M120 454 h139.81322957198446 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-139.81322957198446 z" fill="#b8b7b2"/>
+<text x="267.8132295719845" y="464" font-size="10.5" fill="#52514e" font-weight="400">4.2 ms</text>
+<text x="114" y="484" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">package:http</text>
+<path d="M120 474 h168.57587548638134 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-168.57587548638134 z" fill="#b8b7b2"/>
+<text x="296.57587548638134" y="484" font-size="10.5" fill="#52514e" font-weight="400">5.04 ms</text>
+<text x="114" y="504" font-size="10.5" text-anchor="end" fill="#52514e" font-weight="400">dart:io</text>
+<path d="M120 494 h172.0 a4 4 0 0 1 4 4 v5 a4 4 0 0 1 -4 4 h-172.0 z" fill="#b8b7b2"/>
+<text x="300.0" y="504" font-size="10.5" fill="#52514e" font-weight="400">5.14 ms</text>
+</svg>

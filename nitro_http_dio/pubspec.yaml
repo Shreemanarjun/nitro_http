@@ -1,0 +1,39 @@
+name: nitro_http_dio
+description: A dio HttpClientAdapter backed by nitro_http's native libcurl engine, with streaming, cancellation and HTTP/2 and HTTP/3 support.
+version: 0.0.1
+homepage: https://github.com/Shreemanarjun/nitro_http/tree/main/nitro_http_dio
+repository: https://github.com/Shreemanarjun/nitro_http
+issue_tracker: https://github.com/Shreemanarjun/nitro_http/issues
+topics:
+  - dio
+  - http
+  - network
+  - adapter
+  - ffi
+
+environment:
+  sdk: ^3.12.2
+  # No Flutter API is used here, but `nitro_http` is an FFI plugin: its engine
+  # is built and bundled by the Flutter tool, so this package only ever runs
+  # inside a Flutter app. Run the tests with `flutter test`, not `dart test`.
+  flutter: '>=3.3.0'
+
+dependencies:
+  dio: ^5.7.0
+  nitro_http: ^0.0.1
+
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^6.0.0
+  # A local HTTP server for the end-to-end test, so the suite never depends on
+  # the public internet.
+  shelf: ^1.4.0
+
+# The two packages are versioned and released together from this repository, so
+# the sibling on disk is always the one this adapter is written against. An
+# override rather than a `path:` dependency keeps the package publishable: pub
+# ignores overrides when resolving for consumers, and the constraint above is
+# what they get.
+dependency_overrides:
+  nitro_http:
+    path: ../

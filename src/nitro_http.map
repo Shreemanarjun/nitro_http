@@ -1,0 +1,14 @@
+/* Linux version script: export only the Nitro C ABI.
+ *
+ * Without this, every libcurl / BoringSSL / nghttp2 symbol in the statically
+ * linked dependency set would be a default-visibility export of
+ * libnitro_http.so. An application that also links its own libcurl could then
+ * bind against ours (or vice versa) depending on load order — a class of bug
+ * that reproduces on one machine in ten.
+ */
+{
+  global:
+    nitro_http_*;
+  local:
+    *;
+};

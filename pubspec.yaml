@@ -1,0 +1,79 @@
+name: nitro_http
+description: A fast HTTP client for Flutter backed by a native libcurl C++ engine over Nitro FFI, with HTTP/1.1, HTTP/2, HTTP/3, streaming and WebSockets.
+version: 0.0.1
+homepage: https://github.com/Shreemanarjun/nitro_http
+repository: https://github.com/Shreemanarjun/nitro_http
+issue_tracker: https://github.com/Shreemanarjun/nitro_http/issues
+topics:
+  - http
+  - network
+  - ffi
+  - nitro
+  - websocket
+
+environment:
+  sdk: ^3.12.2
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  nitro: ^0.6.0
+  # Both are tiny and pure Dart. `http` backs the `package:http` Client
+  # adapter and `web_socket` the official WebSocket interface, so consumers
+  # can swap nitro_http in without rewriting call sites.
+  http: ^1.2.0
+  web_socket: ^1.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.4.0
+  nitro_generator: ^0.6.0
+  test: ^1.25.0
+  # A local HTTP + WebSocket server for the engine's end-to-end tests, so the
+  # suite never depends on the public internet.
+  shelf: ^1.4.0
+  shelf_web_socket: ^3.0.0
+  # `publish_to: none` upstream, so a git dependency is the only way to get
+  # it. Pinned to an exact commit rather than master: a conformance suite that
+  # changes under us turns unrelated CI runs red.
+  #
+  # The pin must track the `http` release we actually resolve. The suite
+  # asserts on `http.Request`'s own content-type behaviour, and 1.6.0 stopped
+  # adding `; charset=` to non-text media types, so the `http-v1.5.0` suite
+  # fails against a 1.6.0 `Request` for reasons that have nothing to do with
+  # any `Client`. This is the `package:http` 1.6.0 release commit; there is no
+  # `http-v1.6.0` tag.
+  http_client_conformance_tests:
+    git:
+      url: https://github.com/dart-lang/http.git
+      path: pkgs/http_client_conformance_tests
+      ref: 907782f5a792e7a5b0ed92f118c0ad91f3ecde51
+
+# For information on the generic Dart part of this file, see the
+# following page: https://dart.dev/tools/pub/pubspec
+
+# The following section is specific to Flutter packages.
+flutter:
+  # nitro_http is an FFI-only plugin on all five platforms: the Nitro spec
+  # declares AppleNativeImpl.cpp / AndroidNativeImpl.cpp / NativeImpl.cpp, so
+  # there is no Swift, Kotlin or Objective-C class to register. `ffiPlugin`
+  # alone tells the tooling to build and bundle the native code; declaring a
+  # plugin class here would make Flutter emit a registrant call to a class
+  # that does not exist.
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      ios:
+        ffiPlugin: true
+      macos:
+        ffiPlugin: true
+      windows:
+        ffiPlugin: true
+      linux:
+        ffiPlugin: true

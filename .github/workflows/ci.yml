@@ -244,7 +244,7 @@ jobs:
       - name: Integration tests
         working-directory: example
         run: |
-          for t in http streaming cache cookies websocket; do
+          for t in http streaming cache cookies websocket cancellation; do
             flutter test -d macos "integration_test/${t}_test.dart"
           done
 

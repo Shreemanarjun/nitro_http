@@ -628,6 +628,61 @@ assert on the exact bytes the bridge would have posted.
 
 ---
 
+## 9b. Why the engine is not SIMD- or DOD-optimised
+
+Because it is not CPU-bound, and the ceiling is measurable.
+
+`sample` on a release benchmark run, 20 s, the engine's own loop thread:
+
+```
+15264 nitrohttp::CurlEngine::loop()  CurlEngine.cpp:225
+  15264 multi_wait -> multi_posix_poll -> Curl_poll -> poll  (libsystem_kernel)
+```
+
+Every sample. The loop is in a blocking `poll()`, waiting on sockets, with
+effectively zero self time. There is no hot loop over an array to vectorise
+because there is no hot loop at all.
+
+The engine's total byte-handling compute is small enough to bound directly:
+
+| path | our compute | wall | share |
+|---|---|---|---|
+| 8 MiB streamed upload | 0.47–0.85 ms (measured, `BodyPipe` in isolation) | ~107 ms | ~0.6 % |
+| 32 MiB streamed download | ~2.3 ms of Dart-side copying | ~125 ms | ~2 % |
+
+So if every copy the engine performs became **free**, all five benchmark
+scenarios would move by 0.6–2 %. They cannot become free: the bulk operation is
+`memcpy`, which on ARM64 is already NEON-vectorised inside libc, and a hand-
+written kernel does not beat it.
+
+That is the answer to the standard optimisation catalogue, technique by
+technique. Structure-of-Arrays, prefetching, `alignas(64)`, loop unrolling and
+intrinsics all optimise arithmetic over large arrays — the particle-simulation
+shape those guides use for their case studies. This engine's shape is
+`poll` → `read(64 KiB)` → `memcpy` → hand to Dart. `std::execution::par` has
+nothing to parallelise, and sharding the engine across threads was measured
+separately and was monotonically worse.
+
+Two techniques from that catalogue apply without needing a hot loop, and both
+are already banked or bounded: LTO's cross-translation-unit inlining is moot on
+Apple because the engine is compiled as one TU (`EngineUnity.cpp`), and PGO's
+claimed 15–30 % is 15–30 % of CPU time this thread does not spend.
+
+**The family that does pay here is allocation, not vectorisation** — and that is
+not a guess either. Replacing `BodyPipe`'s compaction with a per-push segment
+queue was 2× SLOWER, because a `malloc`/`free` per push cost more than the
+memmove it removed (see the note in `BodyPipe.h`). Allocation dominates copying
+in this code. The per-request hot path is already written that way: three
+`reserve()` calls against two `push_back` sites, no `std::map` on any
+per-request path, and no string concatenation in `RequestTask`.
+
+If you want the remaining per-request cost, it is the bridge — one FFI call and
+one isolate wake, floor-limited — not anything a data-structure change reaches.
+And measure on **Android** before concluding anything about CPU: these numbers
+are an M1 on loopback, where a socket write is nearly free and the cores are
+fast. The one platform where compute could plausibly matter is the one not
+measured here.
+
 ## 10. Invariant checklist
 
 Break one of these and the failure will be intermittent, load-dependent and

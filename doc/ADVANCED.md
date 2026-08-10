@@ -324,6 +324,39 @@ benchmark is compiled into the example app behind
 log. The example app also has an interactive Benchmark tab with the same
 scenarios, live progress and per-scenario rankings.
 
+**On macOS, use the harness rather than a single run.** One run of this suite
+has flipped the fastest client in four of five scenarios, so a number taken from
+one is not evidence of anything:
+
+```sh
+tool/bench-macos.sh 10        # ~6 minutes: build once, run 10x, aggregate
+```
+
+It refuses to start on battery, in Low Power Mode, above half load, with any
+process over 25 % CPU, or with a simulator, emulator or build alive — because a
+benchmark that runs anyway produces numbers someone quotes later, long after the
+machine state is forgotten. Then it discards the first run as warm-up and hands
+the rest to `tool/bench_aggregate.py`, which applies four checks:
+
+- **Validity** — a run counts only if it reached `NITRO_BENCH_END` and never
+  printed `NITRO_BENCH_FAIL`.
+- **Control drift** — the four competitor clients are untouched by any change
+  here, so movement in *their* numbers measures the laptop, not the library. A
+  scenario whose controls moved more than 15 % is reported as `NO RESULT`
+  instead of a ranking. This is the check that catches the failure mode this
+  project has actually hit, where `package:http`'s burst p50 went 9.42 → 18.76 ms
+  untouched between consecutive runs.
+- **Outliers** — flagged by a MAD-based modified z-score, reported rather than
+  silently dropped (`--drop-outliers` excludes them explicitly).
+- **Resolution** — a winner is declared only when the gap exceeds both 10 % and
+  the spread of the two clients being compared. Everything else is a tie, which
+  is a genuine result rather than a failure to measure.
+
+The raw per-run logs are kept under `build/bench/`, so any published number can
+be traced back to the runs it came from.
+
+To do it by hand instead:
+
 ```sh
 cd example
 

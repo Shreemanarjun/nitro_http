@@ -18,7 +18,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  nitro: ^0.6.0
+  nitro: ^0.6.1
   # Both are tiny and pure Dart. `http` backs the `package:http` Client
   # adapter and `web_socket` the official WebSocket interface, so consumers
   # can swap nitro_http in without rewriting call sites.
@@ -32,7 +32,7 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   build_runner: ^2.4.0
-  nitro_generator: ^0.6.0
+  nitro_generator: ^0.6.1
   test: ^1.25.0
   # A local HTTP + WebSocket server for the engine's end-to-end tests, so the
   # suite never depends on the public internet.

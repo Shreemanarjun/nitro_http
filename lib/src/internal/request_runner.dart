@@ -137,10 +137,6 @@ final class NativeRequestExecutor implements RequestExecutor {
   /// a port for this.
   NitroCoalescer? _coalescer;
 
-  /// Completers this executor owns, one per coalesced send still awaiting its
-  /// result. See `_sendCoalesced` for why the coalescer's own completers are
-  /// not enough.
-  final Set<Completer<int>> _inFlightCoalesced = <Completer<int>>{};
 
   @override
   void configureClient(RawClientConfig config) =>
@@ -166,37 +162,19 @@ final class NativeRequestExecutor implements RequestExecutor {
   Future<RawResponse> _sendCoalesced(RawRequest request, Uint8List body) async {
     final coalescer = _coalescer ??= NitroCoalescer();
 
-    // The caller awaits OUR completer, not the coalescer's.
-    //
-    // `NitroCoalescer.dispose()` closes the port and then `_pending.clear()`s —
-    // it drops the completers it is holding without completing them, which is
-    // documented but fatal here: a Future that never resolves is worse than one
-    // that fails. Native posts its shutdown completions before the port closes,
-    // but `dispose()` is synchronous, so the isolate has not had a turn to
-    // deliver them and closing discards the lot. Owning the completer is what
-    // lets disposal report a definite outcome for every request instead of
-    // leaving the caller waiting forever.
-    final completer = Completer<int>();
-    _inFlightCoalesced.add(completer);
-    coalescer
-        .submit(
-          (int callId, int port) =>
-              _native.sendBufferedCoalesced(callId, request, body, port),
-        )
-        .then(
-          (int value) {
-            if (!completer.isCompleted) completer.complete(value);
-          },
-          onError: (Object error, StackTrace stack) {
-            if (!completer.isCompleted) completer.completeError(error, stack);
-          },
-        );
-
     final int address;
     try {
-      address = await completer.future;
-    } finally {
-      _inFlightCoalesced.remove(completer);
+      address = await coalescer.submit(
+        (int callId, int port) =>
+            _native.sendBufferedCoalesced(callId, request, body, port),
+      );
+    } on StateError catch (error) {
+      // nitro 0.6.1 settles a call the coalescer can no longer deliver — the
+      // client was disposed mid-request — with a StateError rather than
+      // dropping it, which is what used to leave the Future hanging forever
+      // (nitro_ecosystem#47). Only the type is ours to improve: a caller should
+      // see this API's disposed exception, not the runtime's internal error.
+      throw NitroHttpDisposedException(engineMessage: error.message);
     }
 
     if (address == 0) {
@@ -303,42 +281,12 @@ final class NativeRequestExecutor implements RequestExecutor {
     // of those blobs would leak with its Future left hanging.
     _native.dispose();
 
-    final coalescer = _coalescer;
+    // `NitroCoalescer.dispose()` drains what native already posted before
+    // closing, and fails anything genuinely lost, so nothing here has to.
+    unawaited(_coalescer?.dispose() ?? Future<void>.value());
     _coalescer = null;
-    if (coalescer != null) unawaited(_drainThenCloseCoalescer(coalescer));
   }
 
-  /// Lets the shutdown completions land, then closes the port and fails
-  /// whatever never arrived.
-  ///
-  /// `_native.dispose()` joins the engine thread, so by the time it returns
-  /// every completion has been POSTED — but posting only queues a message, and
-  /// this isolate cannot deliver one until it reaches the event loop. Closing
-  /// the port in the same turn therefore throws away results that already
-  /// exist. Yielding first is what turns "hangs forever" into "resolves with
-  /// the real abort error".
-  ///
-  /// The loop is bounded because a lost message must not strand the caller
-  /// either: anything still outstanding afterwards is completed with a definite
-  /// failure, so every request ends exactly once no matter which way it went.
-  Future<void> _drainThenCloseCoalescer(NitroCoalescer coalescer) async {
-    for (var turn = 0; turn < 8 && coalescer.pendingCount > 0; turn++) {
-      await Future<void>.delayed(Duration.zero);
-    }
-    await coalescer.dispose();
-
-    for (final completer in _inFlightCoalesced.toList()) {
-      if (completer.isCompleted) continue;
-      completer.completeError(
-        NitroHttpDisposedException(
-          engineMessage:
-              'the client was disposed before this request completed, and its '
-              'result did not arrive in time to be delivered',
-        ),
-      );
-    }
-    _inFlightCoalesced.clear();
-  }
 }
 
 /// The process-wide demultiplexer. Exactly one instance, exactly one

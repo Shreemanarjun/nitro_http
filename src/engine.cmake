@@ -24,6 +24,7 @@ set(NITRO_HTTP_ENGINE_SOURCES
   "${NITRO_HTTP_ENGINE_DIR}/DartPost.cpp"
   "${NITRO_HTTP_ENGINE_DIR}/ClientConfig.cpp"
   "${NITRO_HTTP_ENGINE_DIR}/CertStore.cpp"
+  "${NITRO_HTTP_ENGINE_DIR}/CancelRegistry.cpp"
   "${NITRO_HTTP_ENGINE_DIR}/BodyPipe.cpp"
   "${NITRO_HTTP_ENGINE_DIR}/ChunkArena.cpp"
   "${NITRO_HTTP_ENGINE_DIR}/DeferredPayloads.cpp"

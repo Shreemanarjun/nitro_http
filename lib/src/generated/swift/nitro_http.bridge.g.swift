@@ -562,8 +562,9 @@ public struct RawRequestOptions: NitroEncodable {
   public var wantTimings: Bool
   public var uploadContentLength: Int64
   public var pinnedSpkiOverride: String
+  public var cancelTokenId: Int64
 
-  public init(connectTimeoutMs: Int64, requestTimeoutMs: Int64, followRedirects: Int64, maxRedirects: Int64, cacheMode: RawCacheMode, reportProgress: Bool, wantTimings: Bool, uploadContentLength: Int64, pinnedSpkiOverride: String) {
+  public init(connectTimeoutMs: Int64, requestTimeoutMs: Int64, followRedirects: Int64, maxRedirects: Int64, cacheMode: RawCacheMode, reportProgress: Bool, wantTimings: Bool, uploadContentLength: Int64, pinnedSpkiOverride: String, cancelTokenId: Int64) {
     self.connectTimeoutMs = connectTimeoutMs
     self.requestTimeoutMs = requestTimeoutMs
     self.followRedirects = followRedirects
@@ -573,6 +574,7 @@ public struct RawRequestOptions: NitroEncodable {
     self.wantTimings = wantTimings
     self.uploadContentLength = uploadContentLength
     self.pinnedSpkiOverride = pinnedSpkiOverride
+    self.cancelTokenId = cancelTokenId
   }
 
   public static func fromNative(_ ptr: UnsafeMutablePointer<UInt8>) -> RawRequestOptions {
@@ -589,7 +591,8 @@ public struct RawRequestOptions: NitroEncodable {
       reportProgress: r.readBool(),
       wantTimings: r.readBool(),
       uploadContentLength: r.readInt(),
-      pinnedSpkiOverride: r.readString()
+      pinnedSpkiOverride: r.readString(),
+      cancelTokenId: r.readInt()
     )
   }
 
@@ -603,6 +606,7 @@ public struct RawRequestOptions: NitroEncodable {
     writer.writeBool(wantTimings)
     writer.writeInt(uploadContentLength)
     writer.writeString(pinnedSpkiOverride)
+    writer.writeInt(cancelTokenId)
   }
 
   public func toNative() -> UnsafeMutablePointer<UInt8>? {
@@ -1590,6 +1594,8 @@ public protocol HybridNitroHttpNativeProtocol: AnyObject {
     func startStreamed(request: RawRequest, body: Data) async throws -> RawResponseHead
     func cancel(requestId: Int64) -> Void
     func cancelAll() -> Void
+    func cancelToken(tokenId: Int64, reason: String) -> Void
+    func releaseCancelToken(tokenId: Int64) -> Void
     func grantCredit(requestId: Int64, chunkCount: Int64, ackedChunks: Int64) -> Void
     func feedUploadChunk(requestId: Int64, chunk: Data) -> Int64
     func finishUpload(requestId: Int64) -> Void

@@ -27,6 +27,7 @@
 #include "DartPost.cpp"
 #include "ClientConfig.cpp"
 #include "CertStore.cpp"
+#include "CancelRegistry.cpp"
 #include "BodyPipe.cpp"
 #include "ChunkArena.cpp"
 #include "DeferredPayloads.cpp"

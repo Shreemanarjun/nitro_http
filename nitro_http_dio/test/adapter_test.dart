@@ -506,11 +506,14 @@ void main() {
       final requestId = h.executor.lastRequest.requestId;
       final drained = readBody(body);
 
-      expect(h.executor.cancelled, isEmpty);
+      expect(h.executor.cancelledTokens, isEmpty);
       cancelled.complete();
       await pumpEventQueue();
 
-      expect(h.executor.cancelled, contains(requestId));
+      // The adapter cancels the request's TOKEN; the engine reaches the
+      // transfer from there, so no per-request id is sent.
+      expect(h.executor.cancelledTokens, hasLength(1));
+      expect(h.executor.cancelled, isEmpty);
 
       // Let the transfer settle the way the engine would after an abort.
       h.demux.pushError(requestId, RawErrorKind.cancelled, 'aborted');
@@ -521,14 +524,13 @@ void main() {
         () async {
       final h = Harness()..executor.holdBodyOpen = true;
       final body = await h.adapter.fetch(opts(), null, null);
-      final requestId = h.executor.lastRequest.requestId;
       unawaited(readBody(body).catchError((Object _) => ''));
       await pumpEventQueue();
 
       h.adapter.close(force: true);
       await pumpEventQueue();
 
-      expect(h.executor.cancelled, contains(requestId));
+      expect(h.executor.cancelledTokens, hasLength(1));
     });
   });
 

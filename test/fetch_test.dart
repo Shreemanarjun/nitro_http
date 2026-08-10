@@ -127,7 +127,10 @@ void main() {
       token.cancel();
       await pending.then<void>((_) {}, onError: (_) {});
 
-      expect(executor.cancelled, isNotEmpty);
+      // One token-wide call, not one per request: the engine reaches every
+      // bound transfer from the id alone.
+      expect(executor.cancelledTokens, hasLength(1));
+      expect(executor.cancelledTokens.single.$1, token.nativeId);
     });
 
     test('fetch() is a GET on the default client', () async {

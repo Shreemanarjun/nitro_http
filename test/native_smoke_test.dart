@@ -444,6 +444,120 @@ void main() {
       await expectLater(pending, throwsA(isA<NitroHttpCancelException>()));
     }, skip: skipReason);
 
+    test('the cancellation reason survives into the exception', () async {
+      final token = CancelToken();
+      final pending = client.get('/slow/3000', cancelToken: token);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      token.cancel('the user pressed back');
+
+      await expectLater(
+        pending,
+        throwsA(
+          isA<NitroHttpCancelException>().having(
+            (e) => e.toString(),
+            'toString',
+            contains('the user pressed back'),
+          ),
+        ),
+      );
+    }, skip: skipReason);
+
+    test('a request bound to a cancelled token never reaches the server',
+        () async {
+      final token = CancelToken()..cancel('pre-emptive');
+      final before = server.hits['/slow/3000'] ?? 0;
+
+      await expectLater(
+        client.get('/slow/3000', cancelToken: token),
+        throwsA(isA<NitroHttpCancelException>()),
+      );
+
+      // The guarantee a Dart-side token cannot give: by the time a listener
+      // could run, the request would already be on the wire. Here the engine
+      // reads the token before curl is touched at all.
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(server.hits['/slow/3000'] ?? 0, before);
+    }, skip: skipReason);
+
+    test('one token cancels every request bound to it', () async {
+      final token = CancelToken();
+      // The outcome is captured as it happens rather than awaited later: eight
+      // futures all rejecting before anyone listens would otherwise surface as
+      // unhandled async errors and fail the test for the wrong reason.
+      final outcomes = <Future<Object?>>[
+        for (var i = 0; i < 8; i++)
+          client
+              .get('/slow/3000', cancelToken: token)
+              .then<Object?>((r) => r, onError: (Object e) => e),
+      ];
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+
+      token.cancel('all of them');
+
+      final results = await Future.wait(outcomes);
+      expect(results, hasLength(8));
+      for (final result in results) {
+        expect(result, isA<NitroHttpCancelException>());
+      }
+    }, skip: skipReason);
+
+    test('cancelling one token leaves a request on another alone', () async {
+      final doomed = CancelToken();
+      final spared = CancelToken();
+      final cancelled = client.get('/slow/3000', cancelToken: doomed);
+      final survivor = client.get('/echo', cancelToken: spared);
+
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      doomed.cancel('only this one');
+
+      await expectLater(cancelled, throwsA(isA<NitroHttpCancelException>()));
+      final response = await survivor;
+      expect(response.statusCode, 200);
+    }, skip: skipReason);
+
+    test('a token cancelled after its request finished changes nothing',
+        () async {
+      final token = CancelToken();
+      final response = await client.get('/echo', cancelToken: token);
+      expect(response.statusCode, 200);
+
+      // Legal and inert. It must not throw, and the next request on a fresh
+      // token must still work — i.e. nothing global was poisoned.
+      token.cancel('too late to matter');
+      final next = await client.get('/echo', cancelToken: CancelToken());
+      expect(next.statusCode, 200);
+    }, skip: skipReason);
+
+    test('a streamed download stops early when its token is cancelled',
+        () async {
+      final token = CancelToken();
+      final response = await client.requestStream(
+        HttpMethod.get,
+        '/bytes/8000000',
+        cancelToken: token,
+      );
+
+      var received = 0;
+      Object? error;
+      final done = Completer<void>();
+      response.body.listen(
+        (chunk) {
+          received += chunk.length;
+          if (received > 0) token.cancel('enough');
+        },
+        onError: (Object e) => error = e,
+        onDone: done.complete,
+      );
+      await done.future;
+
+      expect(error, isA<NitroHttpCancelException>());
+      expect(
+        received,
+        lessThan(8000000),
+        reason: 'the transfer should have been aborted, not completed',
+      );
+    }, skip: skipReason);
+
     test('uploads a streamed body', () async {
       final response = await client.post(
         '/upload',

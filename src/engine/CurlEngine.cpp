@@ -104,11 +104,6 @@ void shareUnlock(CURL*, curl_lock_data data, void*) {
   shareMutex(data).unlock();
 }
 
-EngineError cancelledError() {
-  return EngineError::make(RawErrorKind::RAWERRORKIND_CANCELLED,
-                           "request cancelled");
-}
-
 EngineError shutdownError() {
   return EngineError::make(RawErrorKind::RAWERRORKIND_ENGINE_ERROR,
                            "engine shut down before the request completed");
@@ -473,8 +468,30 @@ bool CurlEngine::drainInbox() {
             break;
           }
           task->requestCancel();
-          task->completeWithError(cancelledError());
+          task->completeWithError(cancelledError(task->cancelReason()));
           retire(task);
+          break;
+        }
+
+        case OpKind::CancelToken: {
+          // Collected first, then acted on: `retire` erases from `tasks_`, so
+          // completing inside the iteration would invalidate the iterator.
+          std::vector<int64_t> ids;
+          {
+            std::lock_guard<std::mutex> lock(inboxMtx_);
+            for (const auto& entry : tasks_) {
+              if (entry.second->cancelTokenId() == op.a) {
+                ids.push_back(entry.first);
+              }
+            }
+          }
+          for (const int64_t id : ids) {
+            RequestTask* task = find(id);
+            if (task == nullptr) continue;
+            task->requestCancel();
+            task->completeWithError(cancelledError(task->cancelReason()));
+            retire(task);
+          }
           break;
         }
 
@@ -489,7 +506,7 @@ bool CurlEngine::drainInbox() {
             RequestTask* task = find(id);
             if (task == nullptr) continue;
             task->requestCancel();
-            task->completeWithError(cancelledError());
+            task->completeWithError(cancelledError(task->cancelReason()));
             retire(task);
           }
           break;
@@ -585,6 +602,19 @@ void CurlEngine::startTask(std::unique_ptr<PendingRequest> pending) {
 
   const int64_t requestId = pending->req.requestId;
   std::unique_ptr<RequestTask> task(new RequestTask(*this, std::move(*pending)));
+
+  // A token cancelled before this request was drained. Checked before anything
+  // touches curl, so the transfer never opens a socket, never consumes a pool
+  // slot and never reaches the server — the guarantee a Dart-side token cannot
+  // give, because by the time its listener runs the submit is already in flight.
+  //
+  // Unlike `preCancelled_` below this needs no bookkeeping and cannot overflow:
+  // the state lives with the token, so ordering between cancel and submit is
+  // irrelevant however far apart they are.
+  if (task->cancelRequested()) {
+    task->completeWithError(cancelledError(task->cancelReason()));
+    return;
+  }
 
   const auto cancelled =
       std::find(preCancelled_.begin(), preCancelled_.end(), requestId);
@@ -837,6 +867,17 @@ void CurlEngine::cancelAll() {
     for (auto& entry : tasks_) entry.second->requestCancel();
   }
   push(makeOp<Op>(OpKind::CancelAll));
+}
+
+void CurlEngine::cancelToken(int64_t tokenId) {
+  if (tokenId == 0) return;
+  // No per-task flag flipping here, unlike `cancel`: the token's own flag is
+  // already set by the time this is called, and every bound task reads it
+  // through the shared state. That is the whole saving — one store instead of
+  // one per transfer, and it is visible on every client, not just this one.
+  auto op = makeOp<Op>(OpKind::CancelToken);
+  op.a = tokenId;
+  push(std::move(op));
 }
 
 void CurlEngine::grantCredit(int64_t requestId, int64_t chunkCount,

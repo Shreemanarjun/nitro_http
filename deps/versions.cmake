@@ -42,13 +42,25 @@ set(NH_ZLIB_SHA256     bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f
 # Populated by `tool/deps/publish.sh` when a deps-vN release is cut. An empty
 # value means "no pin recorded yet"; src/deps.cmake then refuses to download
 # rather than trusting an unverified archive.
-set(NH_SLICE_android-arm64-v8a_SHA256   "73280195b2d4b38861e528406ab89b53ba55381f62d2367c90a9888a532ebc83")
-set(NH_SLICE_android-armeabi-v7a_SHA256 "3bec4b407fb6951d945ff92f5654bf1482b552f1e2ff2899d869d5df145ab93d")
-set(NH_SLICE_android-x86_64_SHA256      "9b1f648f79af47a8f0fba92ebead8be0e16926abb1275c091e1c57a790c8a42f")
-set(NH_SLICE_linux-x64_SHA256           "5a51cefe40e04a2b4d98e97934937d54e07462753929e83251ea4dee6f2374de")
-set(NH_SLICE_linux-arm64_SHA256         "7a549ac8c5bf2076481c206ae2c02692dde07483fe544268977b9b3f70109359")
-set(NH_SLICE_windows-x64_SHA256         "44112e4e814d333b5de83de3a829ff80ac537a1dd5476671e3dd05fc81c5d2d2")
-set(NH_SLICE_apple-xcframework_SHA256   "abf9580cc3ca1d42ec84f3297661a5641b4565e0703284beab8d1f3ab539f456")
+#
+# ⚠️  THE BUILDS ARE NOT BYTE-REPRODUCIBLE. Archive metadata and manifest.json
+#     timestamps differ per run, so rebuilding a deps-vN tag produces archives
+#     with different checksums and the release job REPLACES the published
+#     assets. Every pin below then describes files that no longer exist, and
+#     every consumer build fails with a HASH mismatch — which is exactly what
+#     happened once already, when the tag was force-moved during a history
+#     rewrite and quietly triggered a rebuild.
+#
+#     So: never re-push an existing deps-vN tag. Cut deps-v(N+1) instead. If a
+#     tag does move, re-run `tool/deps/publish.sh --dir <downloaded assets>`
+#     and commit the result before anyone builds.
+set(NH_SLICE_android-arm64-v8a_SHA256   "6b91fbb0b857fad81b5738db96e968ab9c8448a09c2b4674ce2933b67d48e30b")
+set(NH_SLICE_android-armeabi-v7a_SHA256 "32672acf02a2f28674ff9f312fadee9f24f49a03cce5d9d918097cf6efe5cde5")
+set(NH_SLICE_android-x86_64_SHA256      "01dbb0912af563d2916e276977c3478832a9d019906351dc511dff715d1fabce")
+set(NH_SLICE_linux-x64_SHA256           "7559cc7ac1270330e4b689152a72e951dad94e6206d258d2f0bbdb0d9753b3e6")
+set(NH_SLICE_linux-arm64_SHA256         "293595ae0f3d56d5b469cd87e70231ef7f9fe20c84d44fcd440a7a061939f1f3")
+set(NH_SLICE_windows-x64_SHA256         "30671eaf7d4c7a1287ac98d9c8e484a5a6875d6ee521a633934778e25a8045d2")
+set(NH_SLICE_apple-xcframework_SHA256   "81c29b579f0bb9a6e3fa5a6c2c325e12e7c65ff72b70d63b755c5e6480498ba4")
 
 # The Apple release carries TWO artifacts built from the same objects but packed
 # differently, so they have different checksums and need different pins:
@@ -60,4 +72,4 @@ set(NH_SLICE_apple-xcframework_SHA256   "abf9580cc3ca1d42ec84f3297661a5641b4565e
 #
 # Verifying the .zip against the .tar.gz pin is a guaranteed mismatch, and the
 # podspecs treat a mismatch as tampering and fail the install outright.
-set(NH_APPLE_XCFRAMEWORK_ZIP_SHA256     "03627673224eaf0f7c01261826ae1291f5b62b6a5b2afa24f19046cc77c2fa2c")
+set(NH_APPLE_XCFRAMEWORK_ZIP_SHA256     "ec24145c92c6dc6ea2c89b262d6c93da593838e1ca458dc86e9f1b170a866ce0")

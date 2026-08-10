@@ -237,6 +237,21 @@ class FakeRequestExecutor implements RequestExecutor {
   @override
   void cancelAll() => cancelAllCount++;
 
+  /// `(tokenId, reason)` for every `cancelToken` call, in order. The list is
+  /// what proves one token cancellation makes ONE native call however many
+  /// requests are bound to it.
+  final List<(int, String)> cancelledTokens = <(int, String)>[];
+
+  /// Token ids passed to `releaseCancelToken`.
+  final List<int> releasedTokens = <int>[];
+
+  @override
+  void cancelToken(int tokenId, String reason) =>
+      cancelledTokens.add((tokenId, reason));
+
+  @override
+  void releaseCancelToken(int tokenId) => releasedTokens.add(tokenId);
+
   @override
   void grantCredit(int requestId, int chunkCount, int ackedChunks) =>
       credits.add((requestId, chunkCount, ackedChunks));

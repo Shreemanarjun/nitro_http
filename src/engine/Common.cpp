@@ -252,6 +252,20 @@ std::string describeCurlError(int curlCode, const char* curlMessage) {
   return out;
 }
 
+std::string cancelledMessage(const std::string& reason) {
+  std::string out = "request cancelled";
+  if (!reason.empty()) {
+    out += ": ";
+    out += reason;
+  }
+  return out;
+}
+
+EngineError cancelledError(const std::string& reason) {
+  return EngineError::make(RawErrorKind::RAWERRORKIND_CANCELLED,
+                           cancelledMessage(reason));
+}
+
 // ── Stream sink ──────────────────────────────────────────────────────────────
 //
 // Installed exactly once, from the library constructor in HybridNitroHttp.cpp,

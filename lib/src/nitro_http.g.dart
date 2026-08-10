@@ -543,6 +543,7 @@ extension RawRequestOptionsRecordExt on RawRequestOptions {
     wantTimings: r.readBool(),
     uploadContentLength: r.readInt(),
     pinnedSpkiOverride: r.readString(),
+    cancelTokenId: r.readInt(),
   );
 
   void writeFields(RecordWriter writer) {
@@ -555,6 +556,7 @@ extension RawRequestOptionsRecordExt on RawRequestOptions {
     writer.writeBool(wantTimings);
     writer.writeInt(uploadContentLength);
     writer.writeString(pinnedSpkiOverride);
+    writer.writeInt(cancelTokenId);
   }
 
   Pointer<Uint8> toNative(Allocator alloc) {
@@ -1029,7 +1031,7 @@ class _NitroHttpNativeImpl extends NitroHttpNative {
     }
     NitroRuntime.checkLinkChecksum(
       'nitro_http',
-      '41827f6f64836355',
+      'f03160ce749c3a4a',
       () => _dylib
           .lookupFunction<Pointer<Utf8> Function(), Pointer<Utf8> Function()>(
             'nitro_http_nitro_bridge_checksum',
@@ -1218,6 +1220,20 @@ class _NitroHttpNativeImpl extends NitroHttpNative {
         'nitro_http_cancel_all',
       )
       .asFunction<void Function(int, Pointer<NitroErrorFfi>)>(isLeaf: true);
+  late final void Function(int, int, Pointer<Utf8>, Pointer<NitroErrorFfi>)
+  _cancelTokenPtr = _dylib
+      .lookupFunction<
+        Void Function(Int64, Int64, Pointer<Utf8>, Pointer<NitroErrorFfi>),
+        void Function(int, int, Pointer<Utf8>, Pointer<NitroErrorFfi>)
+      >('nitro_http_cancel_token');
+  late final void Function(int, int, Pointer<NitroErrorFfi>)
+  _releaseCancelTokenPtr = _dylib
+      .lookup<
+        NativeFunction<Void Function(Int64, Int64, Pointer<NitroErrorFfi>)>
+      >('nitro_http_release_cancel_token')
+      .asFunction<void Function(int, int, Pointer<NitroErrorFfi>)>(
+        isLeaf: true,
+      );
   late final void Function(int, int, int, int, Pointer<NitroErrorFfi>)
   _grantCreditPtr = _dylib
       .lookup<
@@ -1590,6 +1606,32 @@ class _NitroHttpNativeImpl extends NitroHttpNative {
       _cancelAllPtr(_instanceId, _nitroErr);
       NitroRuntime.throwIfOutParamError(_nitroErr, nativeFree: _nitroFree);
     }, methodName: 'cancelAll');
+  }
+
+  @override
+  void cancelToken(int tokenId, String reason) {
+    checkDisposed();
+    NitroRuntime.callSync<void>(
+      () => withArena((arena) {
+        _cancelTokenPtr(
+          _instanceId,
+          tokenId,
+          reason.toNativeUtf8(allocator: arena),
+          _nitroErr,
+        );
+        NitroRuntime.throwIfOutParamError(_nitroErr, nativeFree: _nitroFree);
+      }),
+      methodName: 'cancelToken',
+    );
+  }
+
+  @override
+  void releaseCancelToken(int tokenId) {
+    checkDisposed();
+    NitroRuntime.callSync<void>(() {
+      _releaseCancelTokenPtr(_instanceId, tokenId, _nitroErr);
+      NitroRuntime.throwIfOutParamError(_nitroErr, nativeFree: _nitroFree);
+    }, methodName: 'releaseCancelToken');
   }
 
   @override

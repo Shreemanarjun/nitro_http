@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "BodyPipe.h"
+#include "CancelRegistry.h"
 #include "ChunkArena.h"
 #include "Common.h"
 #include "ContentDecoder.h"
@@ -133,7 +134,25 @@ class RequestTask {
   /// Any thread. Sets the flag that `XFERINFOFUNCTION` observes, so a transfer
   /// already inside a curl callback aborts with `CURLE_ABORTED_BY_CALLBACK`.
   void requestCancel();
-  bool cancelRequested() const { return cancelled_.load(std::memory_order_acquire); }
+
+  /// Any thread. True when this transfer was cancelled directly OR its token
+  /// was, which is why the token is consulted here rather than being copied
+  /// into `cancelled_`: one store on the shared state cancels every bound
+  /// transfer at once, with no per-task bookkeeping to keep in sync.
+  bool cancelRequested() const {
+    return cancelled_.load(std::memory_order_acquire) ||
+           (token_ != nullptr && token_->cancelled());
+  }
+
+  /// The token this transfer is bound to, or `0`. Loop thread reads it when
+  /// sweeping tasks for a token-wide cancel.
+  int64_t cancelTokenId() const { return pending_.req.options.cancelTokenId; }
+
+  /// The reason recorded on the bound token, or empty. Only read when a
+  /// transfer is actually being failed, so the lock it takes is off the hot path.
+  std::string cancelReason() const {
+    return token_ == nullptr ? std::string() : token_->reason();
+  }
 
   // ── Idle deadline ──────────────────────────────────────────────────────────
 
@@ -296,6 +315,12 @@ class RequestTask {
 
   // Completion.
   std::atomic<bool> cancelled_{false};
+
+  /// Shared with every other transfer bound to the same token, and with the
+  /// registry. Held by `shared_ptr` so a `releaseCancelToken` mid-transfer drops
+  /// only the registry's reference and can never dangle this one. Null when the
+  /// request carries no token, which is the common case.
+  std::shared_ptr<CancelState> token_;
   bool completed_ = false;
   double startedAtMs_ = 0;
 

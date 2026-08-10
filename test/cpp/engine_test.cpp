@@ -32,6 +32,7 @@
 #include <unistd.h>
 #endif
 
+#include "CancelRegistry.h"
 #include "Common.h"
 #include "CurlEngine.h"
 #include "DeferredPayloads.h"
@@ -1166,6 +1167,228 @@ TEST_F(EngineTest, CancelAllCompletesEveryInFlightRequestExactlyOnce) {
   }
   std::sort(ids.begin(), ids.end());
   EXPECT_EQ(ids, (std::vector<int64_t>{1, 2, 3, 4}));
+}
+
+// ─── Cancellation tokens ─────────────────────────────────────────────────────
+//
+// A token is shared state behind an integer id, so it buys two things the
+// per-request `cancel(id)` path cannot: a request submitted after the token was
+// cancelled is refused before it opens a socket, and one store cancels every
+// bound transfer at once. Both are asserted against the server's own request
+// counter rather than against timing.
+
+namespace {
+
+/// A request bound to `tokenId`. Everything else matches `request()`.
+PendingRequest tokenRequest(PendingRequest pending, int64_t tokenId) {
+  pending.req.options.cancelTokenId = tokenId;
+  return pending;
+}
+
+}  // namespace
+
+TEST_F(EngineTest, ATokenCancelledBeforeSubmitNeverOpensASocket) {
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  // Cancelled while nothing is bound to it — the pre-emptive case. Unlike the
+  // `preCancelled_` list this has no ordering window and no bound to overflow.
+  nitrohttp::CancelRegistry::instance().cancel(7001, "gone before we started");
+  engine.submit(tokenRequest(request(1, "/slow/2000"), 7001));
+
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  const std::vector<RawResponse> all = Captures::instance().responses();
+  ASSERT_EQ(all.size(), 1u);
+  EXPECT_EQ(all[0].errorKind, RAWERRORKIND_CANCELLED);
+  EXPECT_EQ(server_.requestCount("/slow/2000"), 0)
+      << "a request bound to an already-cancelled token must never reach the "
+         "network";
+  EXPECT_NE(all[0].errorMessage.find("gone before we started"),
+            std::string::npos)
+      << "the token's reason must survive into the error: " << all[0].errorMessage;
+}
+
+TEST_F(EngineTest, ATokenCancelledLongBeforeTheSubmitStillRefusesIt) {
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  nitrohttp::CancelRegistry::instance().cancel(7002, "");
+  // A gap the bounded pre-cancel list could not survive if 1024 other ids were
+  // cancelled in between; the token carries its own state, so elapsed time and
+  // intervening traffic are irrelevant.
+  for (int64_t noise = 9000; noise < 9200; ++noise) {
+    nitrohttp::CancelRegistry::instance().cancel(noise, "");
+  }
+  engine.submit(tokenRequest(request(1, "/slow/2000"), 7002));
+
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+  const std::vector<RawResponse> all = Captures::instance().responses();
+  ASSERT_EQ(all.size(), 1u);
+  EXPECT_EQ(all[0].errorKind, RAWERRORKIND_CANCELLED);
+  EXPECT_EQ(server_.requestCount("/slow/2000"), 0);
+}
+
+TEST_F(EngineTest, OneTokenCancelsEveryBoundTransferExactlyOnce) {
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  const std::string path = "/chunked/100000000/16384";
+  for (int64_t id = 1; id <= 4; ++id) {
+    engine.submit(tokenRequest(request(id, path), 7003));
+  }
+  ASSERT_TRUE(waitFor([this, &path] { return server_.requestCount(path) >= 1; }))
+      << "no transfer ever started";
+
+  // One store, then one sweep — the whole point. No per-request bookkeeping.
+  nitrohttp::CancelRegistry::instance().cancel(7003, "bulk abort");
+  engine.cancelToken(7003);
+
+  ASSERT_TRUE(Captures::instance().waitForPosts(4));
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  const std::vector<RawResponse> all = Captures::instance().responses();
+  ASSERT_EQ(all.size(), 4u) << "one post each, no more and no fewer";
+
+  std::vector<int64_t> ids;
+  for (const RawResponse& r : all) {
+    EXPECT_EQ(r.errorKind, RAWERRORKIND_CANCELLED);
+    EXPECT_NE(r.errorMessage.find("bulk abort"), std::string::npos);
+    ids.push_back(r.requestId);
+  }
+  std::sort(ids.begin(), ids.end());
+  EXPECT_EQ(ids, (std::vector<int64_t>{1, 2, 3, 4}));
+}
+
+TEST_F(EngineTest, ATokenCancelLeavesTransfersOnOtherTokensAlone) {
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  const std::string slow = "/chunked/100000000/16384";
+  engine.submit(tokenRequest(request(1, slow), 7004));
+  engine.submit(tokenRequest(request(2, slow), 7005));
+  ASSERT_TRUE(waitFor([this, &slow] { return server_.requestCount(slow) >= 1; }));
+
+  nitrohttp::CancelRegistry::instance().cancel(7004, "only mine");
+  engine.cancelToken(7004);
+
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+  std::this_thread::sleep_for(std::chrono::milliseconds(250));
+  std::vector<RawResponse> all = Captures::instance().responses();
+  ASSERT_EQ(all.size(), 1u) << "the untouched token's transfer was also killed";
+  EXPECT_EQ(all[0].requestId, 1);
+  EXPECT_EQ(all[0].errorKind, RAWERRORKIND_CANCELLED);
+
+  // And the survivor is still cancellable on its own terms.
+  nitrohttp::CancelRegistry::instance().cancel(7005, "");
+  engine.cancelToken(7005);
+  ASSERT_TRUE(Captures::instance().waitForPosts(2));
+  all = Captures::instance().responses();
+  ASSERT_EQ(all.size(), 2u);
+  EXPECT_EQ(all[1].requestId, 2);
+  EXPECT_EQ(all[1].errorKind, RAWERRORKIND_CANCELLED);
+}
+
+TEST_F(EngineTest, ReleasingATokenMidTransferDoesNotStrandTheTransfer) {
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  const std::string path = "/chunked/100000000/16384";
+  engine.submit(tokenRequest(request(1, path), 7006));
+  ASSERT_TRUE(waitFor([this, &path] { return server_.requestCount(path) >= 1; }));
+
+  // Dart's finalizer can run at any moment, including while a transfer bound to
+  // the token is live. The task holds its own shared_ptr, so this drops only the
+  // registry's reference — cancelling afterwards must still work through the
+  // reference the task kept.
+  nitrohttp::CancelRegistry::instance().release(7006);
+  nitrohttp::CancelRegistry::instance().cancel(7006, "after release");
+  engine.cancelToken(7006);
+
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+  const std::vector<RawResponse> all = Captures::instance().responses();
+  ASSERT_EQ(all.size(), 1u);
+  EXPECT_EQ(all[0].errorKind, RAWERRORKIND_CANCELLED);
+  // The reason came from a NEW state — the released one is unreachable — which
+  // is exactly why the transfer must not have been resurrected or double-posted.
+  EXPECT_EQ(all[0].requestId, 1);
+}
+
+TEST_F(EngineTest, CancellingATokenNothingIsBoundToIsHarmless) {
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  nitrohttp::CancelRegistry::instance().cancel(7007, "nobody home");
+  engine.cancelToken(7007);
+  // Also exercises the id-zero guard, which every entry point takes.
+  engine.cancelToken(0);
+
+  // An unrelated request still completes normally afterwards.
+  const RawResponse r = sendBuffered(engine, request(1, "/echo"));
+  EXPECT_EQ(r.errorKind, RAWERRORKIND_NONE);
+  EXPECT_EQ(r.statusCode, 200);
+}
+
+TEST_F(EngineTest, AnUnboundRequestIgnoresTokenCancellationEntirely) {
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  nitrohttp::CancelRegistry::instance().cancel(7008, "not yours");
+  engine.cancelToken(7008);
+
+  // cancelTokenId stays 0, so none of the above may touch it.
+  const RawResponse r = sendBuffered(engine, request(1, "/echo"));
+  EXPECT_EQ(r.errorKind, RAWERRORKIND_NONE);
+  EXPECT_EQ(r.statusCode, 200);
+}
+
+TEST(CancelRegistryTest, KeepsTheFirstReasonAndIsIdempotent) {
+  nitrohttp::CancelRegistry& registry = nitrohttp::CancelRegistry::instance();
+  registry.cancel(7100, "first");
+  registry.cancel(7100, "second");
+
+  const std::shared_ptr<nitrohttp::CancelState> state = registry.lookup(7100);
+  ASSERT_NE(state, nullptr);
+  EXPECT_TRUE(state->cancelled());
+  EXPECT_EQ(state->reason(), "first")
+      << "a later cancel must not rewrite the diagnosis already being reported";
+  registry.release(7100);
+}
+
+TEST(CancelRegistryTest, ObtainCreatesLookupDoesNotAndZeroIsNoToken) {
+  nitrohttp::CancelRegistry& registry = nitrohttp::CancelRegistry::instance();
+
+  EXPECT_EQ(registry.lookup(7101), nullptr) << "lookup must not create";
+  const std::shared_ptr<nitrohttp::CancelState> created = registry.obtain(7101);
+  ASSERT_NE(created, nullptr);
+  EXPECT_FALSE(created->cancelled());
+  EXPECT_EQ(registry.obtain(7101), created) << "one state per id";
+  EXPECT_EQ(registry.lookup(7101), created);
+
+  // Zero is the "no token" sentinel and must never allocate.
+  EXPECT_EQ(registry.obtain(0), nullptr);
+  EXPECT_EQ(registry.lookup(0), nullptr);
+
+  registry.release(7101);
+  EXPECT_EQ(registry.lookup(7101), nullptr);
+  EXPECT_FALSE(created->cancelled())
+      << "release drops the registry's reference, it does not cancel";
+}
+
+TEST(CancelRegistryTest, AReleasedIdComesBackAsAFreshState) {
+  nitrohttp::CancelRegistry& registry = nitrohttp::CancelRegistry::instance();
+  registry.cancel(7102, "old");
+  const std::shared_ptr<nitrohttp::CancelState> old = registry.lookup(7102);
+  ASSERT_NE(old, nullptr);
+  registry.release(7102);
+
+  // Dart ids are monotonic so this cannot happen in practice, but a stale flag
+  // leaking into a reused id would silently kill an unrelated request.
+  const std::shared_ptr<nitrohttp::CancelState> fresh = registry.obtain(7102);
+  ASSERT_NE(fresh, nullptr);
+  EXPECT_NE(fresh, old);
+  EXPECT_FALSE(fresh->cancelled());
+  EXPECT_TRUE(old->cancelled()) << "the old state stays valid for its holders";
+  registry.release(7102);
 }
 
 TEST_F(EngineTest, ShutdownCompletesEveryInFlightRequestWithEngineError) {

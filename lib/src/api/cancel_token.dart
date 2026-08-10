@@ -12,6 +12,19 @@ import 'exceptions.dart';
 /// wins, later ones are no-ops, and a request that has already completed is
 /// unaffected.
 class CancelToken {
+  /// Ids start at 1 because `0` is the engine's "no token" sentinel, and are
+  /// allocated in Dart rather than by a native call so a token costs nothing
+  /// until a request actually carries it — the engine creates its state lazily
+  /// on first mention, whether that is a bind or a cancel.
+  static int _nextId = 1;
+
+  /// Identifies this token to the engine.
+  ///
+  /// A request bound to it is refused before it opens a socket if the token is
+  /// already cancelled, and cancelling reaches every bound transfer on every
+  /// client in one call. Internal: callers never need to see it.
+  final int nativeId = _nextId++;
+
   final Completer<void> _completer = Completer<void>();
   final List<void Function()> _listeners = [];
   bool _isCancelled = false;

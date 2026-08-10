@@ -28,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine/CancelRegistry.h"
 #include "engine/Common.h"
 #include "engine/CurlEngine.h"
 #include "engine/DartPost.h"
@@ -92,6 +93,20 @@ class HybridNitroHttpImpl final : public HybridNitroHttpNative {
 
   void cancel(int64_t requestId) override { role_.engine().cancel(requestId); }
   void cancelAll() override { role_.engine().cancelAll(); }
+
+  void cancelToken(int64_t tokenId, const std::string& reason) override {
+    // Order matters. The flag goes up FIRST, on this thread, so every bound
+    // transfer that is currently inside a curl write/read/progress callback —
+    // on any client, not just this instance's — aborts at its very next block
+    // without waiting to be scheduled. Only then are the engines told, and that
+    // notification exists purely for transfers running no callbacks at all.
+    nitrohttp::CancelRegistry::instance().cancel(tokenId, reason);
+    nitrohttp::EngineRegistry::cancelTokenEverywhere(tokenId);
+  }
+
+  void releaseCancelToken(int64_t tokenId) override {
+    nitrohttp::CancelRegistry::instance().release(tokenId);
+  }
 
   void grantCredit(int64_t requestId, int64_t chunkCount,
                    int64_t ackedChunks) override {

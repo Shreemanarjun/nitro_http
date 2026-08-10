@@ -345,6 +345,14 @@ class RawRequestOptions {
   /// Per-request SPKI pin overriding the client's. `''` = client default.
   final String pinnedSpkiOverride;
 
+  /// Binds this transfer to a native cancellation token. `0` = none.
+  ///
+  /// The engine resolves the id to a shared, atomically-readable flag that
+  /// outlives any one request, which buys two things Dart-side fan-out cannot:
+  /// a transfer submitted *after* the token was cancelled never opens a socket,
+  /// and cancelling N bound transfers is one call instead of N.
+  final int cancelTokenId;
+
   const RawRequestOptions({
     required this.connectTimeoutMs,
     required this.requestTimeoutMs,
@@ -355,6 +363,7 @@ class RawRequestOptions {
     required this.wantTimings,
     required this.uploadContentLength,
     required this.pinnedSpkiOverride,
+    required this.cancelTokenId,
   });
 }
 
@@ -786,6 +795,26 @@ abstract class NitroHttpNative extends HybridObject {
 
   void cancel(int requestId);
   void cancelAll();
+
+  /// Cancels every transfer bound to [tokenId], on every client, and marks the
+  /// token so a transfer submitted later is refused before it opens a socket.
+  ///
+  /// The flag is raised on the calling thread before any engine is notified, so
+  /// an in-flight transfer aborts at its next curl callback rather than waiting
+  /// for a loop turn. The per-engine notification that follows exists for
+  /// transfers that are paused or idle and therefore running no callbacks.
+  ///
+  /// Idempotent: the first [reason] is the one reported. Cancelling a token
+  /// that has no transfers bound is legal and is how a pre-emptive cancel works.
+  void cancelToken(int tokenId, String reason);
+
+  /// Drops [tokenId] from the native registry.
+  ///
+  /// Purely a memory concern — a token already bound to a transfer keeps its
+  /// state alive through that transfer's own reference, so releasing early can
+  /// never resurrect a cancelled transfer. Omitting the call leaks one small
+  /// entry per token, which is why Dart releases from a `Finalizer`.
+  void releaseCancelToken(int tokenId);
 
   /// Download flow control **and** payload release, in one sub-microsecond call.
   ///

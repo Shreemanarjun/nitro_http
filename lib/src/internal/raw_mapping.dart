@@ -223,6 +223,7 @@ RawRequestOptions toRawOptions(
   RequestOptions o, {
   required bool reportProgress,
   required int uploadContentLength,
+  int cancelTokenId = 0,
 }) {
   return RawRequestOptions(
     connectTimeoutMs: o.connectTimeout?.inMilliseconds ?? kInherit,
@@ -238,6 +239,7 @@ RawRequestOptions toRawOptions(
     wantTimings: o.wantTimings ?? true,
     uploadContentLength: uploadContentLength,
     pinnedSpkiOverride: o.pinnedSpkiSha256 ?? '',
+    cancelTokenId: cancelTokenId,
   );
 }
 
@@ -373,6 +375,9 @@ RawRequest toRawRequest({
       request.options,
       reportProgress: reportProgress,
       uploadContentLength: body.contentLength ?? kInherit,
+      // Travels with the request so the engine can refuse it before opening a
+      // socket if the token was cancelled while this call was in flight.
+      cancelTokenId: request.cancelToken?.nativeId ?? 0,
     ),
   );
 }

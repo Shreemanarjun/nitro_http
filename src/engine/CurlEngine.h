@@ -63,6 +63,15 @@ class CurlEngine {
   void cancel(int64_t requestId);
   void cancelAll();
 
+  /// Completes every transfer on this client bound to `tokenId`.
+  ///
+  /// The caller is expected to have raised the token's flag already, so a
+  /// transfer running curl callbacks has usually aborted itself before this op
+  /// is drained. This exists for the transfers that are NOT running callbacks —
+  /// paused on a credit window, waiting on a connect, queued behind an inbox
+  /// backlog — which would otherwise sit until their own timeout.
+  void cancelToken(int64_t tokenId);
+
   void grantCredit(int64_t requestId, int64_t chunkCount, int64_t ackedChunks);
 
   /// Returns bytes buffered in the upload ring, or 0 when the request is gone.
@@ -122,6 +131,7 @@ class CurlEngine {
     Submit,
     Cancel,
     CancelAll,
+    CancelToken,
     GrantCredit,
     UploadFinished,
     UploadFailed,

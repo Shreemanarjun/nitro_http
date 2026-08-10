@@ -55,6 +55,12 @@ abstract interface class RequestExecutor {
   void cancel(int requestId);
   void cancelAll();
 
+  /// Cancels every transfer bound to [tokenId], on every client.
+  void cancelToken(int tokenId, String reason);
+
+  /// Drops [tokenId]'s native state. Safe while transfers are still bound.
+  void releaseCancelToken(int tokenId);
+
   void grantCredit(int requestId, int chunkCount, int ackedChunks);
 
   int feedUploadChunk(int requestId, Uint8List chunk);
@@ -180,6 +186,13 @@ final class NativeRequestExecutor implements RequestExecutor {
 
   @override
   void cancelAll() => _native.cancelAll();
+
+  @override
+  void cancelToken(int tokenId, String reason) =>
+      _native.cancelToken(tokenId, reason);
+
+  @override
+  void releaseCancelToken(int tokenId) => _native.releaseCancelToken(tokenId);
 
   @override
   void grantCredit(int requestId, int chunkCount, int ackedChunks) =>
@@ -378,6 +391,26 @@ class RequestRunner {
 
   bool _disposed = false;
 
+  /// Token ids already registered with the engine, so the listener and the
+  /// finalizer are attached exactly once no matter how many requests share the
+  /// token.
+  final Set<int> _boundTokens = <int>{};
+
+  /// Reclaims a token's native entry when the Dart token becomes unreachable.
+  ///
+  /// Without this a long-lived client that mints a token per screen would grow
+  /// the native map forever: nothing else can know a token will never be used
+  /// again, since a token stays legal to cancel long after its requests finish.
+  /// Releasing is safe at any moment — a transfer still bound holds its own
+  /// reference to the state, so this can never revive a cancelled request.
+  late final Finalizer<int> _tokenFinalizer = Finalizer<int>((int id) {
+    _boundTokens.remove(id);
+    // The engine is already gone after dispose, and its whole registry was
+    // dropped with it.
+    if (_disposed) return;
+    _executor.releaseCancelToken(id);
+  });
+
   /// Reconfigures the underlying engine. In-flight transfers keep the options
   /// they were built with.
   void configure(ClientSettings settings) {
@@ -432,7 +465,7 @@ class RequestRunner {
       reportProgress: reportProgress,
     );
 
-    final cancelSub = _wireCancellation(requestId, request.cancelToken);
+    _bindCancelToken(request.cancelToken);
     StreamSubscription<RawEvent>? eventSub;
     if (reportProgress) {
       eventSub = _wireProgress(requestId, request);
@@ -454,7 +487,6 @@ class RequestRunner {
 
       return _completeBuffered(request, response, reportProgress);
     } finally {
-      cancelSub?.cancel();
       await eventSub?.cancel();
       _demux.release(requestId);
     }
@@ -546,7 +578,7 @@ class RequestRunner {
     // the same turn the head arrives, and a late subscription would drop it.
     final chunkStream = _demux.chunks(requestId);
 
-    final cancelSub = _wireCancellation(requestId, request.cancelToken);
+    _bindCancelToken(request.cancelToken);
     StreamSubscription<RawEvent>? eventSub;
     if (reportProgress) {
       eventSub = _wireProgress(requestId, request);
@@ -562,7 +594,6 @@ class RequestRunner {
       head = await future;
     } on Object {
       pump?.abandon();
-      cancelSub?.cancel();
       await eventSub?.cancel();
       _demux.release(requestId);
       rethrow;
@@ -570,7 +601,6 @@ class RequestRunner {
 
     if (head.errorKind != RawErrorKind.none) {
       pump?.abandon();
-      cancelSub?.cancel();
       await eventSub?.cancel();
       _demux.release(requestId);
       throw mapError(
@@ -602,7 +632,6 @@ class RequestRunner {
       // than a dangling transfer.
       final bytes = await _drain(requestId, chunkStream);
       pump?.abandon();
-      cancelSub?.cancel();
       await eventSub?.cancel();
       _demux.release(requestId);
       throw NitroHttpStatusCodeException(
@@ -619,7 +648,6 @@ class RequestRunner {
       source: chunkStream,
       onDone: () async {
         pump?.abandon();
-        cancelSub?.cancel();
         await eventSub?.cancel();
         _demux.release(requestId);
       },
@@ -760,18 +788,33 @@ class RequestRunner {
   // ── Cancellation and progress wiring ───────────────────────────────────────
 
   /// Returns a disposer for the token listener, or null when there is no token.
-  _Disposer? _wireCancellation(int requestId, CancelToken? token) {
-    if (token == null) return null;
+  /// Registers the token with the engine once, ever.
+  ///
+  /// The listener is per TOKEN, not per request: the engine reaches every bound
+  /// transfer from the token id alone, so a token shared by 100 in-flight
+  /// requests needs one native call on cancel rather than 100. That is also why
+  /// nothing is unregistered when a request finishes — the registration
+  /// describes the token, not any one transfer, and re-adding it per request
+  /// would reintroduce the fan-out this replaces.
+  ///
+  /// An already-cancelled token needs no listener at all: `cancelTokenId`
+  /// travels inside the request, and the engine refuses it in `startTask`
+  /// before opening a socket. The caller still gets exactly one completion,
+  /// carrying the same `cancelled` error as any other cancellation.
+  void _bindCancelToken(CancelToken? token) {
+    if (token == null) return;
+    final int id = token.nativeId;
+    if (!_boundTokens.add(id)) return;
+
+    // Attached before the cancelled-check below so even a token that is only
+    // ever used post-cancellation still gets its native entry reclaimed.
+    _tokenFinalizer.attach(token, id, detach: token);
+
     if (token.isCancelled) {
-      // Already cancelled: still submit-then-cancel rather than short-circuit,
-      // so completion stays exactly-once and the caller gets the same
-      // NitroHttpCancelException it would get from any other cancel.
-      _executor.cancel(requestId);
-      return null;
+      _executor.cancelToken(id, token.reason ?? '');
+      return;
     }
-    void listener() => _executor.cancel(requestId);
-    token.addListener(listener);
-    return _Disposer(() => token.removeListener(listener));
+    token.addListener(() => _executor.cancelToken(id, token.reason ?? ''));
   }
 
   StreamSubscription<RawEvent> _wireProgress(
@@ -886,16 +929,5 @@ class _UploadPump {
     _abandoned = true;
     _sub?.cancel();
     _drainSub?.cancel();
-  }
-}
-
-class _Disposer {
-  _Disposer(this._fn);
-  final void Function() _fn;
-  var _done = false;
-  void cancel() {
-    if (_done) return;
-    _done = true;
-    _fn();
   }
 }

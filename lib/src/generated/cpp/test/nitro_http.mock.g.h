@@ -24,6 +24,8 @@ class MockNitroHttpNative : public HybridNitroHttpNative {
     MOCK_METHOD(NitroCppBuffer, startStreamed, (NitroCppBuffer request, const uint8_t* body, size_t body_length), (override));
     MOCK_METHOD(void, cancel, (int64_t requestId), (override));
     MOCK_METHOD(void, cancelAll, (), (override));
+    MOCK_METHOD(void, cancelToken, (int64_t tokenId, const std::string& reason), (override));
+    MOCK_METHOD(void, releaseCancelToken, (int64_t tokenId), (override));
     MOCK_METHOD(void, grantCredit, (int64_t requestId, int64_t chunkCount, int64_t ackedChunks), (override));
     MOCK_METHOD(int64_t, feedUploadChunk, (int64_t requestId, const uint8_t* chunk, size_t chunk_length), (override));
     MOCK_METHOD(void, finishUpload, (int64_t requestId), (override));

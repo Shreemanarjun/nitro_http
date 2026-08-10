@@ -84,6 +84,11 @@ class EngineRegistry {
   /// when their transfer started and drop the item on mismatch.
   static uint64_t generation();
 
+  /// Sweeps every live client for transfers bound to `tokenId`. The token's own
+  /// flag must already be raised — this only reaches the transfers that are not
+  /// running curl callbacks and so cannot notice it themselves.
+  static void cancelTokenEverywhere(int64_t tokenId);
+
   /// Drops a client or socket from the registry once its last handle goes away.
   static void forgetClient(int64_t clientId);
   static void forgetSocket(int64_t socketId);

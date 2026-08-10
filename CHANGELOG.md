@@ -1,3 +1,44 @@
+## Unreleased
+
+### Changed
+
+* **`CancelToken` is now a native object.** The public API is unchanged —
+  construct one, pass it to requests, call `cancel()` — but the token is no
+  longer a Dart-side list of per-request listeners. It carries an id the engine
+  resolves to shared, atomically-read state, which buys two things the old
+  fan-out could not:
+
+  * **A request bound to an already-cancelled token never opens a socket.** The
+    engine reads the flag in `startTask`, before `curl_multi_add_handle`, so the
+    request never reaches the server, never takes a pool slot and never leaves
+    the process. Previously the submit was already in flight by the time a Dart
+    listener could run, so it was cancelled *after* the wire saw it. The bounded
+    1024-entry "cancelled before I saw the submit" list this used to need is
+    gone with it — the token carries its own state, so how far apart the cancel
+    and the submit are no longer matters.
+
+  * **Cancelling N bound requests is one call, not N.** Every bound transfer
+    shares one flag, so a token held by 100 in-flight requests is cancelled by a
+    single store, visible on every client at once.
+
+  Cancellation is also observed sooner: the flag is raised on the calling thread
+  before any engine is notified, and the download write callback now checks it,
+  so a cancelled large download stops at the next 16 KiB block rather than at the
+  next throttled progress tick.
+
+* **The cancellation reason reaches the error.** `CancelToken.cancel('why')` used
+  to be Dart-only; the engine now records it and `NitroHttpCancelException`
+  reports it.
+
+### Fixed
+
+* `deps/versions.cmake` pins were regenerated. The `deps-v1` tag was force-moved
+  during a repository history rewrite, which re-ran the dependency build and
+  replaced every published asset — and these builds are not byte-reproducible, so
+  the committed checksums no longer described the files being downloaded and
+  every consumer build failed with a HASH mismatch. `build-deps` now refuses to
+  publish over an existing release rather than invalidating pins silently.
+
 ## 0.0.1
 
 First release.

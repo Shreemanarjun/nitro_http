@@ -116,6 +116,16 @@ public:
         throw std::runtime_error("Not implemented: cancelAll");
     }
 
+    void cancelToken(int64_t tokenId, const std::string& reason) override {
+        // TODO: implement cancelToken
+        throw std::runtime_error("Not implemented: cancelToken");
+    }
+
+    void releaseCancelToken(int64_t tokenId) override {
+        // TODO: implement releaseCancelToken
+        throw std::runtime_error("Not implemented: releaseCancelToken");
+    }
+
     void grantCredit(int64_t requestId, int64_t chunkCount, int64_t ackedChunks) override {
         // TODO: implement grantCredit
         throw std::runtime_error("Not implemented: grantCredit");

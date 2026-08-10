@@ -205,6 +205,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # A deps-vN tag that already has a release has already had its checksums
+      # committed, and these builds are NOT byte-reproducible: republishing
+      # replaces every asset with a differently-hashed one, so the pins in
+      # deps/versions.cmake start describing files that no longer exist and
+      # every consumer build fails on a HASH mismatch. That is not a theoretical
+      # risk — force-moving this tag during a history rewrite did exactly that.
+      # Refuse loudly; a new set of binaries deserves a new tag.
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ github.ref_name }}" \
+               --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::error::${{ github.ref_name }} already exists. Republishing" \
+                 "would replace its assets and invalidate the committed" \
+                 "checksums. Cut the next deps-vN tag instead."
+            exit 1
+          fi
+
       - uses: actions/download-artifact@v4
         with:
           path: dist

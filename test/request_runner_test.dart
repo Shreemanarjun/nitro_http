@@ -643,8 +643,12 @@ void main() {
       );
       await pumpEventQueue();
 
-      final id = executor.bufferedRequests.single.request.requestId;
-      expect(executor.cancelled, <int>[id]);
+      // The engine is told about the TOKEN, never about the request id: it
+      // reaches every bound transfer from the token alone.
+      expect(executor.cancelledTokens, <(int, String)>[
+        (token.nativeId, 'user left'),
+      ]);
+      expect(executor.cancelled, isEmpty);
 
       held.complete(
         rawResponse(kind: RawErrorKind.cancelled, message: 'aborted'),
@@ -652,8 +656,37 @@ void main() {
       await expectLater(future, throwsA(isA<NitroHttpCancelException>()));
     });
 
-    test('a token cancelled before the send still cancels the request', () async {
-      final token = CancelToken()..cancel();
+    test('the token id travels inside the request', () async {
+      final token = CancelToken();
+      executor.bufferedResponses.add(rawResponse());
+
+      await runnerWith().sendBuffered(
+        HttpRequest(url: Uri.parse('https://example.com/'), cancelToken: token),
+      );
+
+      // This is what lets the engine refuse a request whose token was already
+      // cancelled, before it opens a socket.
+      expect(
+        executor.bufferedRequests.single.request.options.cancelTokenId,
+        token.nativeId,
+      );
+    });
+
+    test('a request with no token carries the 0 sentinel and calls nothing',
+        () async {
+      executor.bufferedResponses.add(rawResponse());
+
+      await runnerWith().sendBuffered(
+        HttpRequest(url: Uri.parse('https://example.com/')),
+      );
+
+      expect(executor.bufferedRequests.single.request.options.cancelTokenId, 0);
+      expect(executor.cancelledTokens, isEmpty);
+      expect(executor.releasedTokens, isEmpty);
+    });
+
+    test('a token cancelled before the send is not registered again', () async {
+      final token = CancelToken()..cancel('too late');
       executor.bufferedResponses.add(
         rawResponse(kind: RawErrorKind.cancelled, message: 'aborted'),
       );
@@ -667,19 +700,153 @@ void main() {
         ),
         throwsA(isA<NitroHttpCancelException>()),
       );
-      expect(executor.cancelled, hasLength(1));
+
+      // Told once, with the reason it already carries, and the id still rides
+      // in the request so the engine can refuse it pre-socket.
+      expect(executor.cancelledTokens, <(int, String)>[
+        (token.nativeId, 'too late'),
+      ]);
+      expect(
+        executor.bufferedRequests.single.request.options.cancelTokenId,
+        token.nativeId,
+      );
     });
 
-    test('a completed request unsubscribes from its token', () async {
+    test('one token over many requests is ONE native call', () async {
+      final token = CancelToken();
+      final runner = runnerWith();
+      final held = <Completer<RawResponse>>[];
+      executor.onSendBuffered = (_, _) {
+        final c = Completer<RawResponse>();
+        held.add(c);
+        return c.future;
+      };
+
+      final futures = <Future<HttpResponse>>[
+        for (var i = 0; i < 25; i++)
+          runner.sendBuffered(
+            HttpRequest(
+              url: Uri.parse('https://example.com/$i'),
+              cancelToken: token,
+            ),
+          ),
+      ];
+      await pumpEventQueue();
+      expect(held, hasLength(25));
+
+      token.cancel('bulk');
+
+      // The headline property. The old fan-out made one call per request; 25
+      // requests would have produced 25 here.
+      expect(executor.cancelledTokens, hasLength(1));
+      expect(executor.cancelledTokens.single, (token.nativeId, 'bulk'));
+
+      for (final c in held) {
+        c.complete(rawResponse(kind: RawErrorKind.cancelled, message: 'x'));
+      }
+      for (final f in futures) {
+        await expectLater(f, throwsA(isA<NitroHttpCancelException>()));
+      }
+    });
+
+    test('cancelling twice still only reaches the engine once', () async {
+      final token = CancelToken();
+      executor.bufferedResponses.add(rawResponse());
+      await runnerWith().sendBuffered(
+        HttpRequest(url: Uri.parse('https://example.com/'), cancelToken: token),
+      );
+
+      token.cancel('first');
+      token.cancel('second');
+
+      expect(executor.cancelledTokens, <(int, String)>[
+        (token.nativeId, 'first'),
+      ]);
+    });
+
+    test('a completed request leaves the token registered', () async {
       final token = CancelToken();
       executor.bufferedResponses.add(rawResponse());
 
       await runnerWith().sendBuffered(
         HttpRequest(url: Uri.parse('https://example.com/'), cancelToken: token),
       );
+
+      // Registration describes the TOKEN, not the transfer, so it outlives the
+      // request. Cancelling afterwards is a legal no-op that must still reach
+      // the engine exactly once rather than being silently dropped.
+      token.cancel('after the fact');
+      expect(executor.cancelledTokens, hasLength(1));
+    });
+
+    test('two tokens are registered independently', () async {
+      final a = CancelToken();
+      final b = CancelToken();
+      final runner = runnerWith();
+      executor.bufferedResponses
+        ..add(rawResponse())
+        ..add(rawResponse());
+
+      await runner.sendBuffered(
+        HttpRequest(url: Uri.parse('https://example.com/a'), cancelToken: a),
+      );
+      await runner.sendBuffered(
+        HttpRequest(url: Uri.parse('https://example.com/b'), cancelToken: b),
+      );
+
+      expect(a.nativeId, isNot(b.nativeId));
+      b.cancel('only b');
+
+      expect(executor.cancelledTokens, <(int, String)>[(b.nativeId, 'only b')]);
+    });
+
+    test('a streamed request binds its token too', () async {
+      final token = CancelToken();
+      executor.streamedHeads.add(rawHead());
+
+      final response = await runnerWith().sendStreamed(
+        HttpRequest(
+          url: Uri.parse('https://example.com/'),
+          cancelToken: token,
+        ),
+      );
+
+      expect(
+        executor.streamedRequests.single.request.options.cancelTokenId,
+        token.nativeId,
+      );
+
+      token.cancel('mid-stream');
+      expect(executor.cancelledTokens, hasLength(1));
+
+      Object? error;
+      final done = Completer<void>();
+      response.body.listen(
+        null,
+        onError: (Object e) => error = e,
+        onDone: done.complete,
+      );
+      demux.push(
+        errorChunk(
+          executor.streamedRequests.single.request.requestId,
+          RawErrorKind.cancelled,
+          'aborted',
+        ),
+      );
+      await done.future;
+      expect(error, isA<NitroHttpCancelException>());
+    });
+
+    test('a cancel with no reason sends the empty string, not null', () async {
+      final token = CancelToken();
+      executor.bufferedResponses.add(rawResponse());
+      await runnerWith().sendBuffered(
+        HttpRequest(url: Uri.parse('https://example.com/'), cancelToken: token),
+      );
+
       token.cancel();
 
-      expect(executor.cancelled, isEmpty);
+      expect(executor.cancelledTokens.single.$2, isEmpty);
     });
   });
 

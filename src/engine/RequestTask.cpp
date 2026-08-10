@@ -292,7 +292,13 @@ bool fileSize(FILE* file, curl_off_t* out) {
 }  // namespace
 
 RequestTask::RequestTask(CurlEngine& engine, PendingRequest pending)
-    : engine_(engine), pending_(std::move(pending)) {}
+    : engine_(engine), pending_(std::move(pending)) {
+  // Resolved in the constructor, before `prepare` and before the handle is
+  // added to the multi, so `startTask` can refuse an already-cancelled token
+  // without ever opening a socket. `obtain` creates the state when this request
+  // is the first mention of the token, which is the ordinary case.
+  token_ = CancelRegistry::instance().obtain(pending_.req.options.cancelTokenId);
+}
 
 RequestTask::~RequestTask() {
   // Last line of defence for exactly-once completion. Reaching here uncompleted
@@ -896,6 +902,16 @@ void RequestTask::emitHeadIfNeeded() {
 
 size_t RequestTask::handleWrite(const char* data, size_t len) {
   if (len == 0) return 0;
+
+  // The earliest abort point on a download. `XFERINFOFUNCTION` also aborts, but
+  // it is throttled and only fires between transfers of progress, so on a fast
+  // body this callback runs many times per progress tick — checking here is what
+  // makes a cancelled 100 MB download stop at the next 16 KiB block instead of
+  // at the next progress callback. Returning a short count is curl's documented
+  // abort signal (CURLE_WRITE_ERROR); `finish` sees `cancelRequested()` and
+  // reports it as cancelled rather than as a write failure.
+  if (cancelRequested()) return 0;
+
   lastActivityMs_ = monotonicMs();
 
   // A 304 body (there should not be one) belongs to the revalidation handshake,
@@ -1215,7 +1231,8 @@ void RequestTask::finish(int curlCode) {
 
   if (cancelRequested()) {
     completeWithError(EngineError::make(RawErrorKind::RAWERRORKIND_CANCELLED,
-                                        "request cancelled", curlCode));
+                                        cancelledMessage(cancelReason()),
+                                        curlCode));
     return;
   }
 

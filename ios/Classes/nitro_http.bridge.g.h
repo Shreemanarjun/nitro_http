@@ -182,6 +182,8 @@ NITRO_EXPORT void nitro_http_release_record(int64_t instanceId, int64_t address,
 NITRO_EXPORT void nitro_http_start_streamed(int64_t instanceId, void* request, uint8_t* body, size_t body_length, NitroError* _nitro_err, int64_t dart_port);
 NITRO_EXPORT void nitro_http_cancel(int64_t instanceId, int64_t requestId, NitroError* _nitro_err);
 NITRO_EXPORT void nitro_http_cancel_all(int64_t instanceId, NitroError* _nitro_err);
+NITRO_EXPORT void nitro_http_cancel_token(int64_t instanceId, int64_t tokenId, const char* reason, NitroError* _nitro_err);
+NITRO_EXPORT void nitro_http_release_cancel_token(int64_t instanceId, int64_t tokenId, NitroError* _nitro_err);
 NITRO_EXPORT void nitro_http_grant_credit(int64_t instanceId, int64_t requestId, int64_t chunkCount, int64_t ackedChunks, NitroError* _nitro_err);
 NITRO_EXPORT int64_t nitro_http_feed_upload_chunk(int64_t instanceId, int64_t requestId, uint8_t* chunk, size_t chunk_length, NitroError* _nitro_err);
 NITRO_EXPORT void nitro_http_finish_upload(int64_t instanceId, int64_t requestId, NitroError* _nitro_err);

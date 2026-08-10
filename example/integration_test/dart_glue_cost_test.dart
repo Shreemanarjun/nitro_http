@@ -51,6 +51,10 @@ class _InstantExecutor implements RequestExecutor {
   @override
   void cancelAll() {}
   @override
+  void cancelToken(int tokenId, String reason) {}
+  @override
+  void releaseCancelToken(int tokenId) {}
+  @override
   void grantCredit(int requestId, int chunkCount, int ackedChunks) {}
   @override
   int feedUploadChunk(int requestId, Uint8List chunk) => 0;

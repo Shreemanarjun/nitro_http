@@ -123,4 +123,27 @@ void main() {
       expect(calls, 1);
     });
   });
+
+  group('native identity', () {
+    test('every token gets a distinct non-zero id', () {
+      final ids = <int>{for (var i = 0; i < 100; i++) CancelToken().nativeId};
+
+      expect(ids, hasLength(100), reason: 'ids must never collide');
+      // Zero is the engine's "no token" sentinel. A token that took it would
+      // bind itself to every request that carries no token at all.
+      expect(ids, isNot(contains(0)));
+      expect(ids.every((id) => id > 0), isTrue);
+    });
+
+    test('the id is stable across the token lifetime', () {
+      final token = CancelToken();
+      final id = token.nativeId;
+
+      token.cancel('whatever');
+
+      // The engine keys its state on this; a token whose id moved after
+      // cancellation would leave the cancelled state stranded.
+      expect(token.nativeId, id);
+    });
+  });
 }

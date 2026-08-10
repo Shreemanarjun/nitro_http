@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "CancelRegistry.h"
 #include "Common.h"
 #include "CurlEngine.h"
 #include "DeferredPayloads.h"
@@ -343,6 +344,30 @@ void EngineRegistry::resetAll() {
   // nothing can read them again. This is the one place freeing them outright is
   // sound — everywhere else the terminal ack is the release signal.
   DeferredPayloads::instance().dropEverything();
+
+  // Token ids are allocated by the Dart isolate that just went away, so every
+  // entry now describes a token nothing can refer to. Kept until here rather
+  // than dropped earlier so the shutdown sweeps above still read real reasons.
+  CancelRegistry::instance().clear();
+}
+
+void EngineRegistry::cancelTokenEverywhere(int64_t tokenId) {
+  if (tokenId == 0) return;
+
+  // Snapshot under the lock, notify outside it: `cancelToken` takes each
+  // engine's inbox mutex, and holding the registry mutex across that would
+  // order two independent locks and invite a deadlock with client creation.
+  std::vector<std::shared_ptr<CurlEngine>> clients;
+  {
+    State& s = state();
+    std::lock_guard<std::mutex> lock(s.mtx);
+    clients.reserve(s.clients.size() + 1);
+    for (const auto& entry : s.clients) clients.push_back(entry.second);
+    // A prefetch can be bound to a token too, and it runs on its own engine.
+    if (s.prefetch) clients.push_back(s.prefetch);
+  }
+
+  for (const auto& client : clients) client->cancelToken(tokenId);
 }
 
 uint64_t EngineRegistry::generation() {

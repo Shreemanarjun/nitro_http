@@ -17,7 +17,7 @@ NITRO_EXPORT uint32_t nitro_http_nitro_abi_version(void) {
     return 1;
 }
 NITRO_EXPORT const char* nitro_http_nitro_bridge_checksum(void) {
-    return "41827f6f64836355";
+    return "f03160ce749c3a4a";
 }
 NITRO_EXPORT intptr_t nitro_http_init_dart_api_dl(void* data) {
     return Dart_InitializeApiDL(data);
@@ -414,6 +414,32 @@ void nitro_http_cancel_all(int64_t instanceId, NitroError* _nitro_err) {
     if (!_impl) { _nitro_out_err(_nitro_err, "NotInitialized", "No C++ implementation registered. Call nitro_http_register_factory() or nitro_http_register_impl()."); return; }
     try {
         _impl->cancelAll();
+    } catch (const std::exception& e) {
+        _nitro_out_err(_nitro_err, "CppException", e.what());
+    } catch (...) {
+        _nitro_out_err(_nitro_err, "CppException", "Unknown C++ exception");
+    }
+}
+
+void nitro_http_cancel_token(int64_t instanceId, int64_t tokenId, const char* reason, NitroError* _nitro_err) {
+    if (_nitro_err) { _nitro_err->hasError = 0; }  // S8: clear slot
+    auto _impl = _nitro_get_instance(instanceId);
+    if (!_impl) { _nitro_out_err(_nitro_err, "NotInitialized", "No C++ implementation registered. Call nitro_http_register_factory() or nitro_http_register_impl()."); return; }
+    try {
+        _impl->cancelToken(tokenId, std::string(reason));
+    } catch (const std::exception& e) {
+        _nitro_out_err(_nitro_err, "CppException", e.what());
+    } catch (...) {
+        _nitro_out_err(_nitro_err, "CppException", "Unknown C++ exception");
+    }
+}
+
+void nitro_http_release_cancel_token(int64_t instanceId, int64_t tokenId, NitroError* _nitro_err) {
+    if (_nitro_err) { _nitro_err->hasError = 0; }  // S8: clear slot
+    auto _impl = _nitro_get_instance(instanceId);
+    if (!_impl) { _nitro_out_err(_nitro_err, "NotInitialized", "No C++ implementation registered. Call nitro_http_register_factory() or nitro_http_register_impl()."); return; }
+    try {
+        _impl->releaseCancelToken(tokenId);
     } catch (const std::exception& e) {
         _nitro_out_err(_nitro_err, "CppException", e.what());
     } catch (...) {

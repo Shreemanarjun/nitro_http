@@ -107,6 +107,7 @@ RawRequest _sampleRequest() => const RawRequest(
     wantTimings: true,
     uploadContentLength: -1,
     pinnedSpkiOverride: '',
+    cancelTokenId: 0,
   ),
 );
 

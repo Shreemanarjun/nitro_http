@@ -153,7 +153,8 @@ void main() {
       trigger.complete();
       await pumpEventQueue();
 
-      expect(executor.cancelled, <int>[requestId]);
+      expect(executor.cancelledTokens, hasLength(1));
+      expect(executor.cancelledTokens.single.$2, 'aborted by abortTrigger');
       held.complete(rawHead(kind: RawErrorKind.cancelled, message: 'aborted'));
 
       await expectLater(future, throwsA(isA<http.RequestAbortedException>()));
@@ -349,11 +350,11 @@ void main() {
 
       final future = client.send(http.Request('GET', _url));
       await pumpEventQueue();
-      final id = requestId;
 
       client.close();
 
-      expect(executor.cancelled, <int>[id]);
+      expect(executor.cancelledTokens, hasLength(1));
+      expect(executor.cancelledTokens.single.$2, 'client closed');
 
       held.complete(
         rawHead(kind: RawErrorKind.cancelled, message: 'client closed'),

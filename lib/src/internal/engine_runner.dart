@@ -97,6 +97,7 @@ Future<void> runPrefetch(
         wantTimings: false,
         uploadContentLength: -1,
         pinnedSpkiOverride: '',
+        cancelTokenId: 0,
       ),
     ),
   );

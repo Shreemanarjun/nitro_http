@@ -85,6 +85,15 @@ RawErrorKind mapCurlError(int curlCode, bool proxyInUse);
 /// classification, so a log line is useful without a CURLcode table to hand.
 std::string describeCurlError(int curlCode, const char* curlMessage);
 
+/// `"request cancelled"`, or `"request cancelled: <reason>"` when a token
+/// carried one. Shared so every cancellation path — direct, token-wide, and
+/// pre-submit — produces byte-identical text; a caller matching on the message
+/// must not be able to tell which path fired.
+std::string cancelledMessage(const std::string& reason);
+
+/// The complete cancellation error, reason included.
+EngineError cancelledError(const std::string& reason = std::string());
+
 // ── Stream sink ──────────────────────────────────────────────────────────────
 //
 // The generated `emit_*` helpers are member functions of the bridge class and

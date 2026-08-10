@@ -188,7 +188,13 @@ void main() {
     );
 
     expect(find.text('small GET'), findsWidgets);
-    expect(find.text('fastest'), findsOneWidget);
+    // TWO, deliberately: the podium's first place and the pill on the winning
+    // bar. This asserted exactly one until the podium started rendering — it
+    // was green only because a `Row(crossAxisAlignment: stretch)` inside an
+    // unbounded-height scroll view was throwing `BoxConstraints forces an
+    // infinite height`, so the podium never appeared. Pinning both is what makes
+    // this test notice if the podium silently stops rendering again.
+    expect(find.text('fastest'), findsNWidgets(2));
     expect(find.text('Copy as Markdown'), findsOneWidget);
     expect(find.text('Consistent'), findsOneWidget);
     expect(

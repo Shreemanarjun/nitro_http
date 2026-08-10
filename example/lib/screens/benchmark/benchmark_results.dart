@@ -294,14 +294,22 @@ class _Podium extends StatelessWidget {
             ],
           );
         }
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (var i = 0; i < places.length; i++) ...[
-              if (i > 0) const SizedBox(width: 8),
-              Expanded(child: places[i]),
+        // `IntrinsicHeight`, because `stretch` needs a bounded height to
+        // stretch to. This Row sits inside a scrolling Column, so its incoming
+        // constraint is `0 <= h <= Infinity`, and stretching against infinity
+        // throws `BoxConstraints forces an infinite height`. Measuring the
+        // tallest card first gives the cross axis a real number, which is what
+        // lets the three cards share a height and keeps their footers aligned.
+        return IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < places.length; i++) ...[
+                if (i > 0) const SizedBox(width: 8),
+                Expanded(child: places[i]),
+              ],
             ],
-          ],
+          ),
         );
       },
     );

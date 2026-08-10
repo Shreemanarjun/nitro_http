@@ -182,8 +182,10 @@ jar and the cache, so reusing it is what makes the second request fast.
 
 ## Features
 
-Grouped by what you are trying to do. Every snippet was type-checked against the
-API as it stands, so the names here are the real ones.
+Grouped by what you are trying to do. Every snippet below that calls this
+library is compiled and run by
+[`test/readme_examples_test.dart`](test/readme_examples_test.dart), so an API
+change breaks that test before it can break a reader.
 
 - [Making requests](#making-requests)
 - [Sending a body](#sending-a-body)
@@ -191,7 +193,8 @@ API as it stands, so the names here are the real ones.
 - [Errors](#errors)
 - [Streaming](#streaming)
 - [Progress and timings](#progress-and-timings)
-- [Cancelling and timeouts](#cancelling-and-timeouts)
+- [Cancelling](#cancelling)
+- [Timeouts](#timeouts)
 - [Retries](#retries)
 - [Interceptors](#interceptors)
 - [Cookies](#cookies)
@@ -390,7 +393,10 @@ print(res.timings.firstByte);
 print(res.timings.total);
 ```
 
-### Cancelling and timeouts
+### Cancelling
+
+Make a `CancelToken`, pass it to the requests it should control, and cancel it.
+The reason you give comes back on the exception:
 
 ```dart
 final token = CancelToken();
@@ -402,6 +408,47 @@ try {
   print(e.reason);              // user navigated away
 }
 ```
+
+**One token, any number of requests.** Give the same token to everything a
+screen loads and one `cancel()` stops all of it — useful in `dispose()`:
+
+```dart
+final screen = CancelToken();
+
+final results = await Future.wait([
+  client.get('/profile', cancelToken: screen),
+  client.get('/feed', cancelToken: screen),
+  client.get('/notifications', cancelToken: screen),
+]);
+```
+
+```dart
+@override
+void dispose() {
+  screen.cancel('screen closed');
+  super.dispose();
+}
+```
+
+**Cancelling early keeps the request off the network entirely.** The token lives
+in the engine, not in Dart, so a request bound to a token that is already
+cancelled is refused before a socket is opened — it never reaches your server:
+
+```dart
+final token = CancelToken()..cancel('never mind');
+
+try {
+  await client.get('/expensive', cancelToken: token);
+} on NitroHttpCancelException {
+  // Fails straight away: no socket was opened and the server saw nothing.
+}
+```
+
+Cancelling is safe to do at any point: twice, after the request already
+finished, or on a token nothing is using. The first `cancel()` wins and the rest
+are no-ops.
+
+### Timeouts
 
 Three separate deadlines, because "it timed out" is three different problems:
 

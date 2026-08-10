@@ -19,8 +19,11 @@
 ///     which only compiles for the web; a VM test file cannot contain it.
 ///   * the `dio` snippet — lives in the `nitro_http_dio` package, which is
 ///     where its compile check belongs.
-///   * `runApp(...)` in the hot-restart snippet — needs a widget tree; the
-///     `NitroHttp.reset()` half is executed here.
+///   * `void main() => runApp(...)` in the hot-restart snippet — it is Flutter's
+///     API, not this package's, and the whole point of that snippet is that it
+///     contains NO recovery call. There is nothing here to execute; the
+///     behaviour it claims is proven against the real engine by
+///     `native_smoke_test.dart` and `example/integration_test/cancellation_test.dart`.
 library;
 
 import 'dart:async';
@@ -131,6 +134,19 @@ void main() {
 
       expect(executor.bufferedRequests, hasLength(9));
       expect(executor.bufferedRequests.last.request.customMethod, 'PURGE');
+    });
+
+    test('Verbs: a non-standard method through request', () async {
+      final client = makeClient(
+        settings: const ClientSettings(baseUrl: 'https://api.example.com'),
+      );
+      executor.bufferedResponses.add(rawResponse());
+
+      await client.requestText(HttpMethod.custom, '/graph', customMethod: 'PURGE');
+
+      final sent = executor.bufferedRequests.single.request;
+      expect(sent.method, RawMethod.custom);
+      expect(sent.customMethod, 'PURGE');
     });
 
     test('Request bodies', () {
@@ -349,6 +365,87 @@ void main() {
       } on NitroHttpCancelException catch (e) {
         expect(e.reason, 'user navigated away'); // user navigated away
       }
+    });
+
+    test('Cancellation: one token, any number of requests', () async {
+      final client = makeClient(
+        settings: const ClientSettings(baseUrl: 'https://api.example.com'),
+      );
+      executor.bufferedResponses
+        ..add(rawResponse())
+        ..add(rawResponse())
+        ..add(rawResponse());
+
+      final screen = CancelToken();
+
+      final results = await Future.wait([
+        client.get('/profile', cancelToken: screen),
+        client.get('/feed', cancelToken: screen),
+        client.get('/notifications', cancelToken: screen),
+      ]);
+
+      expect(results, hasLength(3));
+
+      // The `dispose()` half of the snippet, minus the widget it lives in.
+      screen.cancel('screen closed');
+
+      // Three requests, ONE native call — the property the README claims.
+      expect(executor.cancelledTokens, hasLength(1));
+      expect(executor.cancelledTokens.single.$2, 'screen closed');
+    });
+
+    test('Cancellation: cancelling early keeps it off the network', () async {
+      final client = makeClient(
+        settings: const ClientSettings(baseUrl: 'https://api.example.com'),
+      );
+      // The engine refuses a pre-cancelled request before it opens a socket;
+      // the fake stands in for that verdict. `cancellation_test.dart` proves
+      // the real engine never reaches the server, which a fake cannot show.
+      executor.bufferedResponses.add(
+        rawResponse(kind: RawErrorKind.cancelled, message: 'aborted'),
+      );
+
+      final token = CancelToken()..cancel('never mind');
+
+      var refused = false;
+      try {
+        await client.get('/expensive', cancelToken: token);
+      } on NitroHttpCancelException {
+        // Fails straight away: no socket was opened and the server saw nothing.
+        refused = true;
+      }
+      expect(refused, isTrue);
+    });
+
+    test('Cancellation: cancelling twice or late is a no-op', () async {
+      final client = makeClient(
+        settings: const ClientSettings(baseUrl: 'https://api.example.com'),
+      );
+      executor.bufferedResponses.add(rawResponse());
+
+      final token = CancelToken();
+      await client.get('/done', cancelToken: token);
+
+      token.cancel('first');
+      token.cancel('second');
+
+      expect(token.reason, 'first', reason: 'the first cancel wins');
+      expect(executor.cancelledTokens, hasLength(1));
+    });
+
+    test('File body: straight from disk', () async {
+      final client = makeClient(
+        settings: const ClientSettings(baseUrl: 'https://api.example.com'),
+      );
+      executor.bufferedResponses.add(rawResponse());
+
+      await client.put('/backups/nightly.zip', body: HttpBody.file('/var/tmp/nightly.zip'));
+
+      // The path travels to the engine; no bytes pass through the Dart heap.
+      final sent = executor.bufferedRequests.single;
+      expect(sent.request.bodyKind, RawBodyKind.filePath);
+      expect(sent.request.bodyFilePath, '/var/tmp/nightly.zip');
+      expect(sent.body, isEmpty);
     });
 
     test('Progress callbacks', () async {
@@ -681,16 +778,20 @@ void main() {
       NitroHttp.overrideEngineExecutorForTesting(engine);
       addTearDown(() => NitroHttp.overrideEngineExecutorForTesting(null));
 
+      // The README snippet prints all five. Reading each is the part that can
+      // rot, and every one is read below; `print` itself is not under test.
       expect(NitroHttp.engineVersion, startsWith('libcurl/'));
       expect(NitroHttp.supportsHttp3, isTrue);
       expect(NitroHttp.supportsWebSockets, isTrue);
       expect(NitroHttp.supportsBrotli, isTrue);
       expect(NitroHttp.supportsZstd, isFalse);
 
-      // The runApp half of the hot-restart snippet needs a widget tree; the
-      // reset half is the part with behaviour.
-      NitroHttp.reset();
-      expect(engine.resetCount, 1);
+      // The hot-restart snippet is now `void main() { runApp(...); }` — the
+      // whole point is that it contains no recovery call, so there is nothing
+      // here to execute. Reconciliation happens on first native touch, and
+      // `native_smoke_test.dart` / `cancellation_test.dart` prove it against
+      // the real engine, which a fake executor cannot.
+      expect(engine.resetCount, 0);
     });
   });
 }

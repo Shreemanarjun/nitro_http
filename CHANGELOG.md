@@ -54,6 +54,10 @@ and cookies behave the same everywhere.
   joining engine threads, flushing cookie jars — so there is no call to add to
   `main()`.
 
+Built against `nitro` 0.6.1, which bounds the Android direct-buffer pool behind
+`@zeroCopy` returns and settles batched completions on disposal rather than
+dropping them.
+
 Benchmarks against `dart:io`, `package:http`, `dio` and `rhttp`, measured in
 release builds on real hardware, are in the README.
 

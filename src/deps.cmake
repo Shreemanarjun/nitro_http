@@ -123,8 +123,16 @@ if(NOT _nh_root)
       list(GET _nh_dl 1 _nh_dl_msg)
       message(FATAL_ERROR
         "nitro_http: failed to download prebuilt dependencies (${_nh_dl_msg}).\n"
-        "  Set NITRO_HTTP_DEPS_DIR to a directory holding include/ and lib/, or\n"
-        "  build them yourself with tool/deps/build.sh --platform ... --arch ...")
+        "  URL: ${_nh_url}\n"
+        "\n"
+        "  If that URL looks wrong, this build directory is serving a stale\n"
+        "  CMake cache rather than deps/versions.cmake — delete android/.cxx\n"
+        "  (Gradle keeps one per ABI) or the CMake build directory and retry.\n"
+        "  A 'HASH mismatch' whose actual hash is e3b0c442...b855 is the same\n"
+        "  thing: that is the SHA-256 of an empty file, so the download 404'd.\n"
+        "\n"
+        "  Otherwise set NITRO_HTTP_DEPS_DIR to a directory holding include/ and\n"
+        "  lib/, or build them with tool/deps/build.sh --platform ... --arch ...")
     endif()
     file(MAKE_DIRECTORY "${_nh_dest}")
     execute_process(COMMAND "${CMAKE_COMMAND}" -E tar xzf "${_nh_tgz}"

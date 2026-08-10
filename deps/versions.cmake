@@ -15,9 +15,30 @@
 
 set(NITRO_HTTP_DEPS_RELEASE "deps-v1"
     CACHE STRING "GitHub release tag holding the prebuilt dependency archives")
-set(NITRO_HTTP_DEPS_BASE_URL
-    "https://github.com/Shreemanarjun/nitro_http/releases/download/${NITRO_HTTP_DEPS_RELEASE}"
-    CACHE STRING "Base URL for prebuilt dependency archives")
+# NOT a CACHE variable, deliberately.
+#
+# `set(... CACHE STRING ...)` only initialises an entry that does not exist yet,
+# so a build directory configured before this URL last changed keeps serving the
+# OLD value forever — and CMake caches persist in places nobody thinks to clean,
+# notably Gradle's `android/.cxx/<config>/<hash>/<abi>/CMakeCache.txt`. When the
+# GitHub org in this URL was corrected, every existing Android build directory
+# went on downloading from the old one and failed with
+#
+#     file DOWNLOAD HASH mismatch
+#       expected hash: [6b91fbb0...]
+#         actual hash: [e3b0c442...]     <- SHA-256 of an empty file, i.e. a 404
+#
+# which points at the checksum rather than at the four-month-old cache entry
+# actually responsible. A plain variable is recomputed on every configure, so it
+# cannot go stale.
+#
+# An explicit `-DNITRO_HTTP_DEPS_BASE_URL=...` still wins: that lands in the
+# cache, `DEFINED` sees it, and the default below is skipped — so the override
+# escape hatch is intact without a persistent copy of the default.
+if(NOT DEFINED NITRO_HTTP_DEPS_BASE_URL)
+  set(NITRO_HTTP_DEPS_BASE_URL
+      "https://github.com/Shreemanarjun/nitro_http/releases/download/${NITRO_HTTP_DEPS_RELEASE}")
+endif()
 
 # ── Component versions ───────────────────────────────────────────────────────
 set(NH_CURL_VERSION      8.21.0)

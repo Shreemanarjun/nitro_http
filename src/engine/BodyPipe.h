@@ -12,6 +12,28 @@
 //   • curl side: `pull` returning 0 while neither EOF nor failure is set makes
 //     `READFUNCTION` answer `CURL_READFUNC_PAUSE`, so curl stops asking and the
 //     socket goes quiet instead of spinning.
+//
+// REFUTED — do not "fix" the compaction. The obvious objection to the single
+// vector below is that `pull` periodically `erase`s the consumed prefix, which
+// memmoves the live tail, and that a std::deque of per-push segments would pop
+// drained data in O(1) with no compaction at all. That was implemented and
+// A/B-measured against this design, same harness, alternating runs, at the
+// engine's real parameters (8 MiB through the 1 MiB cap, 64 KiB pushes, 64 KiB
+// pulls = curl's default UPLOAD_BUFFERSIZE):
+//
+//     this design    0.55 0.57 0.58 0.62 0.63 ms
+//     segment deque  1.12 1.12 1.16 1.25 1.36 ms   ~2x SLOWER
+//
+// The compaction is cheaper than what replacing it costs. This buffer is
+// allocated once, grows to the cap, and then stays warm for the whole transfer,
+// so a memmove inside it is a hot-cache operation. A segment queue instead does
+// a malloc and a free of a fresh multi-kilobyte block per push — allocator
+// traffic that dwarfs the copy it was meant to save.
+//
+// A standalone prototype of the deque suggested a 7x WIN, which is why this note
+// exists: it reused one source buffer, so every allocation was served hot from
+// the same free list and the malloc cost vanished. Benchmark the real class
+// through this header, never a sketch of it.
 // ─────────────────────────────────────────────────────────────────────────────
 #pragma once
 

@@ -9,6 +9,7 @@ import 'dart:typed_data';
 
 import '../nitro_http.native.dart';
 import 'instance_keys.dart';
+import 'native_attach.dart';
 import 'raw_mapping.dart';
 
 /// Seam over the `engine` instance, so the cache and prefetch API are testable
@@ -29,7 +30,7 @@ abstract interface class EngineExecutor {
 }
 
 final class NativeEngineExecutor implements EngineExecutor {
-  NativeEngineExecutor() : _native = NitroHttpNative.forKey(kEngineKey);
+  NativeEngineExecutor() : _native = attachedNative(kEngineKey);
 
   final NitroHttpNative _native;
 

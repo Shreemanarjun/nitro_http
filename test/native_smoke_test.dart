@@ -21,11 +21,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
+import 'dart:isolate';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nitro_http/nitro_http.dart';
+import 'package:nitro_http/src/internal/native_attach.dart';
 
 String? _locateLibrary() {
   final override = Platform.environment['NITRO_HTTP_DYLIB'];
@@ -556,6 +558,81 @@ void main() {
         lessThan(8000000),
         reason: 'the transfer should have been aborted, not completed',
       );
+    }, skip: skipReason);
+
+    test('the first native touch of a new incarnation aborts stragglers',
+        () async {
+      // A transfer left running by the "previous incarnation".
+      final straggler = client
+          .get('/slow/3000')
+          .then<Object?>((r) => r, onError: (Object e) => e);
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+
+      // A hot restart replaces the Dart isolate, so the handshake guard — an
+      // ordinary static — goes back to false. Nothing about native changes.
+      resetNativeAttachForTesting();
+
+      // First native touch of the new incarnation. Note what is NOT here: any
+      // call to NitroHttp.reset(). That used to be the app's job.
+      final reborn = NitroHttpClient(
+        settings: ClientSettings(baseUrl: server.url('')),
+      );
+      addTearDown(reborn.dispose);
+
+      expect(
+        await straggler,
+        isA<NitroHttpException>(),
+        reason: 'the straggling transfer should have been aborted',
+      );
+      final response = await reborn.get('/echo');
+      expect(response.statusCode, 200, reason: 'the new client still works');
+    }, skip: skipReason);
+
+    test('a background isolate never reconciles native state', () async {
+      // The root isolate has work in flight.
+      final inFlight = client
+          .get('/slow/1500')
+          .then<Object?>((r) => r, onError: (Object e) => e);
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+
+      // A background isolate's statics are fresh too, so it cannot tell a hot
+      // restart from simply being new. If it reconciled, it would abort the
+      // transfer above — which is exactly what the isolate guard prevents.
+      final debugName = await Isolate.run(() {
+        ensureNativeAttached();
+        return Isolate.current.debugName;
+      });
+      expect(debugName, isNot('main'));
+
+      expect(
+        await inFlight,
+        isA<HttpTextResponse>(),
+        reason: "a background isolate must not abort the root isolate's work",
+      );
+    }, skip: skipReason);
+
+    test('a token from the previous incarnation cannot cancel a new request',
+        () async {
+      // Leaves a CANCELLED entry in the process-global native registry.
+      final stale = CancelToken()..cancel('from before the restart');
+      await expectLater(
+        client.get('/echo', cancelToken: stale),
+        throwsA(isA<NitroHttpCancelException>()),
+      );
+
+      resetNativeAttachForTesting();
+      final reborn = NitroHttpClient(
+        settings: ClientSettings(baseUrl: server.url('')),
+      );
+      addTearDown(reborn.dispose);
+
+      // The regression this guards: with a bare counter the first token of the
+      // new incarnation reuses the stale id and every request bound to it dies
+      // instantly with a cancellation the caller never asked for.
+      final fresh = CancelToken();
+      final response = await reborn.get('/echo', cancelToken: fresh);
+      expect(response.statusCode, 200);
+      expect(fresh.isCancelled, isFalse);
     }, skip: skipReason);
 
     test('uploads a streamed body', () async {

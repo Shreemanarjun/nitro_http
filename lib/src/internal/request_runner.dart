@@ -42,6 +42,7 @@ import '../api/response.dart';
 import '../api/settings.dart';
 import '../nitro_http.native.dart';
 import 'instance_keys.dart';
+import 'native_attach.dart';
 import 'raw_mapping.dart';
 
 /// Per-client native calls. The seam that lets the whole orchestration below be
@@ -117,7 +118,7 @@ abstract interface class StreamDemux {
 /// Wraps one `c:<clientId>` instance.
 final class NativeRequestExecutor implements RequestExecutor {
   NativeRequestExecutor(this.clientId)
-    : _native = NitroHttpNative.forKey(clientKey(clientId));
+    : _native = attachedNative(clientKey(clientId));
 
   /// Whether buffered completions are batched through a [NitroCoalescer].
   ///

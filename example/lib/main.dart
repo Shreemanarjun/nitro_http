@@ -35,16 +35,16 @@ void main() {
     return;
   }
 
-  // Hot restart tears down the isolate without cancelling anything, while the
-  // native engine threads keep running. `reset()` joins them and aborts the
-  // stragglers, so a reloaded app does not inherit ghost sockets.
+  // Nothing here recovers from a hot restart: the library reconciles native
+  // state itself on the first touch of a new isolate incarnation.
   //
-  // Guarded because it is also the very first native call in the process: with
-  // no engine library linked it throws, and an app that dies in `main` cannot
-  // explain why.
+  // This probe exists only to fail EARLY and legibly. Reading a capability is
+  // the cheapest way to reach native, so a build with no engine library linked
+  // says so on the first frame instead of throwing from somewhere inside the
+  // first request — and an app that dies in `main` cannot explain why.
   Object? startupError;
   try {
-    NitroHttp.reset();
+    NitroHttp.engineVersion;
   } on Object catch (error) {
     startupError = error;
   }

@@ -2,6 +2,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'exceptions.dart';
 
@@ -12,18 +13,31 @@ import 'exceptions.dart';
 /// wins, later ones are no-ops, and a request that has already completed is
 /// unaffected.
 class CancelToken {
-  /// Ids start at 1 because `0` is the engine's "no token" sentinel, and are
-  /// allocated in Dart rather than by a native call so a token costs nothing
-  /// until a request actually carries it — the engine creates its state lazily
-  /// on first mention, whether that is a bind or a cancel.
-  static int _nextId = 1;
+  /// Distinguishes tokens minted by THIS isolate incarnation from any the
+  /// native registry still holds from a previous one.
+  ///
+  /// The registry is process-global C++ state and outlives a hot restart, while
+  /// these statics do not: with a plain counter the first token after a restart
+  /// would reuse id 1, inherit whatever state id 1 was left in, and — if that
+  /// token had been cancelled — every request bound to it would fail instantly
+  /// with a cancellation the caller never asked for. Randomising the high bits
+  /// per incarnation makes that collision impossible rather than merely
+  /// unlikely, which matters because the symptom (requests cancel themselves
+  /// after a hot restart) looks nothing like its cause.
+  ///
+  /// 30 bits of epoch in the high half, so a collision needs the same value
+  /// twice out of ~1e9; 32 bits of counter in the low half, which is four
+  /// billion tokens in one run. The product stays a positive 63-bit int.
+  static final int _epoch = (math.Random().nextInt(0x3FFFFFFF) + 1) << 32;
+  static int _counter = 0;
 
   /// Identifies this token to the engine.
   ///
   /// A request bound to it is refused before it opens a socket if the token is
   /// already cancelled, and cancelling reaches every bound transfer on every
-  /// client in one call. Internal: callers never need to see it.
-  final int nativeId = _nextId++;
+  /// client in one call. Never `0` — that is the engine's "no token" sentinel.
+  /// Internal: callers never need to see it.
+  final int nativeId = _epoch | (++_counter);
 
   final Completer<void> _completer = Completer<void>();
   final List<void Function()> _listeners = [];

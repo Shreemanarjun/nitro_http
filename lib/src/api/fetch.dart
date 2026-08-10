@@ -58,19 +58,18 @@ abstract final class NitroHttp {
     _client = client;
   }
 
-  /// Hot-restart recovery.
+  /// Tears down every engine: aborts in-flight transfers, joins the engine
+  /// threads, flushes the cookie jars and clears cancellation state.
   ///
-  /// On hot restart the Dart isolate is torn down without cancelling
-  /// subscriptions while native threads keep running. Calling this at startup
-  /// aborts every straggling transfer, joins the engine threads and flushes the
-  /// cookie jars, so a reloaded app does not inherit ghost sockets.
+  /// **You do not need to call this for hot restart.** A hot restart replaces
+  /// the Dart isolate while the plugin's native side keeps running, and the
+  /// library reconciles that itself the first time this incarnation touches
+  /// native — see `ensureNativeAttached`. It used to be your job, and a missed
+  /// call showed up as ghost sockets or, once cancellation moved into the
+  /// engine, as a request that cancelled itself for no visible reason.
   ///
-  /// ```dart
-  /// void main() {
-  ///   NitroHttp.reset();
-  ///   runApp(const MyApp());
-  /// }
-  /// ```
+  /// What is left is the explicit case: a test that wants a known-clean engine
+  /// between cases, or an app deliberately dropping everything mid-run.
   static void reset() {
     _client?.dispose();
     _client = null;

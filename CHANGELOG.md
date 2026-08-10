@@ -1,5 +1,31 @@
 ## Unreleased
 
+### Fixed
+
+* **A hot restart no longer needs anything from you, and no longer breaks
+  cancellation.** A hot restart replaces the Dart isolate while the plugin's
+  native side keeps running, and Flutter tells a plugin nothing. That used to be
+  the app's problem: the docs asked every `main()` to call `NitroHttp.reset()`,
+  and a missed call left ghost sockets behind.
+
+  Moving cancellation into the engine turned that from untidy into wrong. Token
+  ids came from a plain per-isolate counter, while the registry holding their
+  state is process-global and survives a restart — so the first token after a
+  reload reused id 1 and inherited whatever id 1 had been left in. If that was a
+  cancelled token, every request bound to it failed instantly with a
+  cancellation nobody asked for, and nothing about the symptom pointed at the
+  cause.
+
+  Both halves are fixed. Token ids now carry 30 bits of per-incarnation epoch, so
+  a collision across a restart is impossible rather than certain; and the
+  library reconciles native state itself the first time an incarnation touches
+  the engine — aborting stragglers, joining the engine threads, flushing the
+  cookie jars and clearing cancellation state. `NitroHttp.reset()` remains for
+  the explicit case (a test wanting a clean engine) but is no longer something
+  to remember. A background isolate is deliberately skipped: its statics are
+  fresh too, so it cannot tell a restart from being new, and reconciling there
+  would abort the root isolate's transfers.
+
 ### Changed
 
 * **`CancelToken` is now a native object.** The public API is unchanged —

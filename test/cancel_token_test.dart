@@ -125,6 +125,21 @@ void main() {
   });
 
   group('native identity', () {
+    test('ids are namespaced per incarnation, not a bare counter', () {
+      final a = CancelToken().nativeId;
+      final b = CancelToken().nativeId;
+
+      // The high half is this isolate incarnation's epoch. A bare counter would
+      // hand out 1 and 2, which after a hot restart are exactly the ids the
+      // previous incarnation left in the process-global native registry — and
+      // inheriting a cancelled one there makes fresh requests fail with a
+      // cancellation nobody asked for.
+      expect(a, greaterThan(0xFFFFFFFF));
+      expect(a >> 32, b >> 32, reason: 'one incarnation, one epoch');
+      expect(a >> 32, isPositive);
+      expect(b - a, 1, reason: 'the low half is still a dense counter');
+    });
+
     test('every token gets a distinct non-zero id', () {
       final ids = <int>{for (var i = 0; i < 100; i++) CancelToken().nativeId};
 

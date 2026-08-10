@@ -36,6 +36,7 @@
 #include "Common.h"
 #include "CurlEngine.h"
 #include "DeferredPayloads.h"
+#include "EngineRegistry.h"
 #include "HttpCache.h"
 #include "RequestTask.h"
 #include "support/HttpTestServer.h"
@@ -1372,6 +1373,48 @@ TEST(CancelRegistryTest, ObtainCreatesLookupDoesNotAndZeroIsNoToken) {
   EXPECT_EQ(registry.lookup(7101), nullptr);
   EXPECT_FALSE(created->cancelled())
       << "release drops the registry's reference, it does not cancel";
+}
+
+TEST(CancelRegistryTest, ClearForgetsEveryTokenSoAReusedIdIsNotPoisoned) {
+  nitrohttp::CancelRegistry& registry = nitrohttp::CancelRegistry::instance();
+  registry.cancel(7200, "before the hot restart");
+  registry.cancel(7201, "before the hot restart");
+  ASSERT_TRUE(registry.lookup(7200)->cancelled());
+
+  // What `resetNative` does. The Dart isolate that minted those ids is gone, so
+  // every entry now describes a token nothing can refer to — and the next
+  // incarnation starts allocating ids again from its own counter.
+  registry.clear();
+
+  EXPECT_EQ(registry.lookup(7200), nullptr);
+  EXPECT_EQ(registry.lookup(7201), nullptr);
+  EXPECT_EQ(registry.size(), 0u);
+
+  // The id coming back must be a clean slate. If it were not, the first request
+  // the reloaded app binds to it would be refused before it opened a socket,
+  // reported as a cancellation the caller never requested.
+  const std::shared_ptr<nitrohttp::CancelState> reborn = registry.obtain(7200);
+  ASSERT_NE(reborn, nullptr);
+  EXPECT_FALSE(reborn->cancelled());
+  EXPECT_TRUE(reborn->reason().empty());
+  registry.release(7200);
+}
+
+TEST_F(EngineTest, AResetClearsCancellationStateSoAReusedIdStillTransfers) {
+  nitrohttp::CancelRegistry::instance().cancel(7300, "previous incarnation");
+
+  // The reset a fresh Dart incarnation performs on first touch.
+  nitrohttp::EngineRegistry::resetAll();
+
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+  const RawResponse r =
+      sendBuffered(engine, tokenRequest(request(1, "/echo"), 7300));
+
+  EXPECT_EQ(r.errorKind, RAWERRORKIND_NONE)
+      << "a token id reused after a reset must not inherit the old flag: "
+      << r.errorMessage;
+  EXPECT_EQ(r.statusCode, 200);
 }
 
 TEST(CancelRegistryTest, AReleasedIdComesBackAsAFreshState) {

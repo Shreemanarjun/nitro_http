@@ -12,6 +12,7 @@ import 'dart:typed_data';
 
 import '../nitro_http.native.dart';
 import 'instance_keys.dart';
+import 'native_attach.dart';
 
 /// RFC 6455 opcodes, plus the sentinel the engine uses to surface a transport
 /// failure on the same stream instead of inventing a second channel.
@@ -90,7 +91,7 @@ abstract interface class WsFrameDemux {
 
 final class NativeWsExecutor implements WsExecutor {
   NativeWsExecutor(this.socketId)
-    : _native = NitroHttpNative.forKey(socketKey(socketId));
+    : _native = attachedNative(socketKey(socketId));
 
   final int socketId;
   final NitroHttpNative _native;

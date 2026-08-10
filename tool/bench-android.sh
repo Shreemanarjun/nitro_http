@@ -79,6 +79,22 @@ else
   echo "  ok      battery ${level:-?}%"
 fi
 
+# A secured lock screen is the quietest way to lose a whole set. The launch
+# intent is delivered and `monkey` cheerfully reports "Events injected: 1", but
+# the activity never comes to the foreground behind the keyguard, so every run
+# logs nothing at all and the set ends 10-for-10 INVALID with no clue why.
+# `wm dismiss-keyguard` clears an insecure keyguard only; a PIN or pattern needs
+# a human, so ask for one instead of burning half an hour discovering it.
+adb shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
+adb shell wm dismiss-keyguard >/dev/null 2>&1
+sleep 1
+if adb shell dumpsys window 2>/dev/null | grep -q "isKeyguardShowing=true"; then
+  echo "  REFUSE  the screen is locked — unlock the phone and leave it unlocked"
+  fail=1
+else
+  echo "  ok      screen unlocked"
+fi
+
 [ "$fail" -eq 1 ] && { echo; echo "Preflight failed."; exit 1; }
 
 # ── Build and install once ───────────────────────────────────────────────────
@@ -99,14 +115,35 @@ echo "==> installed $APP_ID"
 
 # Charging warms the die, and the die is the thing being controlled for. Ask the
 # phone to ignore the cable; it re-attaches by itself when the run ends.
+#
+# This has a side effect that cost a whole 10-run set: "unplugged" also cancels
+# stay-on-while-plugged-in, so the screen starts obeying its normal timeout. Ten
+# minutes in — around run 6 — the display slept, the app stopped being
+# foreground, and every run after that logged NITRO_BENCH_BEGIN and then hung
+# forever. So the screen is pinned open explicitly rather than relying on the
+# cable, and both settings are restored on the way out.
+ORIG_TIMEOUT=$(adb shell settings get system screen_off_timeout 2>/dev/null | tr -d '\r')
 adb shell dumpsys battery unplug >/dev/null 2>&1 || true
-trap 'adb shell dumpsys battery reset >/dev/null 2>&1 || true' EXIT
+adb shell settings put system screen_off_timeout 1800000 >/dev/null 2>&1 || true
+restore_device() {
+  adb shell dumpsys battery reset >/dev/null 2>&1 || true
+  case "$ORIG_TIMEOUT" in
+    ''|*[!0-9]*) ;;
+    *) adb shell settings put system screen_off_timeout "$ORIG_TIMEOUT" >/dev/null 2>&1 || true ;;
+  esac
+}
+trap restore_device EXIT
 
 echo "==> $RUNS runs into $OUT"
 for i in $(seq 1 "$RUNS"); do
   printf '  run %2d/%s\n' "$i" "$RUNS"
   cool_down || { echo "  giving up: device will not cool"; break; }
   temp=$(hottest_cpu)
+
+  # Wake and unlock before launching: a sleeping screen is what broke the
+  # second half of the first full set.
+  adb shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
+  adb shell wm dismiss-keyguard >/dev/null 2>&1
 
   adb logcat -c >/dev/null 2>&1
   adb shell am force-stop "$APP_ID" >/dev/null 2>&1
@@ -125,7 +162,12 @@ for i in $(seq 1 "$RUNS"); do
     p50=$(awk -F'|' '/\| small GET \| nitro_http /{print $7}' "$f" | tr -d ' ')
     echo "    ok  $((temp/1000)) C  small GET p50 $p50"
   else
-    echo "    INVALID — no NITRO_BENCH_END within 240s"
+    began=$(grep -c NITRO_BENCH_BEGIN "$f" || true)
+    if [ "$began" -gt 0 ]; then
+      echo "    INVALID — started but never finished (hung); screen state?"
+    else
+      echo "    INVALID — never started; check the launch"
+    fi
   fi
   adb shell am force-stop "$APP_ID" >/dev/null 2>&1
 done

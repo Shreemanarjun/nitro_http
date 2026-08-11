@@ -59,7 +59,56 @@ void main() {
 
   tearDown(() => demux.closeAll());
 
+  // The snippet directly under the badges — the first code anyone reads, and
+  // the one most likely to be copied verbatim, so it is held to the same
+  // standard as the rest.
+  group('Header', () {
+    test('hero snippet', () async {
+      final defaultClient = makeClient();
+      NitroHttp.overrideDefaultClientForTesting(defaultClient);
+      addTearDown(() => NitroHttp.overrideDefaultClientForTesting(null));
+      executor.bufferedResponses.add(
+        rawResponse(body: Uint8List.fromList(utf8.encode('{"name":"Ada"}'))),
+      );
+
+      final res = await fetch('https://api.example.com/users/42');
+
+      expect(res.bodyToJson(), {'name': 'Ada'});
+      // The snippet's comment claims this prints a protocol label, so check it
+      // is one rather than merely non-null.
+      expect(res.version.label, matches(r'^HTTP/'));
+    });
+  });
+
   group('Quick start', () {
+    test('client per API: get, post, dispose', () async {
+      final client = NitroHttpClient(
+        settings: const ClientSettings(
+          baseUrl: 'https://api.example.com',
+          userAgent: 'my_app/1.0',
+        ),
+        executor: executor,
+        demux: demux,
+      );
+
+      executor.bufferedResponses
+        ..add(rawResponse(body: Uint8List.fromList(utf8.encode('{"name":"Ada"}'))))
+        ..add(rawResponse(status: 201));
+
+      final user = await client.get('/users/42');
+      expect((user.bodyToJson() as Map)['name'], 'Ada');
+
+      final created = await client.post(
+        '/users',
+        body: HttpBody.json({'name': 'Ada'}),
+      );
+      // The snippet's comment says 201, so assert 201 and not merely success.
+      expect(created.statusCode, 201);
+
+      client.dispose();
+      expect(executor.disposeCount, 1);
+    });
+
     test('fetch() one-liner', () async {
       final defaultClient = makeClient();
       NitroHttp.overrideDefaultClientForTesting(defaultClient);

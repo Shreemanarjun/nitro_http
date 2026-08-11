@@ -10,12 +10,14 @@
     <img alt="nitro_http" src="doc/logo-light.svg" width="420">
   </picture>
 </p>
-
-<h1 align="center">nitro_http</h1>
-
 <p align="center">
   A fast HTTP client for Flutter. One C++ engine, five platforms, and the same
   behaviour on all of them.
+</p>
+
+<p align="center">
+  Built with <a href="https://nitro.shreeman.dev/"><b>Nitro for Flutter</b></a>
+  — the FFI bridge that makes the C++ call cheap enough to be worth making.
 </p>
 
 <p align="center">
@@ -26,12 +28,12 @@
 </p>
 
 ```dart
-final client = NitroHttpClient(settings: const ClientSettings(
-  baseUrl: 'https://api.example.com',
-));
+import 'package:nitro_http/nitro_http.dart';
 
-final res = await client.get('/users/42');
-print(jsonDecode(res.body)['name']);
+final res = await fetch('https://api.example.com/users/42');
+
+print(res.bodyToJson());   // parsed JSON, decoded with the response's charset
+print(res.version.label);  // HTTP/3 — negotiated for you, not configured
 ```
 
 Under the hood every request goes to a **libcurl engine written in C++**, reached
@@ -130,7 +132,7 @@ final client = NitroHttpClient(
 
 // GET some JSON
 final user = await client.get('/users/42');
-print(jsonDecode(user.body)['name'] as String);
+print((user.bodyToJson() as Map)['name']);
 
 // POST some JSON
 final created = await client.post('/users', body: HttpBody.json({'name': 'Ada'}));
@@ -240,10 +242,16 @@ HttpBody.file('/tmp/backup.zip');
 res.statusCode;              // 200
 res.body;                    // String, decoded using the response charset
 res.bodyBytes;               // Uint8List
-jsonDecode(res.body);        // JSON — decode it yourself, with dart:convert
+res.bodyToJson();            // parsed JSON
 res.headers['etag'];         // case-insensitive lookup
 res.isSuccess;               // 2xx
 ```
+
+`body` is decoded lazily and cached, so reading only `statusCode` never pays to
+decode a megabyte of text. `bodyToJson()` is `jsonDecode` with one difference
+that matters: malformed JSON throws `NitroHttpDecodingException`, not a bare
+`FormatException`, so a single `on NitroHttpException` clause still catches
+everything this package can fail with.
 
 Responses are a sealed family, so a `switch` over them is checked for
 completeness — add a response kind and the compiler finds every place that needs

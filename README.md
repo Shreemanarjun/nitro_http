@@ -6,8 +6,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="doc/logo-dark.svg">
-    <img alt="nitro_http" src="doc/logo-light.svg" width="420">
+    <source media="(prefers-color-scheme: dark)" srcset="https://zmozkivkhopoeutpnnum.supabase.co/storage/v1/object/public/nitro_http/logo-dark.svg">
+    <img alt="nitro_http" src="https://zmozkivkhopoeutpnnum.supabase.co/storage/v1/object/public/nitro_http/logo-light.svg" width="420">
   </picture>
 </p>
 <p align="center">
@@ -76,22 +76,22 @@ Release builds on real hardware, against `dart:io`, `package:http`, `dio` and
 
 <p>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="doc/bench-android-dark.svg">
-    <img alt="Android on a OnePlus 11 (Snapdragon 8 Gen 2, 16 GB, Android 16): nitro_http is fastest in all five scenarios — small GET 0.5 ms, 64 concurrent GETs 19 ms, 32 MiB download 209 ms, 8 MiB upload 227 ms, mixed workload 2.87 ms — winning 9 of 9 runs on concurrency, download and mixed." src="doc/bench-android-light.svg" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://zmozkivkhopoeutpnnum.supabase.co/storage/v1/object/public/nitro_http/bench-android-dark.svg">
+    <img alt="Android on a OnePlus 11 (Snapdragon 8 Gen 2, 16 GB, Android 16): nitro_http is fastest in all five scenarios — small GET 0.5 ms, 64 concurrent GETs 19 ms, 32 MiB download 209 ms, 8 MiB upload 227 ms, mixed workload 2.87 ms — winning 9 of 9 runs on concurrency, download and mixed." src="https://zmozkivkhopoeutpnnum.supabase.co/storage/v1/object/public/nitro_http/bench-android-light.svg" width="100%">
   </picture>
 </p>
 
 <p>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="doc/bench-ios-dark.svg">
-    <img alt="iOS on an iPhone 12 (A14 Bionic, 4 GB, iOS 26.6): nitro_http wins 64 concurrent GETs at 4.22 ms and the mixed workload at 1.17 ms in 9 of 9 runs, ties rhttp on a 32 MiB download at 135 ms, and trails package:http by 2.7 % on an 8 MiB upload." src="doc/bench-ios-light.svg" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://zmozkivkhopoeutpnnum.supabase.co/storage/v1/object/public/nitro_http/bench-ios-dark.svg">
+    <img alt="iOS on an iPhone 12 (A14 Bionic, 4 GB, iOS 26.6): nitro_http wins 64 concurrent GETs at 4.22 ms and the mixed workload at 1.17 ms in 9 of 9 runs, ties rhttp on a 32 MiB download at 135 ms, and trails package:http by 2.7 % on an 8 MiB upload." src="https://zmozkivkhopoeutpnnum.supabase.co/storage/v1/object/public/nitro_http/bench-ios-light.svg" width="100%">
   </picture>
 </p>
 
 <p>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="doc/bench-macos-dark.svg">
-    <img alt="macOS on an Apple M1 Pro (16 GB, macOS 26.4): nitro_http wins the mixed workload in 9 of 9 runs at 0.81 ms, ties rhttp on concurrency, and trails dart:io by 0.01 ms on a single small GET." src="doc/bench-macos-light.svg" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://zmozkivkhopoeutpnnum.supabase.co/storage/v1/object/public/nitro_http/bench-macos-dark.svg">
+    <img alt="macOS on an Apple M1 Pro (16 GB, macOS 26.4): nitro_http wins the mixed workload in 9 of 9 runs at 0.81 ms, ties rhttp on concurrency, and trails dart:io by 0.01 ms on a single small GET." src="https://zmozkivkhopoeutpnnum.supabase.co/storage/v1/object/public/nitro_http/bench-macos-light.svg" width="100%">
   </picture>
 </p>
 

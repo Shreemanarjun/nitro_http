@@ -1,3 +1,18 @@
+## 0.0.2
+
+Documentation only. `lib/` and `src/` are byte-identical to 0.0.1, so upgrading
+changes nothing at runtime.
+
+### Fixed
+
+* **Asset links in the README, so the logo and benchmark charts actually render
+  on pub.dev.** They now use absolute URLs rather than repository-relative ones.
+  pub.dev rewrites and proxies an `<img src>` but leaves the `<source srcset>`
+  of a `<picture>` alone, so every dark-theme variant resolved to nothing and
+  readers on a dark theme saw blanks where the charts should be. A published
+  README can only be corrected by publishing again, which is what this release
+  is for.
+
 ## 0.0.1
 
 First release.

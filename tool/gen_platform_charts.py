@@ -15,6 +15,28 @@ Data: median p50 of 10 release runs per platform, first discarded as warm-up,
 collected by tool/bench-macos.sh / tool/bench-android.sh / tool/bench-ios.sh and
 aggregated by tool/bench_aggregate.py. Update this file and the README together.
 
+⚠️  THE README DOES NOT READ THESE FILES. It points at copies in Supabase
+    storage, because pub.dev rewrites and proxies <img src> but leaves the
+    <source srcset> of a <picture> alone, so a relative dark-mode asset resolves
+    to nothing there. Writing doc/*.svg therefore changes NOTHING a reader sees
+    until the new files are uploaded to the `nitro_http` bucket under the same
+    names:
+
+      https://<project>.supabase.co/storage/v1/object/public/nitro_http/<name>.svg
+
+    Nothing fails if you forget — the README simply keeps showing the previous
+    numbers, which is worse than a broken image. Verify after uploading:
+
+      for f in doc/bench-*.svg doc/logo-*.svg; do
+        n=$(basename "$f")
+        [ "$(shasum -a 256 "$f" | cut -d' ' -f1)" = \
+          "$(curl -sL "$BASE/$n" | shasum -a 256 | cut -d' ' -f1)" ] \
+          && echo "match $n" || echo "STALE $n"
+      done
+
+    doc/ADVANCED.md still uses the local relative copies, which is why they stay
+    in the repo: GitHub renders those correctly and pub.dev never sees that file.
+
 Every row here is a RELEASE build on the hardware named in `meta` — no
 simulators, no emulators, no debug timings. That is not pedantry: Flutter ships
 no AOT snapshot for the iOS simulator, so a simulator can only report debug

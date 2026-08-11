@@ -1,6 +1,6 @@
 name: nitro_http
 description: A fast HTTP client for Flutter backed by a native libcurl C++ engine over Nitro FFI, with HTTP/1.1, HTTP/2, HTTP/3, streaming and WebSockets.
-version: 0.0.1
+version: 0.0.2
 homepage: https://github.com/Shreemanarjun/nitro_http
 repository: https://github.com/Shreemanarjun/nitro_http
 issue_tracker: https://github.com/Shreemanarjun/nitro_http/issues

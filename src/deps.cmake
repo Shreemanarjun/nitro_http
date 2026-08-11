@@ -13,12 +13,16 @@
 #
 #   2. Prebuilt archive from GitHub Releases, SHA-256 pinned in
 #      deps/versions.cmake. Extracted into a cache directory OUTSIDE the build
-#      tree so it survives `flutter clean`. This is the path Android and iOS
-#      take, because neither ships a system libcurl.
+#      tree so it survives `flutter clean`. Since deps-v1 was cut every slice
+#      carries a pin, so this is the path EVERY platform takes by default —
+#      not just Android and iOS, which merely have no alternative.
 #
-#   3. System libcurl. The default on Linux, macOS and Windows-with-vcpkg,
-#      where a perfectly good libcurl already exists and asking developers to
-#      download a 3 MB archive to run the test suite is silly.
+#   3. System libcurl. Reached only when path 2 cannot run: no pin recorded for
+#      this slice (an unreleased platform), or the download refused. It was the
+#      normal outcome on Linux/macOS/Windows before the pins were populated,
+#      which is why several comments and docs used to call it the default.
+#      Its transport features are whatever that libcurl was built with, so
+#      HTTP/3, brotli and zstd may silently be absent.
 #
 # Whichever path runs, it defines the same interface target:
 #

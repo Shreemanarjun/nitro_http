@@ -242,8 +242,10 @@ The build finds libcurl in this order, stopping at the first match:
    release — one slice per platform, each verified against the SHA-256 in
    `deps/versions.cmake` before it is used. A checksum that does not match
    fails the build rather than being trusted.
-3. **The system libcurl** — the default on Linux, macOS and Windows. Builds and
-   runs today; HTTP/3, brotli and zstd depend on what that libcurl has, and
+3. **The system libcurl** — a fallback, reached only when path 2 cannot run:
+   no SHA-256 recorded for this slice, or the download refused. Every slice is
+   pinned as of `deps-v1`, so a normal build never gets here. When it does,
+   HTTP/3, brotli and zstd depend on what that libcurl was built with, and
    `NitroHttp.supportsHttp3` / `supportsBrotli` / `supportsZstd` report the
    truth at runtime.
 

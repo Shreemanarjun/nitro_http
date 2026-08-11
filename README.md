@@ -18,6 +18,13 @@
   behaviour on all of them.
 </p>
 
+<p align="center">
+  <a href="https://pub.dev/packages/nitro_http"><img alt="pub version" src="https://img.shields.io/pub/v/nitro_http.svg"></a>
+  <a href="https://pub.dev/packages/nitro_http/score"><img alt="pub points" src="https://img.shields.io/pub/points/nitro_http"></a>
+  <a href="https://github.com/Shreemanarjun/nitro_http/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/Shreemanarjun/nitro_http/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+</p>
+
 ```dart
 final client = NitroHttpClient(settings: const ClientSettings(
   baseUrl: 'https://api.example.com',
@@ -77,10 +84,13 @@ length cannot show it. Where it loses, why, and how to reproduce any of this:
 
 ## Install
 
-```yaml
-dependencies:
-  nitro_http: ^0.1.0
+```sh
+flutter pub add nitro_http
 ```
+
+Requires Dart `^3.12.2` and Flutter `>=3.3.0`. No extra setup: the native engine
+is downloaded as a checksum-pinned prebuilt on first build, for every platform
+below.
 
 **Platform support**
 
@@ -735,8 +745,9 @@ TLS, proxies and DNS-over-HTTPS have more to them than fits here — see
 - **Cookies have no public-suffix list**, so do not treat the jar as a security
   boundary against a hostile server.
 - **Binary size is roughly 1.5–3 MB per ABI** with the bundled native stack.
-- **No prebuilt binaries are published yet.** Until then you build a slice or
-  link a system libcurl — see [doc/ADVANCED.md](doc/ADVANCED.md#native-dependencies).
+- **It is a 0.0.x release.** The API is complete and tested, but it has not yet
+  been through a wide range of real apps, so treat breaking changes in a minor
+  version as possible until 1.0.
 
 ## Try it
 
@@ -763,5 +774,16 @@ Contributions welcome. The Nitro spec in `lib/src/nitro_http.native.dart` is
 generated code's source of truth — change it and re-run `nitrogen generate`,
 never edit the generated files. Run `dart analyze` and the test suites before
 opening a pull request.
+
+Bugs and feature requests: [issue tracker](https://github.com/Shreemanarjun/nitro_http/issues).
+
+## License
+
+[MIT](LICENSE) © Shreeman Arjun Sahu.
+
+The published builds statically link libcurl, BoringSSL, nghttp2, nghttp3,
+ngtcp2, brotli and zstd. Those carry their own permissive licences (curl, ISC,
+MIT, Apache-2.0, BSD) and shipping an app built with this package means
+distributing them — worth a line in your app's acknowledgements.
 
 

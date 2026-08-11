@@ -1,3 +1,16 @@
+## 0.0.3
+
+Documentation only. `lib/` and `src/` are still byte-identical to 0.0.1.
+
+### Fixed
+
+* **The logo now renders on any background.** It was a `<picture>` with a
+  near-black wordmark for light themes and a white one for dark, and the light
+  variant did not appear on pub.dev. Both variants are replaced by one PNG whose
+  wordmark is a single mid blue (`#2a78d6`), measured at 4.42:1 on white,
+  4.29:1 on GitHub dark and 3.90:1 on pub.dev dark — so one asset is legible
+  everywhere and the theme switch is gone rather than fixed.
+
 ## 0.0.2
 
 Documentation only. `lib/` and `src/` are byte-identical to 0.0.1, so upgrading

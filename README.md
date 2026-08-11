@@ -5,10 +5,8 @@
 -->
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://zmozkivkhopoeutpnnum.supabase.co/storage/v1/object/public/nitro_http/logo-dark.svg">
-    <img alt="nitro_http" src="https://zmozkivkhopoeutpnnum.supabase.co/storage/v1/object/public/nitro_http/logo-light.svg" width="420">
-  </picture>
+  <img alt="nitro_http" width="420"
+       src="https://zmozkivkhopoeutpnnum.supabase.co/storage/v1/object/public/nitro_http/logo.png">
 </p>
 <p align="center">
   A fast HTTP client for Flutter. One C++ engine, five platforms, and the same

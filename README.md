@@ -36,23 +36,38 @@ print(res.bodyToJson());   // parsed JSON, decoded with the response's charset
 print(res.version.label);  // HTTP/3 — negotiated for you, not configured
 ```
 
-Under the hood every request goes to a **libcurl engine written in C++**, reached
-through a direct FFI call rather than a platform channel. You get HTTP/1.1,
-HTTP/2 and HTTP/3, real streaming in both directions, a disk cache and
-WebSockets — and because there is only one engine, proxies, TLS pinning,
-redirects, timeouts and cookies behave identically on iOS, Android, macOS,
-Windows and Linux. There is no "works differently on Android" caveat, because
-there is no second implementation to disagree with the first.
+Every request goes to a **libcurl engine written in C++**, called straight over
+FFI — no platform channel, and no second implementation to disagree with the
+first.
+
+|  |  |
+|---|---|
+| **Protocols** | HTTP/1.1 · HTTP/2 · HTTP/3 (QUIC) · WebSockets |
+| **Transfers** | streaming both ways · upload &amp; download progress · cancellation · per-request timings |
+| **Security** | TLS 1.2/1.3 · SPKI pinning, per client or per request · mTLS · custom roots · DNS-over-HTTPS |
+| **Caching** | RFC 9111 subset — `Cache-Control`, `ETag`, `Last-Modified`, 304 revalidation · prefetch |
+| **Plumbing** | interceptors · retry with backoff · cookie jar · HTTP and SOCKS5 proxies · connection pool |
+| **Platforms** | iOS · Android · macOS · Windows · Linux |
+
+One engine means proxies, pinning, redirects, timeouts and cookies behave
+identically on all five. There is no "works differently on Android".
 
 ## Why you might want it
 
-- **It is quick where apps actually feel it.** Many requests at once, which is
-  what a real screen does. See [How fast is it](#how-fast-is-it).
-- **One set of behaviours.** No per-platform surprises to discover in production.
+- **Fast in the shape a real screen loads.** Small and large requests
+  interleaved — fastest in **9 runs out of 9 on every platform measured**, and
+  **1.75x** the requests per second of the next-best client on Android.
+  [See the charts](#how-fast-is-it).
+- **Features `dart:io` cannot reach.** HTTP/3, TLS pinning, mTLS,
+  DNS-over-HTTPS, a disk cache and transfer timings. `package:http`, `dio` and
+  `retrofit` all sit on `dart:io`'s socket layer, which has no knobs for these —
+  this package owns its transport, so that is where they live.
+- **One engine, one behaviour.** Nothing to rediscover per platform once you are
+  in production.
 - **Drop-in adapters.** Already on `package:http` or `dio`? Change one line and
-  keep your code.
-- **Honest about limits.** Everything it cannot do is listed in
-  [Limitations](#limitations), not buried.
+  keep every call site.
+- **Honest about limits.** No web, HTTP/1.1-only WebSockets, ~1.5–3 MB per ABI.
+  All of it in [Limitations](#limitations), not buried.
 
 ## How fast is it
 

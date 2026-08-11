@@ -198,6 +198,32 @@ void main() {
       expect(sent.customMethod, 'PURGE');
     });
 
+    test('Query parameters and per-call headers', () async {
+      const token = 'a-refresh-token';
+      final client = makeClient(
+        settings: const ClientSettings(baseUrl: 'https://api.example.com'),
+      );
+      executor.bufferedResponses.add(rawResponse());
+
+      final res = await client.get(
+        '/search',
+        query: {'q': 'flutter', 'limit': '20'},
+        headers: HttpHeaders.fromMap({'Authorization': 'Bearer $token'}),
+      );
+
+      final sent = executor.bufferedRequests.single.request;
+      expect(sent.url, 'https://api.example.com/search?q=flutter&limit=20');
+      expect(
+        sent.headers.any(
+          (h) =>
+              h.name.toLowerCase() == 'authorization' &&
+              h.value == 'Bearer $token',
+        ),
+        isTrue,
+      );
+      expect(res.statusCode, 200);
+    });
+
     test('Request bodies', () {
       const token = 'a-refresh-token';
       final source = Stream<Uint8List>.fromIterable([Uint8List(4096)]);
@@ -602,6 +628,38 @@ void main() {
       expect(system, isNot(none));
       expect(corp.proxySettings, isNotNull);
       expect(socks, isNot(socksRemote));
+    });
+
+    test('Timeouts: three separate deadlines', () {
+      const settings = ClientSettings(
+        connectTimeout: Duration(seconds: 10),
+        timeout: Duration(seconds: 30),
+        idleTimeout: Duration(seconds: 90),
+      );
+
+      // The snippet's whole point is that these are three DISTINCT deadlines,
+      // so assert each landed on its own field rather than that it constructs.
+      expect(settings.connectTimeout, const Duration(seconds: 10));
+      expect(settings.timeout, const Duration(seconds: 30));
+      expect(settings.idleTimeout, const Duration(seconds: 90));
+    });
+
+    test('HTTP versions and the connection pool', () {
+      const settings = ClientSettings(
+        httpVersionPref: HttpVersionPref.http2,
+        poolSettings: PoolSettings(
+          maxConnections: 64,
+          maxConnectionsPerHost: 6,
+          idleTimeout: Duration(seconds: 90),
+          maxLifetime: Duration(minutes: 10),
+        ),
+      );
+
+      expect(settings.httpVersionPref, HttpVersionPref.http2);
+      expect(settings.poolSettings.maxConnections, 64);
+      expect(settings.poolSettings.maxConnectionsPerHost, 6);
+      expect(settings.poolSettings.idleTimeout, const Duration(seconds: 90));
+      expect(settings.poolSettings.maxLifetime, const Duration(minutes: 10));
     });
 
     test('DNS settings', () {

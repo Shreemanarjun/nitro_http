@@ -47,14 +47,8 @@ there is no second implementation to disagree with the first.
 
 ## How fast is it
 
-Measured in **release** builds on real hardware against `dart:io`,
-`package:http`, `dio` and `rhttp` (Rust/reqwest) — all five hitting the same
-in-process server, in the same run, on the same machine. Each bar is the median
-p50 of **10 runs**, the first discarded as warm-up.
-
-Read the "wins N/9" note on each panel first: it is how many of the nine counted
-runs that client was fastest in, and it is the difference between a result and a
-coin flip. Bar length cannot show you that.
+Release builds on real hardware, against `dart:io`, `package:http`, `dio` and
+`rhttp` — all five hitting the same in-process server in the same run.
 
 <p>
   <picture>
@@ -77,72 +71,9 @@ coin flip. Bar length cannot show you that.
   </picture>
 </p>
 
-<details>
-<summary><b>How the dispatch modes compare on Android</b> — serial, concurrent and parallel (earlier measurement set)</summary>
-
-<p>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="doc/bench-android-modes-dark.svg">
-    <img alt="Serial, concurrent and parallel dispatch on Android" src="doc/bench-android-modes-light.svg" width="100%">
-  </picture>
-</p>
-</details>
-
-**Read it honestly.**
-
-- **The mixed workload is the one result that holds everywhere.** It is also the
-  scenario closest to what an app actually does — small and large requests
-  interleaved — and `nitro_http` is fastest in **9 runs out of 9 on all three
-  platforms**. Requests per second against the next-best client: **1.75x** on
-  Android (312 vs 178), **1.27x** on iOS (433 vs 342), **1.14x** on macOS
-  (449 vs 394).
-- **Concurrency is the second.** 64 GETs in flight is a win on both phones (9/9
-  each) and a tie with rhttp on the M1.
-- **The Android device wins every scenario; the two Apple targets share a
-  different shape.** On the OnePlus it is fastest in all five. On both the iPhone
-  and the M1 it wins mixed and concurrency, sits inside the noise of rhttp on the
-  download, trails `dart:io` by 0.01 ms on a small GET, and is 4th on the upload.
-  So the split is **not** phone-versus-desktop — an iPhone 12 is a phone and it
-  patterns with the laptop. What those two share is fast cores, which leave less
-  for a native engine to take back. That is a plausible reading of the pattern,
-  not something measured directly.
-- **The 32 MiB download is a genuine tie on Apple, and the win rate says so
-  better than the bars.** iOS: 135.09 vs 135.33 ms, `nitro_http` fastest in 7 of
-  9 runs. macOS: 125.47 vs 124.40 ms, rhttp fastest in 8 of 9. A 0.2–0.9 % gap
-  that changes direction between two machines is not a ranking. On Android it is
-  not close — 208 ms against 280 for the next-best client, **25 % clear**, in 9
-  of 9 runs.
-- **Streamed upload is the weak row, consistently.** 4th of 5 on both Apple
-  targets, 2.7 % behind the leader on each, and fastest in only 6 of 9 runs on
-  Android. Two optimisation attempts were measured and both made it slower or did
-  nothing; they are written up in `src/engine/BodyPipe.h` and
-  `src/engine/ClientConfig.cpp` rather than shipped. The cause is still not fully
-  explained, and this row is the honest gap in the set.
-- **A small GET is a microbenchmark, and on Apple silicon it is the FFI hop.**
-  0.01 ms behind `dart:io` — in every run on the M1, in 7 of 9 on the iPhone.
-  Any real network erases it.
-- **rhttp is the closest competitor on Apple targets and the furthest on
-  Android.** It also costs its users a Rust toolchain, and has no cache, no
-  interceptors and no WebSockets.
-
-Two things these numbers are not. The server is a **single-isolate loopback**
-server, so on the phones it is plausibly the limit in the burst and mixed rows
-rather than any client. And with the network removed what is left is the client's
-own cost — over a real link latency dominates and everything converges.
-
-Each platform above was measured more than once, on separate occasions, and the
-sets agree: three independent 10-run sets on macOS put the mixed p50 at 0.81 /
-0.84 / 0.84 ms and throughput at 449 / 444 / 449 req/s, and two on iOS agree to
-within 0.1 % on every row. The charts quote one set each rather than a pooled
-average, because pooling runs taken in different machine states is the mistake
-the whole harness exists to prevent.
-
-Reproduce any of this with `tool/bench-macos.sh 10`, `tool/bench-android.sh 10`
-or `tool/bench-ios.sh 10`. They refuse to run on a busy machine, a hot phone, or
-a simulator — Flutter ships no AOT snapshot for the iOS simulator, so a
-simulator can only report debug timings, and debug penalises Dart far more than
-native code, which would flatter this package specifically. The rest of the
-checks are in [doc/ADVANCED.md](doc/ADVANCED.md#benchmarks).
+Each panel's "wins N/9" note is what separates a result from a coin flip — bar
+length cannot show it. Where it loses, why, and how to reproduce any of this:
+**[the full benchmark record](doc/ADVANCED.md#benchmarks)**.
 
 ## Install
 
@@ -833,6 +764,4 @@ generated code's source of truth — change it and re-run `nitrogen generate`,
 never edit the generated files. Run `dart analyze` and the test suites before
 opening a pull request.
 
-## License
 
-Not yet chosen; one will be in place before this package is published.

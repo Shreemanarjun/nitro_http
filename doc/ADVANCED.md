@@ -228,8 +228,8 @@ DNS-over-HTTPS, an RFC 9111 disk cache, or transfer timings, because the socket
 layer they sit on has no such knobs. `nitro_http` owns its transport, which is
 where those features live — and you keep your existing call sites either way,
 because it ships a `package:http` adapter and a `dio` adapter
-([below](#packagehttp-adapter)). Raw speed is a separate question with its own
-section: [Benchmarks](#benchmarks).
+([in the README](../README.md#using-it-with-packagehttp-or-dio)). Raw speed is a
+separate question with its own section: [Benchmarks](#benchmarks).
 ## Native dependencies
 
 The build finds libcurl in this order, stopping at the first match:
@@ -291,7 +291,7 @@ tool/coverage.sh              # coverage report, fails under the floor
 
 **Integration tests** — run in `example/` against an in-process server on
 `127.0.0.1`, on any simulator, emulator or desktop target. On macOS add the
-[sandbox entitlement](#macos-the-app-sandbox-needs-one-entitlement) first.
+[sandbox entitlement](../README.md#install) first.
 
 ```sh
 cd example
@@ -307,14 +307,79 @@ ctest --test-dir build/cpp --output-on-failure
 ```
 ## Benchmarks
 
-The charts at the top of this page are the results: five scenarios, five
-clients, one in-process loopback server, p50 in release mode on real devices —
-an M1 Pro, an iPhone 12 and a OnePlus 11. Charts regenerate from the data table
-in `tool/gen_platform_charts.py` (the dispatch-mode grid shown behind a
-disclosure comes from `tool/gen_benchmark_charts.py` and an earlier, heavier
-measurement set). Phone numbers vary run to run (heat alone
-moved every client 11–60 % between sets), so treat any margin under ~10 % as a
-tie, and never compare numbers from different runs.
+The charts in the [README](../README.md#how-fast-is-it) are the headline
+results: five scenarios, five clients, one in-process loopback server, p50 in
+release mode on real devices — an M1 Pro, an iPhone 12 and a OnePlus 11. They
+regenerate from the data tables in `tool/gen_platform_charts.py`, each annotated
+with the `build/bench/` directory it came from. Phone numbers vary run to run
+(heat alone moved every client 11–60 % between sets), so treat any margin under
+~10 % as a tie, and never compare numbers from different runs.
+
+This section is the part the charts cannot show.
+
+### Reading the results honestly
+
+- **The mixed workload is the one result that holds everywhere.** It is also the
+  scenario closest to what an app actually does — small and large requests
+  interleaved — and `nitro_http` is fastest in **9 runs out of 9 on all three
+  platforms**. Requests per second against the next-best client: **1.75x** on
+  Android (312 vs 178), **1.27x** on iOS (433 vs 342), **1.14x** on macOS
+  (449 vs 394).
+- **Concurrency is the second.** 64 GETs in flight is a win on both phones (9/9
+  each) and a tie with rhttp on the M1.
+- **The Android device wins every scenario; the two Apple targets share a
+  different shape.** On the OnePlus it is fastest in all five. On both the iPhone
+  and the M1 it wins mixed and concurrency, sits inside the noise of rhttp on the
+  download, trails `dart:io` by 0.01 ms on a small GET, and is 4th on the upload.
+  So the split is **not** phone-versus-desktop — an iPhone 12 is a phone and it
+  patterns with the laptop. What those two share is fast cores, which leave less
+  for a native engine to take back. That is a plausible reading of the pattern,
+  not something measured directly.
+- **The 32 MiB download is a genuine tie on Apple, and the win rate says so
+  better than the bars.** iOS: 135.09 vs 135.33 ms, `nitro_http` fastest in 7 of
+  9 runs. macOS: 125.47 vs 124.40 ms, rhttp fastest in 8 of 9. A 0.2–0.9 % gap
+  that changes direction between two machines is not a ranking. On Android it is
+  not close — 208 ms against 280 for the next-best client, **25 % clear**, in 9
+  of 9 runs.
+- **Streamed upload is the weak row, consistently.** 4th of 5 on both Apple
+  targets, 2.7 % behind the leader on each, and fastest in only 6 of 9 runs on
+  Android. Two optimisation attempts were measured and both made it slower or did
+  nothing; they are written up in `src/engine/BodyPipe.h` and
+  `src/engine/ClientConfig.cpp` rather than shipped. The cause is still not fully
+  explained, and this row is the honest gap in the set.
+- **A small GET is a microbenchmark, and on Apple silicon it is the FFI hop.**
+  0.01 ms behind `dart:io` — in every run on the M1, in 7 of 9 on the iPhone.
+  Any real network erases it.
+- **rhttp is the closest competitor on Apple targets and the furthest on
+  Android.** It also costs its users a Rust toolchain, and has no cache, no
+  interceptors and no WebSockets.
+
+Two things these numbers are not. The server is a **single-isolate loopback**
+server, so on the phones it is plausibly the limit in the burst and mixed rows
+rather than any client. And with the network removed what is left is the
+client's own cost — over a real link latency dominates and everything converges.
+
+Each platform was measured more than once, on separate occasions, and the sets
+agree: three independent 10-run sets on macOS put the mixed p50 at 0.81 / 0.84 /
+0.84 ms and throughput at 449 / 444 / 449 req/s, and two on iOS agree to within
+0.1 % on every row. The charts quote one set each rather than a pooled average,
+because pooling runs taken in different machine states is the mistake the whole
+harness exists to prevent.
+
+<details>
+<summary><b>How the dispatch modes compare on Android</b> — serial, concurrent and parallel (earlier, heavier measurement set)</summary>
+
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="bench-android-modes-dark.svg">
+    <img alt="Serial, concurrent and parallel dispatch on Android" src="bench-android-modes-light.svg" width="100%">
+  </picture>
+</p>
+
+Generated by `tool/gen_benchmark_charts.py`, not the platform-chart script, and
+from an earlier measurement set with a heavier workload — so it is not
+comparable with the headline charts and is kept separate for that reason.
+</details>
 
 ### Run it yourself
 

@@ -44,3 +44,10 @@ migrate_working_dir/
 # it reproducible from `deps/versions.cmake`, none of it belonging in history.
 # Without this rule a `git add -A` after building a slice stages the lot.
 /tool/deps/out/
+
+# Local agent tooling (npx skills). Not package content — and with no
+# .pubignore in this repo, pub publishes whatever git does not ignore, so
+# leaving these tracked would ship them to pub.dev.
+/.agents/
+/.claude/
+/skills-lock.json

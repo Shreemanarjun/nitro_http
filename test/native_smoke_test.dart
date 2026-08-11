@@ -922,5 +922,69 @@ void main() {
         throwsA(isA<NitroHttpDisposedException>()),
       );
     }, skip: skipReason);
+
+    // NitroHttp.init has to be exercised here rather than against a fake: it
+    // constructs a real NitroHttpClient itself, and the constructor configures
+    // the native executor, so there is no seam to inject through.
+    group('NitroHttp.init', () {
+      tearDown(() {
+        // Drop whatever init installed so the static default does not leak
+        // settings into another test.
+        NitroHttp.overrideDefaultClientForTesting(null);
+      });
+
+      test('configures the client the static verbs and fetch() use', () async {
+        NitroHttp.init(
+          ClientSettings(
+            baseUrl: server.url(''),
+            userAgent: 'init-test/1.0',
+          ),
+        );
+
+        // baseUrl came from init, so a relative path resolves at all — which is
+        // the whole reason to call it — and userAgent proves the settings were
+        // not merely accepted but reached the wire.
+        final res = await NitroHttp.get('/echo');
+        expect(res.statusCode, 200);
+        final headers =
+            (res.bodyToJson()! as Map<String, dynamic>)['headers']
+                as Map<String, dynamic>;
+        expect((headers['user-agent'] as List).first, 'init-test/1.0');
+      }, skip: skipReason);
+
+      test('calling it again replaces and disposes the previous client', () async {
+        NitroHttp.init(ClientSettings(baseUrl: server.url('')));
+        final first = NitroHttp.defaultClient;
+        expect(first.isDisposed, isFalse);
+
+        NitroHttp.init(ClientSettings(baseUrl: server.url('')));
+        final second = NitroHttp.defaultClient;
+
+        expect(identical(first, second), isFalse, reason: 'must be a new client');
+        expect(first.isDisposed, isTrue, reason: 'the old one must be disposed');
+        // The replacement is usable, so the swap did not break the engine.
+        expect((await NitroHttp.get('/echo')).statusCode, 200);
+      }, skip: skipReason);
+
+      test('getStream streams from the default client', () async {
+        NitroHttp.init(ClientSettings(baseUrl: server.url('')));
+
+        const size = 65536;
+        final res = await NitroHttp.getStream('/bytes/$size');
+        expect(res.statusCode, 200);
+        expect(res.contentLength, size);
+
+        final collected = <int>[];
+        await for (final chunk in res.body) {
+          collected.addAll(chunk);
+        }
+        // Byte-exact, not just the right length: the server generates a
+        // deterministic sequence, so a truncated or reordered stream fails.
+        expect(
+          Uint8List.fromList(collected),
+          equals(_Server.bytesOfLength(size)),
+        );
+      }, skip: skipReason);
+    });
   });
 }

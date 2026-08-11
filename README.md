@@ -166,6 +166,7 @@ library is compiled and run by
 [`test/readme_examples_test.dart`](test/readme_examples_test.dart), so an API
 change breaks that test before it can break a reader.
 
+- [The default client](#the-default-client)
 - [Making requests](#making-requests)
 - [Sending a body](#sending-a-body)
 - [Reading a response](#reading-a-response)
@@ -186,6 +187,47 @@ change breaks that test before it can break a reader.
 - [Engine capabilities and hot restart](#engine-capabilities-and-hot-restart)
 
 ---
+
+### The default client
+
+`fetch()` and every `NitroHttp.*` verb share one lazily created client. Configure
+it once at startup and they all pick it up:
+
+```dart
+NitroHttp.init(
+  const ClientSettings(
+    baseUrl: 'https://api.example.com',
+    userAgent: 'my_app/1.0',
+  ),
+  interceptors: [RetryInterceptor(maxRetries: 3)],
+);
+
+final user = await NitroHttp.get('/users/42');    // baseUrl applies
+final posted = await NitroHttp.post('/users', body: HttpBody.json({'name': 'Ada'}));
+```
+
+Calling `init` again replaces the client and **disposes the previous one**, which
+cancels anything still in flight on it. Call it during startup, not per screen.
+
+Large bodies have a one-liner too, so you do not need a client just to stream a
+download:
+
+```dart
+final report = await NitroHttp.getStream('/reports/2026.csv');
+await for (final chunk in report.body) {
+  // chunk is a List<int>, delivered as it arrives
+}
+```
+
+`NitroHttp` also carries the process-wide pieces — `configureCache`, `prefetch`,
+`cacheStats`, and the capability getters in
+[Engine capabilities](#engine-capabilities-and-hot-restart).
+
+One caveat worth stating: the default client is global. For anything beyond a
+single API, construct a `NitroHttpClient` per API instead — see
+[Quick start](#quick-start) — because a client owns the connection pool, the
+cookie jar and the cache, and sharing one across unrelated hosts shares all
+three.
 
 ### Making requests
 

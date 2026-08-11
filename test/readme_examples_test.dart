@@ -19,6 +19,11 @@
 ///     which only compiles for the web; a VM test file cannot contain it.
 ///   * the `dio` snippet — lives in the `nitro_http_dio` package, which is
 ///     where its compile check belongs.
+///   * `NitroHttp.init` — it constructs a real [NitroHttpClient], and that
+///     constructor configures the native executor, so there is no seam to pass
+///     a fake through. Covered against the real engine by the `NitroHttp.init`
+///     group in `native_smoke_test.dart`, which is also the only place its
+///     replace-and-dispose behaviour can actually be observed.
 ///   * `void main() => runApp(...)` in the hot-restart snippet — it is Flutter's
 ///     API, not this package's, and the whole point of that snippet is that it
 ///     contains NO recovery call. There is nothing here to execute; the
@@ -196,6 +201,54 @@ void main() {
       final sent = executor.bufferedRequests.single.request;
       expect(sent.method, RawMethod.custom);
       expect(sent.customMethod, 'PURGE');
+    });
+
+    // NitroHttp.init itself cannot be exercised here — it constructs a real
+    // NitroHttpClient, whose constructor configures the native executor, so
+    // there is no seam to inject a fake through. It is covered against the real
+    // engine in native_smoke_test.dart ('NitroHttp.init'). What IS checkable
+    // here is the rest of the snippet: that the static verbs and getStream go
+    // to whatever client the default is set to.
+    test('The default client: static verbs and getStream', () async {
+      final defaultClient = makeClient(
+        settings: const ClientSettings(baseUrl: 'https://api.example.com'),
+      );
+      NitroHttp.overrideDefaultClientForTesting(defaultClient);
+      addTearDown(() => NitroHttp.overrideDefaultClientForTesting(null));
+
+      executor.bufferedResponses
+        ..add(rawResponse(body: Uint8List.fromList(utf8.encode('{"name":"Ada"}'))))
+        ..add(rawResponse(status: 201));
+
+      final user = await NitroHttp.get('/users/42');
+      expect((user.bodyToJson() as Map)['name'], 'Ada');
+
+      final posted = await NitroHttp.post(
+        '/users',
+        body: HttpBody.json({'name': 'Ada'}),
+      );
+      expect(posted.statusCode, 201);
+
+      // baseUrl came from the default client, so the relative paths resolved.
+      expect(
+        executor.bufferedRequests.map((r) => r.request.url),
+        ['https://api.example.com/users/42', 'https://api.example.com/users'],
+      );
+
+      executor.onStartStreamed = (request, body) {
+        scheduleMicrotask(() {
+          demux.push(chunk(request.requestId, utf8.encode('a,b\n1,2\n')));
+          demux.push(doneChunk(request.requestId));
+        });
+        return rawHead(requestId: request.requestId);
+      };
+
+      final report = await NitroHttp.getStream('/reports/2026.csv');
+      final sink = BytesBuilder();
+      await for (final c in report.body) {
+        sink.add(c);
+      }
+      expect(utf8.decode(sink.takeBytes()), 'a,b\n1,2\n');
     });
 
     test('Query parameters and per-call headers', () async {

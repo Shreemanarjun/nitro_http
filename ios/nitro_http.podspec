@@ -18,9 +18,6 @@ nitro_curl_fetch = <<~'SH'
   framework="$frameworks_dir/NitroCurl.xcframework"
   archive_name="NitroCurl.xcframework.zip"
 
-  # Already vendored (previous install, or checked in by an air-gapped user).
-  if [ -d "$framework" ]; then exit 0; fi
-
   versions="../deps/versions.cmake"
   release=$(sed -n 's/^set(NITRO_HTTP_DEPS_RELEASE "\([^"]*\)".*/\1/p' "$versions" 2>/dev/null | head -1) || true
   # NH_APPLE_XCFRAMEWORK_ZIP_SHA256, not NH_SLICE_apple-xcframework_SHA256: the
@@ -30,6 +27,56 @@ nitro_curl_fetch = <<~'SH'
   expected=$(sed -n 's/^set(NH_APPLE_XCFRAMEWORK_ZIP_SHA256[[:space:]]*"\([^"]*\)").*/\1/p' "$versions" 2>/dev/null | head -1) || true
   [ -n "${release:-}" ] || release="deps-v1"
   url="https://github.com/Shreemanarjun/nitro_http/releases/download/$release/$archive_name"
+
+  stamp="$frameworks_dir/.nitro_curl_provenance"
+
+  # A vendored framework is only trustworthy if we know where it came from.
+  #
+  # This used to be `if [ -d "$framework" ]; then exit 0; fi` — the directory
+  # existing was taken as proof it was the right one. It is not. A stale
+  # xcframework left over from an earlier build sat here for a day: its iOS
+  # slices had been built with HTTP/3 disabled while its macOS slice had it, so
+  # `NitroHttp.supportsHttp3` reported false on device against a release that
+  # ships h3 on every slice. Nothing re-checked it, because the directory was
+  # there.
+  #
+  # So each install records what it put here, and a later install compares. The
+  # rule for what to do on a mismatch is the important half:
+  #
+  #   * We wrote it and the pin has since moved   -> replace it. Safe, because
+  #     the stamp proves this script owns the file.
+  #   * Someone else put it there (a local build via tool/deps/merge_apple.sh,
+  #     a hand-unzipped archive, NITRO_HTTP_DEPS_DIR) -> NEVER delete it. That
+  #     is deliberate work, often on a machine that cannot re-download. Say the
+  #     provenance does not match the pin and carry on.
+  #
+  # Caveat worth knowing: with Swift Package Manager this whole script never
+  # runs, so an SPM-only build gets no check at all. Package.swift resolves
+  # <platform>/Frameworks/NitroCurl.xcframework purely by path.
+  want="release=${release:-none} sha=${expected:-none}"
+  if [ -d "$framework" ]; then
+    have=$(cat "$stamp" 2>/dev/null || true)
+    if [ "$have" = "$want" ]; then
+      exit 0
+    elif [ -z "$have" ]; then
+      echo "warning: nitro_http: $framework has no provenance stamp, so it cannot be" >&2
+      echo "warning: nitro_http: checked against $want." >&2
+      echo "warning: nitro_http: Keeping it — delete the directory to fetch the pinned build." >&2
+      exit 0
+    else
+      case "$have" in
+        release=*)
+          echo "nitro_http: vendored framework is $have but the pin is now $want — refreshing"
+          rm -rf "$framework" "$stamp"
+          ;;
+        *)
+          echo "warning: nitro_http: $framework was supplied locally ($have), not by the" >&2
+          echo "warning: nitro_http: pinned release ($want). Keeping it; delete it to switch." >&2
+          exit 0
+          ;;
+      esac
+    fi
+  fi
 
   giveup() {
     echo "warning: nitro_http: $1" >&2
@@ -53,10 +100,17 @@ nitro_curl_fetch = <<~'SH'
     if [ -d "$NITRO_HTTP_DEPS_DIR/NitroCurl.xcframework" ]; then
       mkdir -p "$frameworks_dir"
       cp -R "$NITRO_HTTP_DEPS_DIR/NitroCurl.xcframework" "$frameworks_dir/"
+      printf 'deps-dir=%s\n' "$NITRO_HTTP_DEPS_DIR" > "$stamp"
       echo "nitro_http: vendored NitroCurl.xcframework from NITRO_HTTP_DEPS_DIR"
       exit 0
     elif [ -f "$NITRO_HTTP_DEPS_DIR/$archive_name" ]; then
       archive="$NITRO_HTTP_DEPS_DIR/$archive_name"
+      # Stamped by where it CAME FROM, not by the pin it happens to satisfy.
+      # Labelling this `release=` would license a later pin bump to delete it,
+      # and the whole point of NITRO_HTTP_DEPS_DIR is that re-downloading is
+      # not an option here. It is still checksum-verified below when a pin
+      # exists; the stamp records custody, the checksum records contents.
+      origin=$(printf 'deps-dir=%s' "$NITRO_HTTP_DEPS_DIR")
     else
       giveup "NITRO_HTTP_DEPS_DIR='$NITRO_HTTP_DEPS_DIR' holds neither NitroCurl.xcframework nor $archive_name."
     fi
@@ -83,7 +137,8 @@ nitro_curl_fetch = <<~'SH'
 
   unzip -q -o "$archive" -d "$frameworks_dir"
   [ -d "$framework" ] || giveup "$archive_name did not contain NitroCurl.xcframework."
-  echo "nitro_http: vendored $framework"
+  printf '%s\n' "${origin:-$want}" > "$stamp"
+  echo "nitro_http: vendored $framework (${origin:-$want})"
 SH
 
 # CocoaPods runs `prepare_command` only for pods it downloads. Flutter always

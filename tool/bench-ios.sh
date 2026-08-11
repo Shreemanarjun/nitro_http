@@ -11,10 +11,17 @@
 # more than native code and therefore penalise each client differently. The
 # preflight requires a real device.
 #
-# Reading the log is the part that differs from Android. There is no `logcat -d`
-# equivalent: `devicectl device console` STREAMS and never returns, so it is
-# started per run into a file, polled for the terminator, and killed. Without
-# that it hangs the harness rather than the app.
+# READING THE RESULT IS NOTHING LIKE THE OTHER TWO PLATFORMS. An iOS RELEASE
+# build emits no `print` output at all — `devicectl device console` attaches
+# happily and captures a zero-byte file, and `idevicesyslog` sees nothing
+# either. Scraping the log here does not fail loudly; it just yields ten empty
+# runs after polling 240 s each.
+#
+# That is exactly why the benchmark also writes its report into the app's
+# Documents directory. This harness pulls that file off the device with
+# `devicectl device copy from` and re-prefixes its table rows so the shared
+# aggregator can read them, which is also why the run files here look like log
+# output despite never having been logged.
 #
 # What is missing compared to the Android harness, honestly: iOS exposes no
 # thermal zones to the host, so there is no gate equivalent to /sys/class/
@@ -105,37 +112,48 @@ fi
 xcrun devicectl device process terminate --device "$DEVICE" "$BUNDLE_ID" >/dev/null 2>&1 || true
 
 echo "==> $RUNS runs into $OUT"
+REPORT="Documents/nitro_benchmark.md"
+pull() {  # $1 = destination
+  xcrun devicectl device copy from --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --user mobile --source "$REPORT" --destination "$1" >/dev/null 2>&1
+}
+
 for i in $(seq 1 "$RUNS"); do
   printf '  run %2d/%s ... ' "$i" "$RUNS"
   f=$(printf '%s/run-%02d.txt' "$OUT" "$i")
-  raw="$f.raw"
+  md="$f.md"
 
-  # Console first, app second: a fast run can finish its first scenario before a
-  # late-started console attaches, and those lines are then simply gone.
-  xcrun devicectl device console --device "$DEVICE" >"$raw" 2>/dev/null &
-  console=$!
-  sleep 3
+  # The report is overwritten in place, so the previous run's copy is what tells
+  # us when this run's has landed: pull the old one first and compare.
+  prev="$OUT/.prev.md"
+  rm -f "$prev"; pull "$prev"
+  prev_sum=$(shasum "$prev" 2>/dev/null | cut -d' ' -f1)
 
   xcrun devicectl device process launch --device "$DEVICE" \
       --terminate-existing "$BUNDLE_ID" >/dev/null 2>&1
 
-  for _ in $(seq 1 120); do
-    grep -q NITRO_BENCH_END "$raw" 2>/dev/null && break
-    sleep 2
+  ok=0
+  for _ in $(seq 1 40); do
+    sleep 5
+    rm -f "$md"; pull "$md" || continue
+    grep -q "NITRO_BENCH_END" "$md" 2>/dev/null || continue
+    [ "$(shasum "$md" 2>/dev/null | cut -d' ' -f1)" = "$prev_sum" ] && continue
+    ok=1; break
   done
-  kill "$console" 2>/dev/null; wait "$console" 2>/dev/null
 
-  grep "NITRO_BENCH" "$raw" > "$f" 2>/dev/null
-  rm -f "$raw"
-
-  if grep -q NITRO_BENCH_END "$f" 2>/dev/null; then
+  if [ "$ok" -eq 1 ]; then
+    # Re-prefix so tool/bench_aggregate.py, which keys on the log format the
+    # other two platforms produce, can read a file that was never a log.
+    sed -n 's/^\(|.*\)$/NITRO_BENCH \1/p' "$md" > "$f"
+    echo "NITRO_BENCH NITRO_BENCH_END" >> "$f"
     p50=$(awk -F'|' '/\| small GET \| nitro_http /{print $7}' "$f" | tr -d ' ')
     echo "ok (small GET p50 $p50)"
-  elif grep -q NITRO_BENCH_BEGIN "$f" 2>/dev/null; then
-    echo "INVALID — started but never finished; is the screen locked?"
   else
-    echo "INVALID — never started; check trust and that the device is unlocked"
+    : > "$f"
+    echo "INVALID — no fresh report appeared; is the device unlocked?"
   fi
+  rm -f "$md" "$prev"
   sleep "$SETTLE"
 done
 

@@ -47,81 +47,70 @@ there is no second implementation to disagree with the first.
 
 ## How fast is it
 
-Measured in **release** builds on real hardware — an M1 Pro, a physical iPhone 12
-and a physical OnePlus — against `dart:io`, `package:http`, `dio` and `rhttp`
-(Rust/reqwest), all five hitting the same in-process server. p50, lower is better,
-**bold** is the fastest of the five.
+Measured in **release** builds on real hardware against `dart:io`,
+`package:http`, `dio` and `rhttp` (Rust/reqwest) — all five hitting the same
+in-process server, in the same run, on the same machine. Each bar is the median
+p50 of **10 runs**, the first discarded as warm-up.
 
-| Scenario | nitro_http | dart:io | package:http | dio | rhttp |
-|---|--:|--:|--:|--:|--:|
-| **macOS** — M1 Pro | | | | | |
-| 1 KiB GET | 0.17 ms | **0.15 ms** | 0.15 ms | 0.21 ms | 0.18 ms |
-| 64 GETs at once | **3.60 ms** | 5.15 ms | 5.11 ms | 7.40 ms | 4.14 ms |
-| 32 MiB download | 128 ms | 140 ms | 137 ms | 138 ms | **128 ms** |
-| 8 MiB upload | 108 ms | 110 ms | 109 ms | **107 ms** | 116 ms |
-| Mixed workload | **1.08 ms** | 1.33 ms | 1.54 ms | 1.44 ms | 1.46 ms |
-| **iOS** — iPhone 12 (A14) | | | | | |
-| 1 KiB GET | 0.15 ms | **0.14 ms** | 0.14 ms | 0.20 ms | 0.17 ms |
-| 64 GETs at once | **4.28 ms** | 5.20 ms | 5.18 ms | 6.70 ms | 4.39 ms |
-| 32 MiB download | 136 ms | 148 ms | 147 ms | 146 ms | **135 ms** |
-| 8 MiB upload | 115 ms | 112 ms | **112 ms** | 113 ms | 119 ms |
-| Mixed workload | **1.23 ms** | 1.73 ms | 1.57 ms | 2.40 ms | 1.39 ms |
-| **Android** — OnePlus, Android 16 | | | | | |
-| 1 KiB GET | 0.40 ms | **0.33 ms** | 0.33 ms | 0.64 ms | 0.89 ms |
-| 64 GETs at once | **15 ms** | 18 ms | 27 ms | 37 ms | 22 ms |
-| 32 MiB download | **215 ms** | 286 ms | 265 ms | 273 ms | 295 ms |
-| 8 MiB upload | 202 ms | **173 ms** | 178 ms | 215 ms | 239 ms |
-| Mixed workload | **2.18 ms** | 5.14 ms | 5.04 ms | 4.20 ms | 3.57 ms |
+Read the "wins N/9" note on each panel first: it is how many of the nine counted
+runs that client was fastest in, and it is the difference between a result and a
+coin flip. Bar length cannot show you that.
 
-<details>
-<summary><b>The same data as charts, plus how the dispatch modes compare</b></summary>
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="doc/bench-android-dark.svg">
+    <img alt="Android on a OnePlus 11 (Snapdragon 8 Gen 2, 16 GB, Android 16): nitro_http is fastest in all five scenarios — small GET 0.5 ms, 64 concurrent GETs 19 ms, 32 MiB download 209 ms, 8 MiB upload 227 ms, mixed workload 2.87 ms — winning 9 of 9 runs on concurrency, download and mixed." src="doc/bench-android-light.svg" width="100%">
+  </picture>
+</p>
 
 <p>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="doc/bench-macos-dark.svg">
-    <img alt="macOS benchmark, Apple M1 Pro" src="doc/bench-macos-light.svg">
+    <img alt="macOS on an Apple M1 Pro (16 GB, macOS 26.4): nitro_http wins the mixed workload in 9 of 9 runs at 0.81 ms, ties rhttp on concurrency, and trails dart:io by 0.01 ms on a single small GET." src="doc/bench-macos-light.svg" width="100%">
   </picture>
 </p>
-<p>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="doc/bench-ios-dark.svg">
-    <img alt="iOS benchmark, iPhone 12" src="doc/bench-ios-light.svg">
-  </picture>
-</p>
-<p>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="doc/bench-android-dark.svg">
-    <img alt="Android benchmark, OnePlus" src="doc/bench-android-light.svg">
-  </picture>
-</p>
+
+<details>
+<summary><b>How the dispatch modes compare on Android</b> — serial, concurrent and parallel (earlier measurement set)</summary>
+
 <p>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="doc/bench-android-modes-dark.svg">
-    <img alt="Serial, concurrent and parallel dispatch on Android" src="doc/bench-android-modes-light.svg">
+    <img alt="Serial, concurrent and parallel dispatch on Android" src="doc/bench-android-modes-light.svg" width="100%">
   </picture>
 </p>
 </details>
 
 **Read it honestly.**
 
-- **Concurrency is the win, on every platform.** 64 requests in flight finish
-  fastest here — ahead of rhttp on all three, and 1.2x to 2.5x ahead of the other
-  Dart clients. That is the engine running its own event loop and connection pool
-  off your UI isolate, and it is the shape a real screen has.
-- **The mixed workload is also fastest on every platform**, by the widest margin on
-  Android. That is the closest thing here to an app rather than a microbenchmark.
-- **One small request is a wash and slightly behind.** 0.02 ms on Apple, 0.07 ms on
-  Android — the FFI hop. Any real network erases it.
-- **Large transfers are a tie**, except the Android download, which this client
-  wins by 20 %.
-- **rhttp is the closest competitor** and costs its users a Rust toolchain; it has
-  no cache, no interceptors and no WebSockets.
+- **On a phone it wins everything.** Fastest in all five scenarios, three of them
+  in every single run. Mixed traffic finishes **1.75x** the requests per second of
+  the next-best client, and a 32 MiB download lands **27 %** sooner.
+- **On an M1 it wins the workload that looks like an app, and loses the
+  microbenchmark.** Mixed is fastest 9 runs out of 9. A single small GET is
+  0.01 ms behind `dart:io` in every run — that is the FFI hop, and any real
+  network erases it.
+- **The two flip, and that is the point.** Crossing into C++ costs the same on
+  both machines; what changes is how expensive the Dart-side work around it is.
+  Fast cores hide the engine's advantage, slow ones expose it — so the device
+  where performance actually hurts is the device this client is built for.
+- **Large single transfers are close on desktop.** Download is a 1 % edge to
+  rhttp — real, since it wins 8 of 9 runs, but tiny. Upload has no reproducible
+  winner and `nitro_http` sits ~3 % back.
+- **rhttp is the closest competitor on desktop and the furthest on mobile.** It
+  also costs its users a Rust toolchain, and has no cache, no interceptors and no
+  WebSockets.
 
-These come from a loopback server, deliberately: what is left when you remove the
-network is the client's own cost. They say nothing about behaviour over a real
-link, where latency dominates and everything converges. Method and how to
-reproduce: [doc/ADVANCED.md](doc/ADVANCED.md#benchmarks).
+Two things these numbers are not. The server is a **single-isolate loopback**
+server, so on the phone it is plausibly the limit in the burst and mixed rows
+rather than any client. And with the network removed what is left is the client's
+own cost — over a real link latency dominates and everything converges.
 
+iOS is not shown: it has not been re-measured since the harness was rewritten,
+and quoting it beside two clean sets would mix methods. Reproduce any of this
+with `tool/bench-macos.sh 10` or `tool/bench-android.sh 10`; those refuse to run
+on a busy or hot machine, and the checks they apply are in
+[doc/ADVANCED.md](doc/ADVANCED.md#benchmarks).
 
 ## Install
 

@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Regenerates doc/bench-*.svg from the measured benchmark medians.
+"""Regenerates doc/bench-android-modes-*.svg — the dispatch-mode grid.
+
+The headline platform charts live in tool/gen_platform_charts.py; this file kept
+the one chart that harness does not produce. Its data is from an EARLIER
+measurement set and a heavier workload, which is why the README shows it behind
+a disclosure marked as such rather than beside the current numbers.
+
+Historical note below, kept because it describes this chart's own data.
 
 Emphasis form: nitro_http carries the accent hue, every other client is a
 de-emphasis gray — the chart's job is "where does this client stand", not
@@ -7,32 +14,40 @@ de-emphasis gray — the chart's job is "where does this client stand", not
 scenarios span 0.15 ms to 300 ms; every bar is direct-labeled with client
 and value, so identity is never color-alone.
 
-Data = median of 3 release runs per platform (Android: the coldest of three
-sets). Source: README "Measured performance". Update BOTH when re-measuring.
+Data = median p50 of 10 release runs per platform, first discarded as warm-up,
+collected by tool/bench-macos.sh and tool/bench-android.sh and aggregated by
+tool/bench_aggregate.py. Each panel also carries how many of the 9 counted runs
+nitro_http won, because a bar length cannot show whether a gap reproduces.
+Update this table and the README together when re-measuring.
 """
 
 DATA = {
-    "macos": ("macOS — Apple M1 Pro", [
-        ("small GET",  [("nitro_http", 0.17), ("dart:io", 0.15), ("package:http", 0.15), ("dio", 0.21), ("rhttp", 0.18)]),
-        ("64 concurrent GETs", [("nitro_http", 3.60), ("dart:io", 5.15), ("package:http", 5.11), ("dio", 7.40), ("rhttp", 4.14)]),
-        ("32 MiB download", [("nitro_http", 128.02), ("dart:io", 139.76), ("package:http", 136.86), ("dio", 138.14), ("rhttp", 127.77)]),
-        ("8 MiB upload", [("nitro_http", 108.19), ("dart:io", 109.94), ("package:http", 108.55), ("dio", 106.78), ("rhttp", 116.10)]),
-        ("mixed workload", [("nitro_http", 1.08), ("dart:io", 1.33), ("package:http", 1.54), ("dio", 1.44), ("rhttp", 1.46)]),
+    "macos": ("macOS — Apple M1 Pro, 16 GB, macOS 26.4", [
+        ("small GET",  [("nitro_http", 0.14), ("dart:io", 0.13), ("package:http", 0.13), ("dio", 0.18), ("rhttp", 0.17)]),
+        ("64 concurrent GETs", [("nitro_http", 3.65), ("dart:io", 4.39), ("package:http", 4.43), ("dio", 6.49), ("rhttp", 3.73)]),
+        ("32 MiB download", [("nitro_http", 125.47), ("dart:io", 138.03), ("package:http", 138.37), ("dio", 137.02), ("rhttp", 124.40)]),
+        ("8 MiB upload", [("nitro_http", 106.90), ("dart:io", 104.58), ("package:http", 104.09), ("dio", 104.84), ("rhttp", 112.16)]),
+        ("mixed workload", [("nitro_http", 0.81), ("dart:io", 1.29), ("package:http", 1.26), ("dio", 1.32), ("rhttp", 1.02)]),
     ]),
-    "ios": ("iOS — iPhone 12 (A14)", [
-        ("small GET",  [("nitro_http", 0.15), ("dart:io", 0.14), ("package:http", 0.14), ("dio", 0.20), ("rhttp", 0.17)]),
-        ("64 concurrent GETs", [("nitro_http", 4.28), ("dart:io", 5.20), ("package:http", 5.18), ("dio", 6.70), ("rhttp", 4.39)]),
-        ("32 MiB download", [("nitro_http", 135.52), ("dart:io", 148.14), ("package:http", 146.55), ("dio", 145.90), ("rhttp", 135.36)]),
-        ("8 MiB upload", [("nitro_http", 115.03), ("dart:io", 112.37), ("package:http", 111.78), ("dio", 112.66), ("rhttp", 119.42)]),
-        ("mixed workload", [("nitro_http", 1.23), ("dart:io", 1.73), ("package:http", 1.57), ("dio", 2.40), ("rhttp", 1.39)]),
+    "android": ("Android — OnePlus 11, Snapdragon 8 Gen 2, Android 16", [
+        ("small GET",  [("nitro_http", 0.50), ("dart:io", 0.80), ("package:http", 0.83), ("dio", 1.12), ("rhttp", 2.84)]),
+        ("64 concurrent GETs", [("nitro_http", 18.94), ("dart:io", 29.79), ("package:http", 33.36), ("dio", 47.81), ("rhttp", 26.36)]),
+        ("32 MiB download", [("nitro_http", 208.52), ("dart:io", 284.68), ("package:http", 279.84), ("dio", 291.70), ("rhttp", 299.16)]),
+        ("8 MiB upload", [("nitro_http", 227.15), ("dart:io", 248.42), ("package:http", 244.41), ("dio", 248.94), ("rhttp", 271.83)]),
+        ("mixed workload", [("nitro_http", 2.87), ("dart:io", 6.41), ("package:http", 5.41), ("dio", 6.30), ("rhttp", 8.49)]),
     ]),
-    "android": ("Android — OnePlus CPH2447", [
-        ("small GET",  [("nitro_http", 0.40), ("dart:io", 0.33), ("package:http", 0.33), ("dio", 0.64), ("rhttp", 0.89)]),
-        ("64 concurrent GETs", [("nitro_http", 14.77), ("dart:io", 18.07), ("package:http", 26.76), ("dio", 37.08), ("rhttp", 21.60)]),
-        ("32 MiB download", [("nitro_http", 214.53), ("dart:io", 286.42), ("package:http", 265.22), ("dio", 273.02), ("rhttp", 295.11)]),
-        ("8 MiB upload", [("nitro_http", 202.26), ("dart:io", 173.47), ("package:http", 178.04), ("dio", 215.49), ("rhttp", 238.69)]),
-        ("mixed workload", [("nitro_http", 2.18), ("dart:io", 5.14), ("package:http", 5.04), ("dio", 4.20), ("rhttp", 3.57)]),
-    ]),
+}
+
+# How many of the 9 counted runs nitro_http was fastest in. Printed on each
+# panel because a median gap means nothing without it: 9/9 is a result, 5/9 is
+# a coin flip, and a reader cannot tell those apart from bar lengths.
+WINS = {
+    "macos": {"small GET": "dart:io wins 9/9", "64 concurrent GETs": "5/9 vs rhttp 4/9",
+              "32 MiB download": "rhttp wins 8/9", "8 MiB upload": "no winner",
+              "mixed workload": "9/9"},
+    "android": {"small GET": "8/9", "64 concurrent GETs": "9/9",
+                "32 MiB download": "9/9", "8 MiB upload": "6/9",
+                "mixed workload": "9/9"},
 }
 
 MODES = {
@@ -71,7 +86,7 @@ def platform_svg(key, mode):
         f'viewBox="0 0 {w} {h}" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">',
         f'<rect width="{w}" height="{h}" fill="{m["surface"]}" rx="8"/>',
         f'<text x="{PAD + 2}" y="26" font-size="15" font-weight="600" fill="{m["ink"]}">{esc(title)}</text>',
-        f'<text x="{PAD + 2}" y="42" font-size="11" fill="{m["ink2"]}">p50, release, median of 3 runs — lower is better · '
+        f'<text x="{PAD + 2}" y="42" font-size="11" fill="{m["ink2"]}">p50, release, median of 10 runs — lower is better · '
         f'<tspan fill="{m["accent"]}" font-weight="600">▮ nitro_http</tspan> · ▮ other clients</text>',
     ]
     for i, (scenario, values) in enumerate(panels):
@@ -79,6 +94,11 @@ def platform_svg(key, mode):
         py = 46 + PAD + (i // COLS) * (PANEL_H + PAD)
         out.append(f'<rect x="{px}" y="{py}" width="{PANEL_W}" height="{PANEL_H}" fill="{m["panel"]}" rx="6"/>')
         out.append(f'<text x="{px + 10}" y="{py + 18}" font-size="12" font-weight="600" fill="{m["ink"]}">{esc(scenario)}</text>')
+        won = WINS.get(key, {}).get(scenario)
+        if won:
+            out.append(
+                f'<text x="{px + PANEL_W - 10}" y="{py + 18}" font-size="10" '
+                f'text-anchor="end" fill="{m["ink2"]}">{esc(won)}</text>')
         ranked = sorted(values, key=lambda kv: kv[1])
         vmax = max(v for _, v in values)
         track = PANEL_W - LABEL_W - VALUE_W - 30
@@ -208,11 +228,10 @@ if __name__ == "__main__":
     import pathlib
     doc = pathlib.Path(__file__).resolve().parent.parent / "doc"
     doc.mkdir(exist_ok=True)
-    for key in DATA:
-        for mode in MODES:
-            path = doc / f"bench-{key}-{mode}.svg"
-            path.write_text(platform_svg(key, mode))
-            print(path.name)
+    # The five headline platform charts moved to tool/gen_platform_charts.py
+    # when the 10-run harness replaced the 3-run method. This file owns only the
+    # dispatch-mode grid now — leaving the old writer here would silently
+    # overwrite the current charts with stale data, which it did once.
     for mode in MODES:
         path = doc / f"bench-android-modes-{mode}.svg"
         path.write_text(modes_svg(mode))

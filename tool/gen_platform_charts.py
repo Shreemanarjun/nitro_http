@@ -12,12 +12,20 @@ the number that decides whether a gap is real — 9/9 is a result, 5/9 is a coin
 flip — and it is invisible in bar length, so it is printed.
 
 Data: median p50 of 10 release runs per platform, first discarded as warm-up,
-collected by tool/bench-macos.sh / tool/bench-android.sh and aggregated by
-tool/bench_aggregate.py. Update this file and the README together.
+collected by tool/bench-macos.sh / tool/bench-android.sh / tool/bench-ios.sh and
+aggregated by tool/bench_aggregate.py. Update this file and the README together.
+
+Every row here is a RELEASE build on the hardware named in `meta` — no
+simulators, no emulators, no debug timings. That is not pedantry: Flutter ships
+no AOT snapshot for the iOS simulator, so a simulator can only report debug
+numbers, and debug penalises Dart code far more than native code, which flatters
+this package specifically. An emulator has already produced a fake 1.75-2.1x
+download regression on this project that real hardware refuted outright.
 """
 
 PLATFORMS = {
     "android": {
+        # raw runs: build/bench/android-20260811-070007
         "title": "Android — nitro_http vs the field",
         "meta": "OnePlus 11 · Snapdragon 8 Gen 2 · 16 GB · Android 16",
         "scenarios": [
@@ -30,7 +38,22 @@ PLATFORMS = {
         "foot1": "median p50 of 10 release runs, first discarded as warm-up · in-process loopback, no TLS · thermally gated below 42 °C",
         "foot2": "fastest in all five scenarios; three of them in every single run. Mixed traffic finishes 312 req/s against 178 for the next best.",
     },
+    "ios": {
+        # raw runs: build/bench/ios-20260811-081602
+        "title": "iOS — nitro_http vs the field",
+        "meta": "iPhone 12 · A14 Bionic · 4 GB · iOS 26.6",
+        "scenarios": [
+            ("small GET", "1 KiB", "dart:io 7/9", [("dart:io", 0.13), ("nitro_http", 0.14), ("package:http", 0.14), ("rhttp", 0.16), ("dio", 0.20)]),
+            ("64 GETs at once", "concurrency", "9/9", [("nitro_http", 4.22), ("rhttp", 4.36), ("package:http", 5.10), ("dart:io", 5.18), ("dio", 6.76)]),
+            ("32 MiB download", "streamed", "7/9", [("nitro_http", 135.09), ("rhttp", 135.33), ("dio", 154.53), ("package:http", 155.81), ("dart:io", 156.75)]),
+            ("8 MiB upload", "streamed", "package:http 8/9", [("package:http", 113.74), ("dart:io", 114.58), ("dio", 114.72), ("nitro_http", 116.83), ("rhttp", 123.30)]),
+            ("mixed workload", "closest to an app", "9/9", [("nitro_http", 1.17), ("rhttp", 1.51), ("dart:io", 1.62), ("package:http", 1.64), ("dio", 2.27)]),
+        ],
+        "foot1": "median p50 of 10 release runs, first discarded as warm-up · in-process loopback, no TLS · physical device, release build",
+        "foot2": "wins concurrency and mixed traffic in every run; 433 req/s mixed against 342 for the next best. Loses the 8 MiB upload by 2.7%.",
+    },
     "macos": {
+        # raw runs: build/bench/macos-20260811-014716
         "title": "macOS — nitro_http vs the field",
         "meta": "Apple M1 Pro · 16 GB · macOS 26.4",
         "scenarios": [

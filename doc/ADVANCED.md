@@ -310,7 +310,9 @@ ctest --test-dir build/cpp --output-on-failure
 The charts at the top of this page are the results: five scenarios, five
 clients, one in-process loopback server, p50 in release mode on real devices —
 an M1 Pro, an iPhone 12 and a OnePlus 11. Charts regenerate from the data table
-in `tool/gen_benchmark_charts.py`. Phone numbers vary run to run (heat alone
+in `tool/gen_platform_charts.py` (the dispatch-mode grid shown behind a
+disclosure comes from `tool/gen_benchmark_charts.py` and an earlier, heavier
+measurement set). Phone numbers vary run to run (heat alone
 moved every client 11–60 % between sets), so treat any margin under ~10 % as a
 tie, and never compare numbers from different runs.
 
@@ -324,19 +326,27 @@ benchmark is compiled into the example app behind
 log. The example app also has an interactive Benchmark tab with the same
 scenarios, live progress and per-scenario rankings.
 
-**On macOS, use the harness rather than a single run.** One run of this suite
-has flipped the fastest client in four of five scenarios, so a number taken from
-one is not evidence of anything:
+**Use a harness rather than a single run.** One run of this suite has flipped
+the fastest client in four of five scenarios, so a number taken from one is not
+evidence of anything:
 
 ```sh
 tool/bench-macos.sh 10        # ~6 minutes: build once, run 10x, aggregate
+tool/bench-android.sh 10      # thermally gated; needs one device attached
+tool/bench-ios.sh 10          # physical iPhone/iPad; pulls the report off the device
 ```
 
-It refuses to start on battery, in Low Power Mode, above half load, with any
-process over 25 % CPU, or with a simulator, emulator or build alive — because a
-benchmark that runs anyway produces numbers someone quotes later, long after the
-machine state is forgotten. Then it discards the first run as warm-up and hands
-the rest to `tool/bench_aggregate.py`, which applies four checks:
+Each refuses to start in a state that would produce a number someone quotes
+later, long after the machine state is forgotten. macOS: on battery, in Low
+Power Mode, above half load, with any process over 25 % CPU, or with a
+simulator, emulator or build alive. Android: on an emulator, below 30 % battery,
+behind a locked keyguard, or with the CPU zones above 42 °C — and it re-checks
+the temperature before *every* run, not just the first, because two sets taken
+minutes apart differed 11–60 % per client purely from heat. iOS: without a
+paired physical device.
+
+All three then discard the first run as warm-up and hand the rest to
+`tool/bench_aggregate.py`, which applies four checks:
 
 - **Validity** — a run counts only if it reached `NITRO_BENCH_END` and never
   printed `NITRO_BENCH_FAIL`.
@@ -375,8 +385,16 @@ adb logcat -c && adb shell monkey -p <application-id> 1 && adb logcat -s flutter
 # simulator can only ever report debug timings.
 flutter build ios --release --dart-define=NITRO_HTTP_BENCHMARK=1
 # install with Xcode or devicectl, trust the developer certificate once under
-# Settings > General > VPN & Device Management, then:
-xcrun devicectl device console --device <udid> | grep NITRO_BENCH
+# Settings > General > VPN & Device Management, then launch it.
+#
+# DO NOT try to scrape the log. An iOS RELEASE build emits no `print` output at
+# all: `devicectl device console` attaches happily and captures a zero-byte
+# file, and `idevicesyslog` sees nothing either — so the failure is silent and
+# looks like the benchmark never ran. That is why the benchmark also writes its
+# report into the app's Documents directory. Pull that instead:
+xcrun devicectl device copy from --device <udid> \
+  --domain-type appDataContainer --domain-identifier dev.shreeman.nitroHttpExample \
+  --user mobile --source Documents/nitro_benchmark.md --destination ./report.md
 ```
 
 Filter the log for `NITRO_BENCH`. A run is only valid if it ends

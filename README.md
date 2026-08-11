@@ -65,6 +65,13 @@ coin flip. Bar length cannot show you that.
 
 <p>
   <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="doc/bench-ios-dark.svg">
+    <img alt="iOS on an iPhone 12 (A14 Bionic, 4 GB, iOS 26.6): nitro_http wins 64 concurrent GETs at 4.22 ms and the mixed workload at 1.17 ms in 9 of 9 runs, ties rhttp on a 32 MiB download at 135 ms, and trails package:http by 2.7 % on an 8 MiB upload." src="doc/bench-ios-light.svg" width="100%">
+  </picture>
+</p>
+
+<p>
+  <picture>
     <source media="(prefers-color-scheme: dark)" srcset="doc/bench-macos-dark.svg">
     <img alt="macOS on an Apple M1 Pro (16 GB, macOS 26.4): nitro_http wins the mixed workload in 9 of 9 runs at 0.81 ms, ties rhttp on concurrency, and trails dart:io by 0.01 ms on a single small GET." src="doc/bench-macos-light.svg" width="100%">
   </picture>
@@ -83,34 +90,59 @@ coin flip. Bar length cannot show you that.
 
 **Read it honestly.**
 
-- **On a phone it wins everything.** Fastest in all five scenarios, three of them
-  in every single run. Mixed traffic finishes **1.75x** the requests per second of
-  the next-best client, and a 32 MiB download lands **27 %** sooner.
-- **On an M1 it wins the workload that looks like an app, and loses the
-  microbenchmark.** Mixed is fastest 9 runs out of 9. A single small GET is
-  0.01 ms behind `dart:io` in every run — that is the FFI hop, and any real
-  network erases it.
-- **The two flip, and that is the point.** Crossing into C++ costs the same on
-  both machines; what changes is how expensive the Dart-side work around it is.
-  Fast cores hide the engine's advantage, slow ones expose it — so the device
-  where performance actually hurts is the device this client is built for.
-- **Large single transfers are close on desktop.** Download is a 1 % edge to
-  rhttp — real, since it wins 8 of 9 runs, but tiny. Upload has no reproducible
-  winner and `nitro_http` sits ~3 % back.
-- **rhttp is the closest competitor on desktop and the furthest on mobile.** It
-  also costs its users a Rust toolchain, and has no cache, no interceptors and no
-  WebSockets.
+- **The mixed workload is the one result that holds everywhere.** It is also the
+  scenario closest to what an app actually does — small and large requests
+  interleaved — and `nitro_http` is fastest in **9 runs out of 9 on all three
+  platforms**. Requests per second against the next-best client: **1.75x** on
+  Android (312 vs 178), **1.27x** on iOS (433 vs 342), **1.14x** on macOS
+  (449 vs 394).
+- **Concurrency is the second.** 64 GETs in flight is a win on both phones (9/9
+  each) and a tie with rhttp on the M1.
+- **The Android device wins every scenario; the two Apple targets share a
+  different shape.** On the OnePlus it is fastest in all five. On both the iPhone
+  and the M1 it wins mixed and concurrency, sits inside the noise of rhttp on the
+  download, trails `dart:io` by 0.01 ms on a small GET, and is 4th on the upload.
+  So the split is **not** phone-versus-desktop — an iPhone 12 is a phone and it
+  patterns with the laptop. What those two share is fast cores, which leave less
+  for a native engine to take back. That is a plausible reading of the pattern,
+  not something measured directly.
+- **The 32 MiB download is a genuine tie on Apple, and the win rate says so
+  better than the bars.** iOS: 135.09 vs 135.33 ms, `nitro_http` fastest in 7 of
+  9 runs. macOS: 125.47 vs 124.40 ms, rhttp fastest in 8 of 9. A 0.2–0.9 % gap
+  that changes direction between two machines is not a ranking. On Android it is
+  not close — 208 ms against 280 for the next-best client, **25 % clear**, in 9
+  of 9 runs.
+- **Streamed upload is the weak row, consistently.** 4th of 5 on both Apple
+  targets, 2.7 % behind the leader on each, and fastest in only 6 of 9 runs on
+  Android. Two optimisation attempts were measured and both made it slower or did
+  nothing; they are written up in `src/engine/BodyPipe.h` and
+  `src/engine/ClientConfig.cpp` rather than shipped. The cause is still not fully
+  explained, and this row is the honest gap in the set.
+- **A small GET is a microbenchmark, and on Apple silicon it is the FFI hop.**
+  0.01 ms behind `dart:io` — in every run on the M1, in 7 of 9 on the iPhone.
+  Any real network erases it.
+- **rhttp is the closest competitor on Apple targets and the furthest on
+  Android.** It also costs its users a Rust toolchain, and has no cache, no
+  interceptors and no WebSockets.
 
 Two things these numbers are not. The server is a **single-isolate loopback**
-server, so on the phone it is plausibly the limit in the burst and mixed rows
+server, so on the phones it is plausibly the limit in the burst and mixed rows
 rather than any client. And with the network removed what is left is the client's
 own cost — over a real link latency dominates and everything converges.
 
-iOS is not shown: it has not been re-measured since the harness was rewritten,
-and quoting it beside two clean sets would mix methods. Reproduce any of this
-with `tool/bench-macos.sh 10` or `tool/bench-android.sh 10`; those refuse to run
-on a busy or hot machine, and the checks they apply are in
-[doc/ADVANCED.md](doc/ADVANCED.md#benchmarks).
+Each platform above was measured more than once, on separate occasions, and the
+sets agree: three independent 10-run sets on macOS put the mixed p50 at 0.81 /
+0.84 / 0.84 ms and throughput at 449 / 444 / 449 req/s, and two on iOS agree to
+within 0.1 % on every row. The charts quote one set each rather than a pooled
+average, because pooling runs taken in different machine states is the mistake
+the whole harness exists to prevent.
+
+Reproduce any of this with `tool/bench-macos.sh 10`, `tool/bench-android.sh 10`
+or `tool/bench-ios.sh 10`. They refuse to run on a busy machine, a hot phone, or
+a simulator — Flutter ships no AOT snapshot for the iOS simulator, so a
+simulator can only report debug timings, and debug penalises Dart far more than
+native code, which would flatter this package specifically. The rest of the
+checks are in [doc/ADVANCED.md](doc/ADVANCED.md#benchmarks).
 
 ## Install
 

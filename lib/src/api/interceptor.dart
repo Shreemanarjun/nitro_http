@@ -7,6 +7,8 @@
 /// registered first wraps every interceptor registered after it.
 library;
 
+import 'dart:async';
+
 import 'exceptions.dart';
 import 'request.dart';
 import 'response.dart';
@@ -75,35 +77,37 @@ abstract class Interceptor {
   ///
   /// Return [Interceptor.next] with a rewritten [HttpRequest] to modify the
   /// call, or [Interceptor.resolve] to answer it without touching the network.
-  Future<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) =>
-      _proceedRequest;
+  FutureOr<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) =>
+      proceedRequest;
 
   /// Called after a successful transfer, in reverse registration order.
   ///
   /// "Successful" means the transport completed; a 500 arrives here, not in
   /// [onError], unless `throwOnStatusCode` is enabled.
-  Future<InterceptorResult<HttpResponse>> afterResponse(HttpResponse response) =>
-      _proceedResponse;
+  FutureOr<InterceptorResult<HttpResponse>> afterResponse(
+    HttpResponse response,
+  ) => proceedResponse;
 
   /// Called when the request failed, in reverse registration order.
   ///
   /// Return [Interceptor.resolve] to turn the failure into a response — the
   /// canonical use is refreshing a token after a 401 and replaying the call.
-  Future<InterceptorResult<HttpResponse>> onError(NitroHttpException exception) =>
-      _proceedResponse;
+  FutureOr<InterceptorResult<HttpResponse>> onError(
+    NitroHttpException exception,
+  ) => proceedResponse;
 
-  /// "Carry on unchanged", shared rather than rebuilt per call.
+  /// "Carry on unchanged" for a request hook — a shared constant.
   ///
-  /// [InterceptorResult] is immutable and a completed [Future] can be awaited
-  /// any number of times, so the pass-through answer is the same object every
-  /// time. That matters because these defaults run on every hook a subclass did
-  /// not override: a two-interceptor client used to allocate six results and six
-  /// futures per request just to say nothing.
-  static final Future<InterceptorResult<HttpRequest>> _proceedRequest =
-      Future<InterceptorResult<HttpRequest>>.value(next<HttpRequest>());
+  /// Returning this rather than `next()` costs no allocation, and returning it
+  /// *as a value* rather than as a future costs no microtask either: the chain
+  /// stays on its synchronous path for the whole request. Prefer it in any hook
+  /// that has nothing to say.
+  static const InterceptorResult<HttpRequest> proceedRequest =
+      InterceptorResult<HttpRequest>._(InterceptorDisposition.next, null, null);
 
-  static final Future<InterceptorResult<HttpResponse>> _proceedResponse =
-      Future<InterceptorResult<HttpResponse>>.value(next<HttpResponse>());
+  /// "Carry on unchanged" for a response or error hook. See [proceedRequest].
+  static const InterceptorResult<HttpResponse> proceedResponse =
+      InterceptorResult<HttpResponse>._(InterceptorDisposition.next, null, null);
 
   /// Continues the chain, replacing the in-flight value when [value] is
   /// non-null.
@@ -134,25 +138,34 @@ class DelegatingInterceptor extends Interceptor {
   const DelegatingInterceptor({this.onRequest, this.onResponse, this.onFailure});
 
   /// Delegate for [Interceptor.beforeRequest].
-  final Future<InterceptorResult<HttpRequest>> Function(HttpRequest request)? onRequest;
+  final FutureOr<InterceptorResult<HttpRequest>> Function(HttpRequest request)?
+  onRequest;
 
   /// Delegate for [Interceptor.afterResponse].
-  final Future<InterceptorResult<HttpResponse>> Function(HttpResponse response)? onResponse;
+  final FutureOr<InterceptorResult<HttpResponse>> Function(
+    HttpResponse response,
+  )?
+  onResponse;
 
   /// Delegate for [Interceptor.onError].
-  final Future<InterceptorResult<HttpResponse>> Function(NitroHttpException exception)? onFailure;
+  final FutureOr<InterceptorResult<HttpResponse>> Function(
+    NitroHttpException exception,
+  )?
+  onFailure;
 
   @override
-  Future<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) =>
+  FutureOr<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) =>
       onRequest?.call(request) ?? super.beforeRequest(request);
 
   @override
-  Future<InterceptorResult<HttpResponse>> afterResponse(HttpResponse response) =>
-      onResponse?.call(response) ?? super.afterResponse(response);
+  FutureOr<InterceptorResult<HttpResponse>> afterResponse(
+    HttpResponse response,
+  ) => onResponse?.call(response) ?? super.afterResponse(response);
 
   @override
-  Future<InterceptorResult<HttpResponse>> onError(NitroHttpException exception) =>
-      onFailure?.call(exception) ?? super.onError(exception);
+  FutureOr<InterceptorResult<HttpResponse>> onError(
+    NitroHttpException exception,
+  ) => onFailure?.call(exception) ?? super.onError(exception);
 }
 
 /// Runs a group of observing interceptors concurrently instead of in turn.
@@ -191,24 +204,31 @@ final class ParallelInterceptors extends Interceptor {
   final List<Interceptor> members;
 
   @override
-  Future<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) async {
-    if (members.isEmpty) return Interceptor.next();
-    await _all(members.map((m) => m.beforeRequest(request)));
-    return Interceptor.next();
+  FutureOr<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) {
+    if (members.isEmpty) return Interceptor.proceedRequest;
+    return _all(
+      members.map((m) => m.beforeRequest(request)),
+    ).then((_) => Interceptor.proceedRequest);
   }
 
   @override
-  Future<InterceptorResult<HttpResponse>> afterResponse(HttpResponse response) async {
-    if (members.isEmpty) return Interceptor.next();
-    await _all(members.map((m) => m.afterResponse(response)));
-    return Interceptor.next();
+  FutureOr<InterceptorResult<HttpResponse>> afterResponse(
+    HttpResponse response,
+  ) {
+    if (members.isEmpty) return Interceptor.proceedResponse;
+    return _all(
+      members.map((m) => m.afterResponse(response)),
+    ).then((_) => Interceptor.proceedResponse);
   }
 
   @override
-  Future<InterceptorResult<HttpResponse>> onError(NitroHttpException exception) async {
-    if (members.isEmpty) return Interceptor.next();
-    await _all(members.map((m) => m.onError(exception)));
-    return Interceptor.next();
+  FutureOr<InterceptorResult<HttpResponse>> onError(
+    NitroHttpException exception,
+  ) {
+    if (members.isEmpty) return Interceptor.proceedResponse;
+    return _all(
+      members.map((m) => m.onError(exception)),
+    ).then((_) => Interceptor.proceedResponse);
   }
 
   /// Awaits every member and rejects any attempt to alter the chain.
@@ -216,8 +236,10 @@ final class ParallelInterceptors extends Interceptor {
   /// `Future.wait` with the default `eagerError: false` so one member throwing
   /// does not leave the others unawaited — an abandoned hook would go on writing
   /// after the call it belongs to had finished.
-  Future<void> _all<T>(Iterable<Future<InterceptorResult<T>>> hooks) async {
-    final results = await Future.wait(hooks);
+  Future<void> _all<T>(Iterable<FutureOr<InterceptorResult<T>>> hooks) async {
+    final results = await Future.wait(
+      hooks.map((h) => h is Future<InterceptorResult<T>> ? h : Future.value(h)),
+    );
     for (final result in results) {
       if (result.disposition != InterceptorDisposition.next ||
           result.value != null) {
@@ -308,47 +330,138 @@ class InterceptorChain {
   /// Yields [InterceptorProceed] with the rewritten request,
   /// [InterceptorShortCircuit] if an interceptor stopped the chain, or
   /// [InterceptorRecovered] if one answered the call outright.
-  Future<InterceptorOutcome<HttpRequest>> runBeforeRequest(HttpRequest request) async {
+  ///
+  /// Returns a value rather than a future when every hook answered
+  /// synchronously, which is the common case — see [InterceptorChain].
+  FutureOr<InterceptorOutcome<HttpRequest>> runBeforeRequest(
+    HttpRequest request,
+  ) {
     var current = request;
     for (var i = 0; i < _interceptors.length; i++) {
-      final result = await _invoke(
-        () => _interceptors[i].beforeRequest(current),
-        current,
-      );
-      switch (result.disposition) {
-        case InterceptorDisposition.next:
-          current = result.value ?? current;
-        case InterceptorDisposition.stop:
-          return InterceptorShortCircuit(result.value ?? current);
-        case InterceptorDisposition.resolve:
-          return InterceptorRecovered(result.resolved!);
+      final FutureOr<InterceptorResult<HttpRequest>> raw;
+      try {
+        raw = _interceptors[i].beforeRequest(current);
+      } catch (error, stackTrace) {
+        _rethrowNormalised(error, stackTrace, current);
+      }
+      if (raw is! InterceptorResult<HttpRequest>) {
+        // First hook that actually suspends: the rest of the chain has to run
+        // asynchronously, so hand over and pay the microtask once.
+        return _resumeBeforeRequest(raw, i, current);
+      }
+      final (outcome, next) = _stepRequest(raw, current);
+      if (outcome != null) return outcome;
+      current = next;
+    }
+    return InterceptorProceed(current);
+  }
+
+  Future<InterceptorOutcome<HttpRequest>> _resumeBeforeRequest(
+    Future<InterceptorResult<HttpRequest>> pending,
+    int index,
+    HttpRequest request,
+  ) async {
+    var current = request;
+    var awaited = pending;
+    for (var i = index; i < _interceptors.length; i++) {
+      final result = await _guard(awaited, current);
+      final (outcome, next) = _stepRequest(result, current);
+      if (outcome != null) return outcome;
+      current = next;
+      if (i + 1 < _interceptors.length) {
+        try {
+          awaited = Future<InterceptorResult<HttpRequest>>.value(
+            _interceptors[i + 1].beforeRequest(current),
+          );
+        } catch (error, stackTrace) {
+          _rethrowNormalised(error, stackTrace, current);
+        }
       }
     }
     return InterceptorProceed(current);
   }
 
+  /// Applies one request result, returning the outcome that ends the chain or
+  /// the value to continue with.
+  (InterceptorOutcome<HttpRequest>?, HttpRequest) _stepRequest(
+    InterceptorResult<HttpRequest> result,
+    HttpRequest current,
+  ) => switch (result.disposition) {
+    InterceptorDisposition.next => (null, result.value ?? current),
+    InterceptorDisposition.stop => (
+      InterceptorShortCircuit(result.value ?? current),
+      current,
+    ),
+    InterceptorDisposition.resolve => (
+      InterceptorRecovered(result.resolved!),
+      current,
+    ),
+  };
+
   /// Runs [Interceptor.afterResponse] across the chain in reverse order.
   ///
   /// [InterceptorDisposition.resolve] behaves like a stop that substitutes the
   /// supplied response wholesale.
-  Future<InterceptorOutcome<HttpResponse>> runAfterResponse(HttpResponse response) async {
+  FutureOr<InterceptorOutcome<HttpResponse>> runAfterResponse(
+    HttpResponse response,
+  ) {
     var current = response;
     for (var i = _interceptors.length - 1; i >= 0; i--) {
-      final result = await _invoke(
-        () => _interceptors[i].afterResponse(current),
-        current.request,
-      );
-      switch (result.disposition) {
-        case InterceptorDisposition.next:
-          current = result.value ?? current;
-        case InterceptorDisposition.stop:
-          return InterceptorShortCircuit(result.value ?? current);
-        case InterceptorDisposition.resolve:
-          return InterceptorRecovered(result.resolved!);
+      final FutureOr<InterceptorResult<HttpResponse>> raw;
+      try {
+        raw = _interceptors[i].afterResponse(current);
+      } catch (error, stackTrace) {
+        _rethrowNormalised(error, stackTrace, current.request);
+      }
+      if (raw is! InterceptorResult<HttpResponse>) {
+        return _resumeAfterResponse(raw, i, current);
+      }
+      final (outcome, next) = _stepResponse(raw, current);
+      if (outcome != null) return outcome;
+      current = next;
+    }
+    return InterceptorProceed(current);
+  }
+
+  Future<InterceptorOutcome<HttpResponse>> _resumeAfterResponse(
+    Future<InterceptorResult<HttpResponse>> pending,
+    int index,
+    HttpResponse response,
+  ) async {
+    var current = response;
+    var awaited = pending;
+    for (var i = index; i >= 0; i--) {
+      final result = await _guard(awaited, current.request);
+      final (outcome, next) = _stepResponse(result, current);
+      if (outcome != null) return outcome;
+      current = next;
+      if (i - 1 >= 0) {
+        try {
+          awaited = Future<InterceptorResult<HttpResponse>>.value(
+            _interceptors[i - 1].afterResponse(current),
+          );
+        } catch (error, stackTrace) {
+          _rethrowNormalised(error, stackTrace, current.request);
+        }
       }
     }
     return InterceptorProceed(current);
   }
+
+  (InterceptorOutcome<HttpResponse>?, HttpResponse) _stepResponse(
+    InterceptorResult<HttpResponse> result,
+    HttpResponse current,
+  ) => switch (result.disposition) {
+    InterceptorDisposition.next => (null, result.value ?? current),
+    InterceptorDisposition.stop => (
+      InterceptorShortCircuit(result.value ?? current),
+      current,
+    ),
+    InterceptorDisposition.resolve => (
+      InterceptorRecovered(result.resolved!),
+      current,
+    ),
+  };
 
   /// Runs [Interceptor.onError] across the chain in reverse order.
   ///
@@ -360,26 +473,84 @@ class InterceptorChain {
   ///
   /// If the chain finishes with no candidate the failure was not handled, and
   /// [exception] is rethrown — recovery is opt-in, silence is not success.
-  Future<InterceptorOutcome<HttpResponse>> runOnError(NitroHttpException exception) async {
+  FutureOr<InterceptorOutcome<HttpResponse>> runOnError(
+    NitroHttpException exception,
+  ) {
     HttpResponse? candidate;
     for (var i = _interceptors.length - 1; i >= 0; i--) {
-      final result = await _invoke(
-        () => _interceptors[i].onError(exception),
-        exception.request,
-      );
-      switch (result.disposition) {
-        case InterceptorDisposition.next:
-          candidate = result.value ?? candidate;
-        case InterceptorDisposition.stop:
-          final stopped = result.value ?? candidate;
-          if (stopped == null) throw exception;
-          return InterceptorShortCircuit(stopped);
-        case InterceptorDisposition.resolve:
-          return InterceptorRecovered(result.resolved!);
+      final FutureOr<InterceptorResult<HttpResponse>> raw;
+      try {
+        raw = _interceptors[i].onError(exception);
+      } catch (error, stackTrace) {
+        _rethrowNormalised(error, stackTrace, exception.request);
+      }
+      if (raw is! InterceptorResult<HttpResponse>) {
+        return _resumeOnError(raw, i, exception, candidate);
+      }
+      final outcome = _stepError(raw, exception, candidate);
+      if (outcome != null) return outcome;
+      candidate = raw.value ?? candidate;
+    }
+    if (candidate == null) throw exception;
+    return InterceptorRecovered(candidate);
+  }
+
+  Future<InterceptorOutcome<HttpResponse>> _resumeOnError(
+    Future<InterceptorResult<HttpResponse>> pending,
+    int index,
+    NitroHttpException exception,
+    HttpResponse? seen,
+  ) async {
+    var candidate = seen;
+    var awaited = pending;
+    for (var i = index; i >= 0; i--) {
+      final result = await _guard(awaited, exception.request);
+      final outcome = _stepError(result, exception, candidate);
+      if (outcome != null) return outcome;
+      candidate = result.value ?? candidate;
+      if (i - 1 >= 0) {
+        try {
+          awaited = Future<InterceptorResult<HttpResponse>>.value(
+            _interceptors[i - 1].onError(exception),
+          );
+        } catch (error, stackTrace) {
+          _rethrowNormalised(error, stackTrace, exception.request);
+        }
       }
     }
     if (candidate == null) throw exception;
     return InterceptorRecovered(candidate);
+  }
+
+  /// Applies one error result, returning the outcome that ends the chain or
+  /// `null` to carry on with an updated candidate.
+  InterceptorOutcome<HttpResponse>? _stepError(
+    InterceptorResult<HttpResponse> result,
+    NitroHttpException exception,
+    HttpResponse? candidate,
+  ) {
+    switch (result.disposition) {
+      case InterceptorDisposition.next:
+        return null;
+      case InterceptorDisposition.stop:
+        final stopped = result.value ?? candidate;
+        if (stopped == null) throw exception;
+        return InterceptorShortCircuit(stopped);
+      case InterceptorDisposition.resolve:
+        return InterceptorRecovered(result.resolved!);
+    }
+  }
+
+  /// Awaits a suspended hook, normalising whatever it throws.
+  Future<InterceptorResult<T>> _guard<T>(
+    Future<InterceptorResult<T>> pending,
+    HttpRequest? request,
+  ) async {
+    try {
+      return await pending;
+    } catch (error, stackTrace) {
+      _rethrowNormalised(error, stackTrace, request);
+    }
   }
 
   /// Normalises anything a hook throws into the typed exception hierarchy.
@@ -387,21 +558,19 @@ class InterceptorChain {
   /// The original stack trace is both attached to the exception and used for
   /// the rethrow, so a bug inside an interceptor still points at the line that
   /// caused it rather than at this frame.
-  Future<InterceptorResult<T>> _invoke<T>(
-    Future<InterceptorResult<T>> Function() hook,
+  Never _rethrowNormalised(
+    Object error,
+    StackTrace stackTrace,
     HttpRequest? request,
-  ) async {
-    try {
-      return await hook();
-    } on NitroHttpException catch (typed, stackTrace) {
-      typed.stackTrace = stackTrace;
-      rethrow;
-    } catch (error, stackTrace) {
-      final wrapped = NitroHttpUnknownException(
-        request: request,
-        engineMessage: 'interceptor threw: $error',
-      )..stackTrace = stackTrace;
-      Error.throwWithStackTrace(wrapped, stackTrace);
+  ) {
+    if (error is NitroHttpException) {
+      error.stackTrace = stackTrace;
+      Error.throwWithStackTrace(error, stackTrace);
     }
+    final wrapped = NitroHttpUnknownException(
+      request: request,
+      engineMessage: 'interceptor threw: $error',
+    )..stackTrace = stackTrace;
+    Error.throwWithStackTrace(wrapped, stackTrace);
   }
 }

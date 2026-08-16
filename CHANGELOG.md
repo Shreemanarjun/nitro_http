@@ -3,89 +3,80 @@
 ### Fixed
 
 * **`RootCaSource.none` did the opposite of what it documents.** It is specified
-  as "no trust anchors at all — every chain fails unless a pin matches", but the
-  engine implemented it by clearing `CURLOPT_SSL_VERIFYPEER`, so every chain
-  *succeeded*: the option that reads as the strictest was silently the least
-  safe. Without a pin it is now refused outright, with a message pointing at
-  `TlsSettings.insecure()` for callers who really do want no verification.
-  With a pin it is unchanged — the documented pin-only mode.
+  as "no trust anchors at all, so every chain fails unless a pin matches", but
+  the engine implemented it by clearing `CURLOPT_SSL_VERIFYPEER`, so every chain
+  succeeded instead. Without a pin it is now refused outright, with a message
+  pointing at `TlsSettings.insecure()`. With a pin it is unchanged.
 
-* **HTTPS was completely broken on iOS and macOS.** `CertStore` assumed an
-  Apple platform meant a Keychain-integrated TLS backend, which is true of the
-  SDK's libcurl but not of the vendored slice — that links BoringSSL, which has
-  neither platform trust nor a compiled-in CA bundle, so the engine installed no
-  roots and trusted nothing. Every request failed with `CURLcode 60`. The linked
-  backend is now detected at runtime and the compiled-in Mozilla bundle is
-  installed when it cannot read the Keychain. Android was never affected.
+* **HTTPS was completely broken on iOS and macOS.** `CertStore` assumed an Apple
+  platform meant a Keychain-integrated TLS backend. That holds for the SDK's
+  libcurl but not for the vendored slice, which links BoringSSL and has neither
+  platform trust nor a compiled-in CA bundle, so no roots were installed and
+  every request failed with `CURLcode 60`. The backend is now detected at
+  runtime and the bundled Mozilla roots are installed when it cannot read the
+  Keychain. Android was never affected.
 
-  Note the remaining limit: `RootCaSource.platform` on Apple is served by that
-  bundle, so a root a user or MDM profile added to the Keychain is not trusted.
-  Use `RootCaSource.custom` with your own PEM if you need one.
+  One limit remains: `RootCaSource.platform` on Apple is served by that bundle,
+  so a root added to the Keychain by a user or MDM profile is not trusted. Use
+  `RootCaSource.custom` with your own PEM if you need one.
 
 * **`wss://` crashed the process against any HTTP/2-capable server.** The
   handshake runs a `CONNECT_ONLY` handle and reads with `curl_easy_recv`, but
   never pinned the HTTP version, so ALPN negotiated h2 and curl routed the read
-  through its nghttp2 filter — a segfault in `Curl_multi_connchanged`. A
-  WebSocket is an HTTP/1.1 Upgrade, so the handshake now pins HTTP/1.1. Plain
-  `ws://` was unaffected because it never negotiates ALPN.
+  through its nghttp2 filter, segfaulting in `Curl_multi_connchanged`. The
+  handshake now pins HTTP/1.1. Plain `ws://` was unaffected.
+
+* **`StreamChunkSettings.minContentLength: 0` was ignored.** Zero was read as
+  "unset" and replaced with the 1 MiB default, so asking to batch every response
+  regardless of size produced no batching at all below 1 MiB.
+
+* **`maxHold` did nothing on a slow link.** A part-full chunk was only checked
+  for age when the next block arrived, so a connection that went quiet mid-chunk
+  never produced the callback that would have released it — precisely the case
+  the setting exists for. The engine loop now polls the deadline.
 
 ### Added
 
-* **Two new exception types, so TLS failures are distinguishable.**
-  `NitroHttpTlsException` covers a handshake that never reached a certificate —
-  no shared version or cipher — which previously arrived as
-  `NitroHttpCertificateException` and sent readers looking at their trust store
-  for a problem that was never there. `NitroHttpConfigurationException` covers
-  settings the engine refuses before opening a socket; those used to surface as
-  `NitroHttpUnknownException`, which reads like a transient fault and invites a
-  retry that can never succeed. Both are permanent failures for
-  `RetryInterceptor`.
+* **`LogInterceptor` and `ParallelInterceptors`.** The logger writes one line per
+  call at four levels, redacts credential headers, and never drains a streamed
+  body to log it. `ParallelInterceptors` runs a group of observers concurrently,
+  for when each of them awaits I/O; members that modify the chain are rejected.
 
-  The exception family is sealed, so an exhaustive `switch` over
-  `NitroHttpException` needs the two new cases added.
+* **Interceptor hooks can return `FutureOr`.** The chain stays synchronous until
+  a hook actually returns a future. Three synchronous interceptors cost 4.4 µs
+  per request against 50.8 µs before. `Interceptor.proceedRequest` and
+  `proceedResponse` are `const` results for hooks with nothing to say.
 
-* **End-to-end coverage for the settings the engine is supposed to honour.**
-  An audit found 30 public settings with configuration tests but no behavioural
-  ones — the shape that let `RootCaSource.none`, the Apple trust path and
-  `sniHostname` all ship broken. 22 now have end-to-end tests: redirect caps,
-  cookie suppression and persistence, the idle deadline, compression
-  negotiation, pool limits, SOCKS5 and proxy credentials, upload progress,
-  chunk-batching modes, custom verbs, alt-svc recording, DoH, and protocol
-  negotiation through h3.
+  Existing `async` hooks still compile. Two edges need a change: a subclass that
+  returns `super.beforeRequest(…)` from a method declared `Future<…>` must widen
+  it to `FutureOr`, and `InterceptorChain.runOnError` now throws synchronously
+  instead of returning a rejected future.
 
-* **`LogInterceptor`, and `ParallelInterceptors` for independent observers.**
-  The logger checks its level before formatting anything, takes its duration
-  from the engine's own timings rather than a stopwatch, redacts credential
-  headers, and never drains a streamed body to log it — which would quietly turn
-  a constant-memory download into an unbounded one. `ParallelInterceptors` runs
-  a group of observers concurrently for when each awaits I/O; it rejects members
-  that try to modify the chain, since their order would otherwise depend on
-  completion order.
+* **Two new exception types.** `NitroHttpTlsException` for a handshake that never
+  reached a certificate, `NitroHttpConfigurationException` for settings refused
+  before a socket opens. They previously arrived as
+  `NitroHttpCertificateException` and `NitroHttpUnknownException`. The family is
+  sealed, so exhaustive switches need the new cases.
 
-* **Interceptor hooks no longer allocate to say nothing.** The pass-through
-  result and its future are immutable, so they are now shared rather than rebuilt
-  per hook per request — worth ~3 µs per interceptor per request, and it applies
-  to every interceptor that does not override all three hooks.
+* **End-to-end tests for 26 settings that had only configuration tests.** That
+  gap is what let `RootCaSource.none`, the Apple trust path and `sniHostname`
+  ship broken. Now covered: redirect caps, cookie suppression and persistence,
+  the idle deadline, compression, pool limits, SOCKS5, proxy credentials, upload
+  progress, chunk batching, custom verbs, alt-svc, DoH and h3 negotiation. The
+  TLS settings run against a locally generated CA: custom roots, SPKI pinning
+  both directions, mutual TLS, the version clamp and `wss://`.
+  `TlsSettings.sniHostname` is a named skip, since it is still ignored.
 
-* **Resumable downloads and uploads are covered by tests.** `Range` and
-  `Content-Range` always passed through, but nothing proved a `206` survived as
-  a `206` or that a streamed upload could start mid-file. Both now have
-  end-to-end tests, and [ADVANCED.md](doc/ADVANCED.md#resuming-an-interrupted-transfer)
-  shows the append-on-206 / restart-on-200 shape that a resumed download needs.
+* **Tests for resumable downloads and uploads.** `Range` and `Content-Range`
+  always worked; nothing proved it.
+  [ADVANCED.md](doc/ADVANCED.md#resuming-an-interrupted-transfer) shows the
+  append-on-206 shape a resumed download needs.
 
 * **WebSockets accept `TlsSettings`.** `RawWsConfig` carried no TLS block, so a
-  `wss://` socket could not use custom roots, SPKI pinning, mTLS or a version
-  clamp even when the same client applied them to its HTTP requests — the 0.0.1
-  note that WebSockets inherit the engine's TLS behaviour was only true of its
-  *defaults*. `NitroWebSocket.connect` now takes `tlsSettings`, defaulting to
-  the previous behaviour.
-
-* **End-to-end tests for the TLS settings the engine is supposed to honour**,
-  against a locally generated CA: custom roots, SPKI pinning (both directions),
-  mutual TLS, the version clamp, and `wss://`. Every one of these was previously
-  covered only by configuration tests, which is precisely how the two bugs above
-  shipped. `TlsSettings.sniHostname` is present as a named skip, because it is
-  still accepted-but-ignored.
+  `wss://` socket could not use custom roots, pinning, mTLS or a version clamp
+  even when the same client applied them to its HTTP requests.
+  `NitroWebSocket.connect` now takes `tlsSettings` and defaults to the previous
+  behaviour.
 
 ## 0.0.3
 

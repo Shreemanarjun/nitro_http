@@ -557,6 +557,12 @@ It retries only what is safe to retry — connection failures, timeouts, 429 and
 
 ### Interceptors
 
+An interceptor sits between your call and the engine. It can rewrite the request
+on the way out, the response on the way back, and step in when something fails.
+
+They run in registration order going out and in reverse coming back, so the first
+one you register wraps all the rest.
+
 ```dart
 class AuthInterceptor extends Interceptor {
   AuthInterceptor(this.tokens);
@@ -579,18 +585,89 @@ class AuthInterceptor extends Interceptor {
 }
 ```
 
-They run in order on the way out and in reverse on the way back. One can
-short-circuit a request and answer it itself, which is how you fake a response in
-a test:
+Four come with the package:
+
+| | |
+|---|---|
+| `LogInterceptor` | one line per call, four levels, credentials redacted |
+| `RetryInterceptor` | exponential backoff with jitter over transient failures |
+| `ParallelInterceptors` | runs independent observers concurrently |
+| `DelegatingInterceptor` | builds one from closures, handy in tests |
 
 ```dart
-final logger = DelegatingInterceptor(
-  onResponse: (res) async {
-    print('${res.statusCode} ${res.finalUrl} in ${res.timings.total}');
-    return Interceptor.next();
-  },
+final client = NitroHttpClient(
+  settings: const ClientSettings(baseUrl: 'https://api.example.com'),
+  interceptors: [
+    LogInterceptor(
+      level: kDebugMode ? HttpLogLevel.headers : HttpLogLevel.none,
+      sink: (line) => developer.log(line, name: 'http'),
+    ),
+    RetryInterceptor(maxRetries: 3),
+  ],
 );
 ```
+
+```
+--> GET https://api.example.com/users/7
+<-- 200 OK https://api.example.com/users/7 431b 38ms
+```
+
+Levels are `none`, `basic`, `headers` and `body`, checked before anything is
+formatted. `authorization`, `proxy-authorization`, `cookie` and `set-cookie` are
+redacted. A streamed body logs as `<stream>` rather than being read, since
+reading it would buffer the whole response.
+
+#### Keeping them cheap
+
+A hook can return its result without wrapping it in a `Future`, and that matters
+more than what the hook does:
+
+| three interceptors, per request | |
+|---|---|
+| synchronous hooks | 4.4 µs |
+| `LogInterceptor` at `basic`, writing | 5.2 µs |
+| `async` hooks | 52.3 µs |
+
+So don't mark a hook `async` unless it awaits something. Suspension spreads: once
+one hook hands back a future, every hook after it gets awaited too.
+
+When a hook has nothing to say, return the shared constant:
+
+```dart
+class TraceHeader extends Interceptor {
+  const TraceHeader();
+
+  @override
+  FutureOr<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) {
+    request.headers.set('x-trace-id', newTraceId());
+    return Interceptor.proceedRequest;   // const; no future, no allocation
+  }
+}
+```
+
+For outcomes you expect, prefer `Interceptor.resolve()` or `stop()` to an
+exception. `resolve` answers the call without touching the network.
+
+#### Running observers side by side
+
+Interceptors that each await I/O can go in a group instead of the main list:
+
+```dart
+interceptors: [
+  AuthInterceptor(tokens),             // sequential: must run before signing
+  SigningInterceptor(),
+  ParallelInterceptors([               // concurrent: independent of each other
+    RemoteLogInterceptor(),
+    MetricsInterceptor(),
+  ]),
+],
+```
+
+Three 120 ms hooks take about 120 ms grouped, against 360 ms in a row. Members
+have to be observers; one that rewrites the request or stops the chain throws.
+
+More detail in
+[ADVANCED.md](doc/ADVANCED.md#logging-and-running-interceptors-in-parallel).
 
 ### Cookies
 

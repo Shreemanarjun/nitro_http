@@ -173,28 +173,77 @@ Four levels: `none`, `basic` (the line above), `headers`, `body`. The level is
 checked before anything is formatted, so a level you are not using costs nothing
 to have configured.
 
-Three things keep it off the critical path:
+A streamed body is never read in order to log it. Doing that would buffer the
+whole response to replay it to the caller, turning a constant-memory download
+into an unbounded one, so at `body` level a stream logs as `<stream>`. Streamed
+and file request bodies work the same way.
 
-- **A streamed body is never drained.** Logging one would mean buffering the
-  whole response to replay it to the caller, turning a constant-memory download
-  into an unbounded one — so at `body` level a stream logs as `<stream>`. The
-  same applies to a streamed or file request body.
-- **Duration comes from the engine.** `HttpTimings.total` is already measured
-  natively, so there is no stopwatch and no request-to-start-time map to leak
-  when a call never completes. It reads `-` under `wantTimings: false`.
-- **`authorization`, `proxy-authorization`, `cookie` and `set-cookie` are
-  redacted** — logs get pasted into issues. `redactedHeaders` replaces that set
-  rather than adding to it, so widening it means listing the defaults too.
+Duration is `HttpTimings.total`, which the engine already measures, so there is
+no stopwatch and no request-to-start-time map left holding entries when a call
+never completes. It reads `-` under `wantTimings: false`.
 
-Measured against an in-process chain (JIT, so read these as relative): the
-logger adds **~1 µs per request** while logging and is indistinguishable from a
-bare interceptor at `none`. The chain itself costs ~18 µs per interceptor, which
-dwarfs it — if interceptor overhead matters to you, the number of interceptors
-is the thing to look at, not what they do.
+`authorization`, `proxy-authorization`, `cookie` and `set-cookie` are redacted,
+because logs get pasted into issues. `redactedHeaders` replaces that set rather
+than adding to it, so widening it means listing the defaults again.
 
-Whatever sink you pass is awaited in the chain. Point it at `print` or
-`developer.log` and it is negligible; point it at something that does I/O and
-every request waits for it.
+Whatever sink you pass runs inside the chain. `print` or `developer.log` is
+negligible; anything that does I/O makes every request wait for it, for the
+reason in the next section.
+
+#### What interceptor overhead actually comes from
+
+A hook returns `FutureOr`, so it can answer without a `Future`, and the chain
+stays synchronous until one of them doesn't. That property dominates the cost,
+well ahead of anything a hook actually does:
+
+| three interceptors, per request | |
+|---|---|
+| synchronous hooks | 4.4 µs |
+| `LogInterceptor` at `none` | 4.7 µs |
+| `LogInterceptor` at `basic`, formatting and writing | 5.2 µs |
+| one `async` hook among two synchronous ones | 36.7 µs |
+| all `async` hooks | 52.3 µs |
+
+The same holds on the way out:
+
+| exit path, one interceptor | |
+|---|---|
+| `Interceptor.resolve()`, answering without the network | 6.7 µs |
+| `Interceptor.next()` | 7.7 µs |
+| throwing a `NitroHttpException` from a synchronous hook | 4.9 µs |
+| throwing any other object, which gets wrapped | 5.2 µs |
+| throwing from an `async` hook | 20.0 µs |
+
+So don't mark a hook `async` unless it awaits something. One that only sets a
+header still suspends the chain, and suspension is contagious: once a hook
+returns a future, every later hook is awaited too. That is the gap between
+4.4 µs and 36.7 µs.
+
+When a hook has nothing to say, return `Interceptor.proceedRequest` or
+`Interceptor.proceedResponse`. Both are `const`, so they cost neither an
+allocation nor a future, where `Interceptor.next()` builds a fresh result.
+
+For outcomes you expect, prefer a disposition to an exception. `resolve()` was
+the cheapest path measured and skips the network entirely; `stop()` ends the
+chain without unwinding. Throwing is for real failures, and from a synchronous
+hook it is close to free — you pay for the `async`, not the throw. Wrapping a
+foreign object adds about 0.3 µs, so throw whichever type reads best.
+
+```dart
+class TraceHeader extends Interceptor {
+  const TraceHeader();
+
+  @override
+  FutureOr<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) {
+    request.headers.set('x-trace-id', newTraceId());
+    return Interceptor.proceedRequest;
+  }
+}
+```
+
+Numbers are from an in-process chain under the JIT (`flutter test`), so read
+them as relative rather than as release figures. The ~4.4 µs floor is the
+caller's own two awaits, not the interceptors.
 
 #### Sequential by default, parallel when they are independent
 
@@ -239,10 +288,10 @@ the request or response rather than in a field.
 
 ### Resuming an interrupted transfer
 
-Resume is a header protocol, and the engine stays out of its way: `Range` and
-`Content-Range` reach the wire untouched, a `206 Partial Content` arrives as a
-206 rather than being normalised to 200, and a partial body is handed over as-is
-instead of being stitched back into a whole one.
+Resume is a header protocol, and the engine stays out of its way. `Range` and
+`Content-Range` reach the wire untouched, a `206 Partial Content` stays a 206
+rather than being normalised to 200, and a partial body is handed over as it
+arrived instead of being stitched back into a whole one.
 
 Downloading the rest of a file you already have part of:
 
@@ -282,12 +331,6 @@ final response = await client.put(
   }),
 );
 ```
-
-What the package does **not** provide is the policy layer above this: there is no
-`download(resume: true)` that checkpoints progress, remembers an upload session
-URL, or decides when to retry. That part depends on your server's resume protocol
-— plain `Range`, RFC 9110 `Content-Range` PUT, tus, or a vendor's session API —
-so it belongs in your code, with `RetryInterceptor` for the backoff.
 
 ### Runtime capabilities and hot restart
 

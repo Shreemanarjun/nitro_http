@@ -1,6 +1,7 @@
 /// A request logger that costs nothing when it is not logging.
 library;
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'body.dart';
@@ -43,6 +44,9 @@ enum HttpLogLevel {
 /// * **Nothing is formatted that is not printed.** The level is checked before
 ///   any string is built, so [HttpLogLevel.none] does no work — and neither does
 ///   [HttpLogLevel.basic] on the header and body branches.
+/// * **Every hook is synchronous.** It returns a value rather than a future, so
+///   the chain never suspends on it and the request costs no extra microtask.
+///   That holds only while [sink] is synchronous — see below.
 /// * **A streamed body is never drained.** Logging one would mean buffering the
 ///   whole response to replay it to the caller, turning a constant-memory
 ///   download into an unbounded one. At [HttpLogLevel.body] a stream logs as
@@ -85,7 +89,7 @@ final class LogInterceptor extends Interceptor {
   };
 
   @override
-  Future<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) {
+  FutureOr<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) {
     if (level == HttpLogLevel.none) return super.beforeRequest(request);
 
     final method = request.customMethod ?? request.method.name.toUpperCase();
@@ -100,7 +104,9 @@ final class LogInterceptor extends Interceptor {
   }
 
   @override
-  Future<InterceptorResult<HttpResponse>> afterResponse(HttpResponse response) {
+  FutureOr<InterceptorResult<HttpResponse>> afterResponse(
+    HttpResponse response,
+  ) {
     if (level == HttpLogLevel.none) return super.afterResponse(response);
 
     final timings = response.meta.timings;
@@ -118,7 +124,9 @@ final class LogInterceptor extends Interceptor {
   }
 
   @override
-  Future<InterceptorResult<HttpResponse>> onError(NitroHttpException exception) {
+  FutureOr<InterceptorResult<HttpResponse>> onError(
+    NitroHttpException exception,
+  ) {
     if (level == HttpLogLevel.none) return super.onError(exception);
 
     final url = exception.request?.url;

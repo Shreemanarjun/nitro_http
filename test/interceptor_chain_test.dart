@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nitro_http/nitro_http.dart';
 
@@ -23,19 +25,21 @@ final class _Recorder extends Interceptor {
   onFailure;
 
   @override
-  Future<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) {
+  FutureOr<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) {
     log.add('$name.beforeRequest');
     return onRequest?.call(request) ?? super.beforeRequest(request);
   }
 
   @override
-  Future<InterceptorResult<HttpResponse>> afterResponse(HttpResponse response) {
+  FutureOr<InterceptorResult<HttpResponse>> afterResponse(
+    HttpResponse response,
+  ) {
     log.add('$name.afterResponse');
     return onResponse?.call(response) ?? super.afterResponse(response);
   }
 
   @override
-  Future<InterceptorResult<HttpResponse>> onError(NitroHttpException e) {
+  FutureOr<InterceptorResult<HttpResponse>> onError(NitroHttpException e) {
     log.add('$name.onError');
     return onFailure?.call(e) ?? super.onError(e);
   }
@@ -347,7 +351,7 @@ void main() {
       ]);
 
       await expectLater(
-        chain.runOnError(failure),
+        () => chain.runOnError(failure),
         throwsA(same(failure)),
       );
     });
@@ -358,7 +362,10 @@ void main() {
         DelegatingInterceptor(onFailure: (_) async => Interceptor.stop()),
       ]);
 
-      await expectLater(chain.runOnError(failure), throwsA(same(failure)));
+      await expectLater(
+        () => chain.runOnError(failure),
+        throwsA(same(failure)),
+      );
     });
   });
 
@@ -370,7 +377,7 @@ void main() {
       ]);
 
       await expectLater(
-        chain.runBeforeRequest(fakeRequest()),
+        () => chain.runBeforeRequest(fakeRequest()),
         throwsA(same(thrown)),
       );
       expect(thrown.stackTrace, isNotNull);
@@ -385,7 +392,7 @@ void main() {
       ]);
 
       await expectLater(
-        chain.runBeforeRequest(request),
+        () => chain.runBeforeRequest(request),
         throwsA(
           isA<NitroHttpUnknownException>()
               .having((e) => e.request, 'request', same(request))
@@ -406,7 +413,7 @@ void main() {
       ]);
 
       await expectLater(
-        chain.runAfterResponse(response),
+        () => chain.runAfterResponse(response),
         throwsA(
           isA<NitroHttpUnknownException>().having(
             (e) => e.request,
@@ -423,7 +430,7 @@ void main() {
       ]);
 
       await expectLater(
-        chain.runOnError(NitroHttpProtocolException()),
+        () => chain.runOnError(NitroHttpProtocolException()),
         throwsA(isA<NitroHttpUnknownException>()),
       );
     });

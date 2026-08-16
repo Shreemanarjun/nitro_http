@@ -809,6 +809,63 @@ void main() {
       expect(seen.single, startsWith('200 '));
     });
 
+    test('The prebuilt interceptors', () async {
+      final lines = <String>[];
+      final client = makeClient(
+        settings: const ClientSettings(baseUrl: 'https://api.example.com'),
+        interceptors: [
+          LogInterceptor(level: HttpLogLevel.headers, sink: lines.add),
+          RetryInterceptor(maxRetries: 3),
+        ],
+      );
+
+      executor.bufferedResponses.add(rawResponse());
+      await client.get('/users/7');
+
+      // The two lines the README prints.
+      expect(lines.first, '--> GET https://api.example.com/users/7');
+      expect(lines.any((l) => l.startsWith('<-- 200 ')), isTrue);
+    });
+
+    test('Keeping interceptors cheap: a synchronous hook', () async {
+      final client = makeClient(
+        settings: const ClientSettings(baseUrl: 'https://api.example.com'),
+        interceptors: [const TraceHeader()],
+      );
+
+      executor.bufferedResponses.add(rawResponse());
+      await client.get('/users');
+      final sent = executor.bufferedRequests.single.request;
+      expect(sent.headers.any((h) => h.name == 'x-trace-id'), isTrue);
+    });
+
+    test('ParallelInterceptors groups independent observers', () async {
+      final seen = <String>[];
+      final client = makeClient(
+        settings: const ClientSettings(baseUrl: 'https://api.example.com'),
+        interceptors: [
+          ParallelInterceptors([
+            DelegatingInterceptor(
+              onResponse: (r) async {
+                seen.add('log ${r.statusCode}');
+                return Interceptor.next();
+              },
+            ),
+            DelegatingInterceptor(
+              onResponse: (r) async {
+                seen.add('metrics ${r.statusCode}');
+                return Interceptor.next();
+              },
+            ),
+          ]),
+        ],
+      );
+
+      executor.bufferedResponses.add(rawResponse());
+      await client.get('/users');
+      expect(seen, containsAll(<String>['log 200', 'metrics 200']));
+    });
+
     test('Retry', () {
       final client = NitroHttpClient(
         interceptors: [
@@ -968,6 +1025,17 @@ final class TokenStore {
   Future<String> access() async => 'at-${++_issued}';
 
   Future<void> refresh() async {}
+}
+
+/// Verbatim from the README's "Keeping them cheap" table.
+class TraceHeader extends Interceptor {
+  const TraceHeader();
+
+  @override
+  FutureOr<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) {
+    request.headers.set('x-trace-id', 'trace-1');
+    return Interceptor.proceedRequest;
+  }
 }
 
 /// Verbatim from the README's "Interceptors" section.

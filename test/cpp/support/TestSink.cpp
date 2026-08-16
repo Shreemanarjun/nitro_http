@@ -207,6 +207,13 @@ RawClientConfig defaultClientConfig() {
   config.userAgent = "nitro_http-tests";
   config.altSvcCachePath = "";
 
+  // Mirrors Dart's `StreamChunkSettings.adaptive()`, which is what the bridge
+  // actually sends; leaving these zero made the fixture disagree with every
+  // real client.
+  config.streamChunkBytes = 0;
+  config.streamChunkMinContentLength = 1 << 20;
+  config.streamChunkMaxHoldMs = 25;
+
   config.tls.verifyCertificates = true;
   config.tls.rootCaSource = 0;
   config.tls.minTlsVersion = 0;

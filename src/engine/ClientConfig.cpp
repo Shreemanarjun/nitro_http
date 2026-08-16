@@ -105,6 +105,13 @@ ClientConfig::ClientConfig() {
   raw_.pool.idleTimeoutMs = 0;
   raw_.pool.maxLifetimeMs = 0;
   raw_.pool.keepAlivePingMs = 0;
+
+  // Chunk batching. These carry Dart's `StreamChunkSettings.adaptive()` values
+  // because zero is a real setting here — "batch every response, whatever its
+  // size" — and so cannot double as "unset" at the point it is read.
+  raw_.streamChunkBytes = 0;                     // adaptive
+  raw_.streamChunkMinContentLength = 1 << 20;    // 1 MiB
+  raw_.streamChunkMaxHoldMs = 25;
 }
 
 ClientConfig::~ClientConfig() {

@@ -269,3 +269,153 @@ TEST_F(WsSessionTest, ShutdownWithoutACloseStillJoinsPromptly) {
                            .count();
   EXPECT_LT(elapsed, 3000) << "shutdown hung for " << elapsed << " ms";
 }
+
+// ── Data frames ──────────────────────────────────────────────────────────────
+
+TEST_F(WsSessionTest, BinaryFramesRoundTripWithEveryByteValue) {
+  WsTestServer server;
+  WsSession session(20);
+  session.connect(wsConfig(20, server.url("/echo")), /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+
+  // Every byte value, so a payload routed through any text path would be
+  // mangled by UTF-8 validation or by a NUL terminator.
+  std::vector<uint8_t> payload(256);
+  for (size_t i = 0; i < payload.size(); ++i) {
+    payload[i] = static_cast<uint8_t>(i);
+  }
+  session.send(wsopcode::kBinary, payload.data(), payload.size());
+
+  ASSERT_TRUE(waitFor([] { return !framesOf(20, wsopcode::kBinary).empty(); }))
+      << "the binary echo never came back";
+  const std::vector<CapturedFrame> frames = framesOf(20, wsopcode::kBinary);
+  ASSERT_EQ(frames.size(), 1u);
+  EXPECT_EQ(frames[0].payload, payload);
+  session.shutdown();
+}
+
+TEST_F(WsSessionTest, APayloadPastTheSixteenBitLengthFormSurvivesIntact) {
+  WsTestServer server;
+  WsSession session(21);
+  session.connect(wsConfig(21, server.url("/echo")), /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+
+  // Over 65535, so the frame uses the 64-bit length form and the payload is
+  // certain to arrive across several socket reads.
+  std::vector<uint8_t> payload(200000);
+  for (size_t i = 0; i < payload.size(); ++i) {
+    payload[i] = static_cast<uint8_t>(i * 31);
+  }
+  session.send(wsopcode::kBinary, payload.data(), payload.size());
+
+  ASSERT_TRUE(waitFor([] { return !framesOf(21, wsopcode::kBinary).empty(); },
+                      20000))
+      << "the large echo never came back";
+  const std::vector<CapturedFrame> frames = framesOf(21, wsopcode::kBinary);
+  ASSERT_EQ(frames.size(), 1u) << "a reassembled message is one frame";
+  ASSERT_EQ(frames[0].payload.size(), payload.size());
+  EXPECT_EQ(frames[0].payload, payload) << "reassembly reordered or lost bytes";
+  session.shutdown();
+}
+
+TEST_F(WsSessionTest, AnEmptyPayloadIsStillDelivered) {
+  WsTestServer server;
+  WsSession session(22);
+  session.connect(wsConfig(22, server.url("/echo")), /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+
+  // A zero-length frame is legal and must not be mistaken for "nothing to
+  // deliver" or for a closed connection.
+  session.send(wsopcode::kText, nullptr, 0);
+
+  ASSERT_TRUE(waitFor([] { return !framesOf(22, wsopcode::kText).empty(); }))
+      << "an empty frame was swallowed";
+  EXPECT_TRUE(framesOf(22, wsopcode::kText).at(0).payload.empty());
+  session.shutdown();
+}
+
+TEST_F(WsSessionTest, AFragmentedMessageArrivesAsOneReassembledFrame) {
+  WsTestServer::Options options;
+  options.fragmentEchoes = true;
+  WsTestServer server(options);
+  WsSession session(23);
+  session.connect(wsConfig(23, server.url("/echo")), /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+
+  const std::string message = "fragmented across two frames";
+  session.send(wsopcode::kText,
+               reinterpret_cast<const uint8_t*>(message.data()),
+               message.size());
+
+  ASSERT_TRUE(waitFor([] { return !framesOf(23, wsopcode::kText).empty(); }))
+      << "the fragmented echo never came back";
+  const std::vector<CapturedFrame> frames = framesOf(23, wsopcode::kText);
+  ASSERT_EQ(frames.size(), 1u)
+      << "fragments must be joined, not delivered one by one";
+  EXPECT_EQ(std::string(frames[0].payload.begin(), frames[0].payload.end()),
+            message);
+  // The continuation opcode is an internal detail and must not reach the caller.
+  EXPECT_TRUE(framesOf(23, wsopcode::kContinuation).empty());
+  session.shutdown();
+}
+
+// ── Control frames ───────────────────────────────────────────────────────────
+
+TEST_F(WsSessionTest, AServerPingIsAnsweredWithoutTheCallerDoingAnything) {
+  WsTestServer::Options options;
+  options.pingOnConnect = true;
+  WsTestServer server(options);
+  WsSession session(24);
+  session.connect(wsConfig(24, server.url("/echo")), /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+
+  // RFC 6455 requires the pong; a peer that does not get one drops the
+  // connection, so this has to happen inside the session rather than being
+  // left to the caller.
+  ASSERT_TRUE(waitFor([&server] { return server.pongCount() > 0; }))
+      << "the session never answered the ping";
+  session.shutdown();
+}
+
+TEST_F(WsSessionTest, AFrameLargerThanMaxFrameBytesFailsTheSession) {
+  WsTestServer::Options options;
+  options.oversizeBytes = 64 * 1024;
+  WsTestServer server(options);
+  WsSession session(25);
+
+  RawWsConfig cfg = wsConfig(25, server.url("/echo"));
+  cfg.maxFrameBytes = 1024;  // far below what the peer is about to send
+  session.connect(cfg, /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+
+  // The limit exists so a hostile peer cannot make the client allocate without
+  // bound, so the session ends the connection rather than buffering the frame.
+  // The visible effect is on the wire: RFC 6455 gives 1009 for exactly this.
+  ASSERT_TRUE(server.waitForClose())
+      << "an oversized frame did not close the session";
+  EXPECT_EQ(server.lastCloseCode(), 1009);
+  session.shutdown();
+}
+
+TEST_F(WsSessionTest, ADataFrameSentAfterCloseNeverReachesThePeer) {
+  WsTestServer server;
+  WsSession session(26);
+  session.connect(wsConfig(26, server.url("/echo")), /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+
+  session.close(1000, "done");
+  ASSERT_TRUE(server.waitForClose());
+
+  const std::string late = "too late";
+  session.send(wsopcode::kText,
+               reinterpret_cast<const uint8_t*>(late.data()), late.size());
+
+  // RFC 6455 §5.5.1: nothing may follow a close frame. `send` reports the
+  // outbox depth rather than a status, so the contract worth asserting is on
+  // the wire — the peer must never see it.
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  for (const std::string& message : server.messages()) {
+    EXPECT_NE(message, late) << "a frame escaped after the close";
+  }
+  session.shutdown();
+}

@@ -96,9 +96,10 @@ bool sendAll(int fd, const void* data, size_t n) {
 }
 
 /// A server frame: unmasked, per RFC 6455 §5.1.
-std::vector<uint8_t> serverFrame(int opcode, const uint8_t* payload, size_t n) {
+std::vector<uint8_t> serverFrameEx(int opcode, bool fin, const uint8_t* payload,
+                                  size_t n) {
   std::vector<uint8_t> out;
-  out.push_back(static_cast<uint8_t>(0x80 | (opcode & 0x0f)));
+  out.push_back(static_cast<uint8_t>((fin ? 0x80 : 0x00) | (opcode & 0x0f)));
   if (n < 126) {
     out.push_back(static_cast<uint8_t>(n));
   } else if (n <= 0xffff) {
@@ -113,6 +114,10 @@ std::vector<uint8_t> serverFrame(int opcode, const uint8_t* payload, size_t n) {
   }
   out.insert(out.end(), payload, payload + n);
   return out;
+}
+
+std::vector<uint8_t> serverFrame(int opcode, const uint8_t* payload, size_t n) {
+  return serverFrameEx(opcode, true, payload, n);
 }
 
 std::string headerValueOf(const std::string& head, const std::string& name) {
@@ -182,6 +187,7 @@ std::string WsTestServer::url(const std::string& path) const {
 
 bool WsTestServer::handshakeCompleted() const { return handshaked_.load(); }
 int WsTestServer::closeFramesReceived() const { return closeFrames_.load(); }
+int WsTestServer::pongCount() const { return pongFrames_.load(); }
 int WsTestServer::lastCloseCode() const { return lastCloseCode_.load(); }
 
 std::vector<std::string> WsTestServer::messages() const {
@@ -256,6 +262,20 @@ void WsTestServer::serve(int client) {
   if (!sendAll(client, response.data(), response.size())) return;
   handshaked_.store(true);
 
+  if (options_.pingOnConnect) {
+    const std::string body = "are you there";
+    const std::vector<uint8_t> ping = serverFrame(
+        0x9, reinterpret_cast<const uint8_t*>(body.data()), body.size());
+    if (!sendAll(client, ping.data(), ping.size())) return;
+  }
+
+  if (options_.oversizeBytes > 0) {
+    const std::vector<uint8_t> body(options_.oversizeBytes, 0x41);
+    const std::vector<uint8_t> frame =
+        serverFrame(0x2, body.data(), body.size());
+    if (!sendAll(client, frame.data(), frame.size())) return;
+  }
+
   // ── Frames ─────────────────────────────────────────────────────────────────
   std::vector<uint8_t> rx;
   while (!stopping_.load()) {
@@ -312,6 +332,10 @@ void WsTestServer::serve(int client) {
         // shape that makes the client's own close deadline do the work.
         continue;
       }
+      if (opcode == 0xA) {  // the client's answer to our ping
+        pongFrames_.fetch_add(1);
+      }
+
       if (opcode == 0x9) {  // ping → pong
         const std::vector<uint8_t> pong =
             serverFrame(0xa, payload.data(), payload.size());
@@ -324,9 +348,21 @@ void WsTestServer::serve(int client) {
           messages_.emplace_back(payload.begin(), payload.end());
         }
         if (options_.echo) {
-          const std::vector<uint8_t> echoed =
-              serverFrame(opcode, payload.data(), payload.size());
-          if (!sendAll(client, echoed.data(), echoed.size())) return;
+          if (options_.fragmentEchoes && payload.size() >= 2) {
+            // Split down the middle: first frame keeps the opcode with FIN
+            // clear, the rest rides a continuation (opcode 0).
+            const size_t half = payload.size() / 2;
+            const std::vector<uint8_t> first =
+                serverFrameEx(opcode, false, payload.data(), half);
+            const std::vector<uint8_t> rest = serverFrameEx(
+                0x0, true, payload.data() + half, payload.size() - half);
+            if (!sendAll(client, first.data(), first.size())) return;
+            if (!sendAll(client, rest.data(), rest.size())) return;
+          } else {
+            const std::vector<uint8_t> echoed =
+                serverFrame(opcode, payload.data(), payload.size());
+            if (!sendAll(client, echoed.data(), echoed.size())) return;
+          }
         }
       }
     }

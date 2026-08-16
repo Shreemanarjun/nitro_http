@@ -116,6 +116,12 @@ RawClientConfig prefetchConfig() {
   cfg.enableCompression = true;  // less background bandwidth on cellular
   cfg.enableCache = true;        // storing the response IS the point
 
+  // Never read on this path — a prefetch discards the body rather than streaming
+  // it — but left explicit so no field of `cfg` is indeterminate.
+  cfg.streamChunkBytes = 0;
+  cfg.streamChunkMinContentLength = 1 << 20;
+  cfg.streamChunkMaxHoldMs = 25;
+
   cfg.userAgent = "";        // inherit the engine default
   cfg.altSvcCachePath = "";  // an Alt-Svc cache is per-user-client state
   cfg.defaultHeaders = {};

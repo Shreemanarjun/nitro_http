@@ -102,7 +102,7 @@ jobs:
 
       - name: Install the nitrogen CLI
         run: |
-          dart pub global activate nitrogen_cli 0.6.0
+          dart pub global activate nitrogen_cli 0.6.1
           echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
 
       # nitrogen unconditionally runs `pod install` for the example's Apple

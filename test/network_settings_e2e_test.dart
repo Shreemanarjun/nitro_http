@@ -621,6 +621,10 @@ void main() {
             streamChunks: StreamChunkSettings.fixed(
               64 * 1024,
               minContentLength: minContentLength,
+              // Size is what this test is about. Left at the 25 ms default, a
+              // slow runner flushes part-full chunks on the age deadline and
+              // the count stops being a function of the threshold.
+              maxHold: const Duration(minutes: 1),
             ),
           ),
         );
@@ -745,10 +749,18 @@ void main() {
       // a setting that was ignored would show up as the same count every time.
       const size = 1048576;
       final counts = <String, int>{};
+      // maxHold is pinned high on the batching modes for the same reason as in
+      // the minContentLength test: this asserts exact counts, so only the size
+      // threshold may decide when a chunk is emitted.
       for (final entry in {
         'immediate': const StreamChunkSettings.immediate(),
-        'fixed64k': const StreamChunkSettings.fixed(64 * 1024),
-        'adaptive': const StreamChunkSettings.adaptive(),
+        'fixed64k': const StreamChunkSettings.fixed(
+          64 * 1024,
+          maxHold: Duration(minutes: 1),
+        ),
+        'adaptive': const StreamChunkSettings.adaptive(
+          maxHold: Duration(minutes: 1),
+        ),
       }.entries) {
         final c = NitroHttpClient(
           settings: ClientSettings(

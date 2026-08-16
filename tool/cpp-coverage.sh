@@ -60,9 +60,16 @@ echo "==> running the suite"
 rm -rf "$BUILD/profraw" && mkdir -p "$BUILD/profraw"
 # %p keeps one raw profile per process; the exit-path test deliberately dies at
 # process exit, so a single fixed filename would be overwritten or truncated.
+# stdout is dropped because a passing run is 245 lines of noise, but stderr is
+# kept: `--output-on-failure` writes there, and redirecting both left CI
+# reporting "exit code 8" with nothing to say about which test broke.
 LLVM_PROFILE_FILE="$PWD/$BUILD/profraw/%p.profraw" \
   ctest --test-dir "$BUILD" --output-on-failure >/dev/null
 rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "==> ctest failed (exit $rc); re-running the failures for the log"
+  ctest --test-dir "$BUILD" --output-on-failure --rerun-failed || true
+fi
 
 BINS=()
 for b in "$BUILD"/nitro_http_tests/nitro_http_engine_tests \

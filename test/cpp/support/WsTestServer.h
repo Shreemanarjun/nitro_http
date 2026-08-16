@@ -34,6 +34,15 @@ class WsTestServer {
     bool echo = true;
     /// Sent back in `Sec-WebSocket-Protocol` when non-empty.
     std::string subprotocol;
+    /// Send a ping as soon as the upgrade is answered, so the client's
+    /// automatic pong can be observed.
+    bool pingOnConnect = false;
+    /// Echo each message as two fragments (a non-final data frame followed by
+    /// a continuation) instead of one whole frame.
+    bool fragmentEchoes = false;
+    /// Send one data frame of this many bytes right after the upgrade. Used to
+    /// drive a client past `maxFrameBytes`.
+    size_t oversizeBytes = 0;
   };
 
   /// A well-behaved echo server. `Options` picks the misbehaviour.
@@ -50,6 +59,9 @@ class WsTestServer {
 
   /// True once the upgrade has been answered.
   bool handshakeCompleted() const;
+  /// How many pong frames the client sent, which is how an automatic answer to
+  /// a server ping is observed.
+  int pongCount() const;
   /// How many close frames the client sent.
   int closeFramesReceived() const;
   /// The status code carried by the last client close frame, or -1.
@@ -74,6 +86,7 @@ class WsTestServer {
   std::atomic<bool> stopping_{false};
   std::atomic<bool> handshaked_{false};
   std::atomic<int> closeFrames_{0};
+  std::atomic<int> pongFrames_{0};
   std::atomic<int> lastCloseCode_{-1};
 
   mutable std::mutex messageMtx_;

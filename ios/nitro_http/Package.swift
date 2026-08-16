@@ -33,16 +33,72 @@ import PackageDescription
 // `hasVendoredCurl` came back false with the xcframework sitting right there,
 // and the build silently fell back to the SDK's libcurl (no HTTP/3, no brotli,
 // no zstd). Resolving first puts us in the real `<platform>/` directory.
-let frameworksDirectory = URL(fileURLWithPath: #filePath)
+let packageDirectory = URL(fileURLWithPath: #filePath)
     .resolvingSymlinksInPath()     // through Flutter's .packages symlink
-    .deletingLastPathComponent()   // <platform>/nitro_http
-    .deletingLastPathComponent()   // <platform>
+    .deletingLastPathComponent()   // <platform>/nitro_http — the package root
+
+// INSIDE the package, not a sibling of it. A binary target's `path:` is a
+// literal string SwiftPM resolves against the package root AS IT SEES IT, which
+// is Flutter's symlink `…/Packages/.packages/nitro_http`. A `../Frameworks/…`
+// path therefore resolved to `.packages/Frameworks/…`, which does not exist:
+//
+//   xcodebuild: error: Could not resolve package dependencies:
+//     local binary target 'NitroCurl' at '…/.packages/Frameworks/NitroCurl.xcframework'
+//     does not contain a binary artifact.
+//
+// Every freshly created Flutter app hit that; only projects whose Xcode
+// scaffolding predates it escaped, which is why the example app never showed
+// it. `resolvingSymlinksInPath()` fixes the DETECTION below, but cannot fix a
+// path string SwiftPM resolves itself — so the framework lives inside the
+// package and the path never leaves it.
+let vendoredCurl = packageDirectory
     .appendingPathComponent("Frameworks")
     .appendingPathComponent("NitroCurl.xcframework")
 
-let hasVendoredCurl = FileManager.default.fileExists(
-    atPath: frameworksDirectory.path
-)
+let hasVendoredCurl = FileManager.default.fileExists(atPath: vendoredCurl.path)
+
+// ── The published-consumer path ──────────────────────────────────────────────
+// A pub.dev consumer has no vendored framework: `<platform>/*/Frameworks/` is
+// gitignored, so it is not in the package archive. CocoaPods used to cover that
+// by downloading it in `prepare_command`, but SwiftPM never runs a podspec —
+// and `nitro` is SPM-only, so CocoaPods is not even available as a fallback.
+// Such a consumer got the SDK's libcurl on macOS (no HTTP/3, brotli or zstd)
+// and, on iOS, undefined `curl_*` symbols.
+//
+// A checksum-pinned `.binaryTarget(url:checksum:)` closes that: SwiftPM
+// downloads and verifies the archive itself. The manifest previously refused
+// URL targets because pointing one at a release that did not exist yet hung
+// `xcodebuild -resolvePackageDependencies` — that reasoning held while no deps
+// release existed. One does now, and the pin below is only ever read from
+// deps/versions.cmake, so a URL is never fabricated for a missing release.
+func nitroHttpPin(_ key: String) -> String? {
+    let versions = packageDirectory
+        .deletingLastPathComponent()   // <platform>
+        .deletingLastPathComponent()   // package root
+        .appendingPathComponent("deps")
+        .appendingPathComponent("versions.cmake")
+    guard let text = try? String(contentsOf: versions, encoding: .utf8) else { return nil }
+    for line in text.split(separator: "\n") where line.contains(key) {
+        guard let open = line.firstIndex(of: "\"") else { continue }
+        let rest = line[line.index(after: open)...]
+        guard let close = rest.firstIndex(of: "\"") else { continue }
+        let value = String(rest[..<close])
+        if !value.isEmpty { return value }
+    }
+    return nil
+}
+
+let curlRelease = nitroHttpPin("NITRO_HTTP_DEPS_RELEASE")
+let curlChecksum = nitroHttpPin("NH_APPLE_XCFRAMEWORK_ZIP_SHA256")
+
+// Three states, decided once: a local slice, a pinned download, or the SDK.
+enum NitroCurlSource { case vendored, remote, sdk }
+let curlSource: NitroCurlSource = {
+    if hasVendoredCurl { return .vendored }
+    if curlRelease != nil && curlChecksum != nil { return .remote }
+    return .sdk   // no pin recorded yet — resolution must still succeed offline
+}()
+let usesNitroCurl = curlSource != .sdk
 
 // curl headers come from the xcframework when it is present: SwiftPM adds a
 // binary target's HeadersPath to its dependents' include path, so
@@ -89,7 +145,7 @@ var linkerSettings: [LinkerSetting] = [
     .linkedFramework("SystemConfiguration"),
 ]
 
-if hasVendoredCurl {
+if usesNitroCurl {
     // src/engine/ContentDecoder does the inflating itself — libcurl's own
     // content decoding is switched off — so these macros track what is LINKED,
     // not what curl advertises. The vendored slice always ships libbrotlidec and
@@ -124,7 +180,7 @@ let package = Package(
         // fails outright.
         .library(
             name: "nitro-http",
-            targets: hasVendoredCurl
+            targets: usesNitroCurl
                 ? ["NitroHttpCpp", "NitroCurl"]
                 : ["NitroHttpCpp"]
         ),
@@ -137,22 +193,33 @@ let package = Package(
         // path may escape the package root (SwiftPM forbids that).
         .target(
             name: "NitroHttpCpp",
-            dependencies: hasVendoredCurl ? ["NitroCurl"] : [],
+            dependencies: usesNitroCurl ? ["NitroCurl"] : [],
             path: "Sources/NitroHttpCpp",
             publicHeadersPath: "include",
             cxxSettings: cxxSettings,
             linkerSettings: linkerSettings
         ),
         // libcurl + nghttp2 + ngtcp2/nghttp3 + BoringSSL + brotli + zstd, merged
-        // into one xcframework by .github/workflows/build-deps.yml. Referenced
-        // by PATH, never by URL, so resolution stays offline; the target is
-        // omitted entirely when the directory is absent.
-        .binaryTarget(
-            name: "NitroCurl",
-            path: "../Frameworks/NitroCurl.xcframework"
-        ),
+        // into one xcframework by .github/workflows/build-deps.yml.
+        //
+        // A local slice wins when present, so an air-gapped or repo build never
+        // touches the network. Otherwise SwiftPM fetches the pinned release and
+        // verifies the checksum itself. The target is dropped entirely when
+        // neither is available, leaving the SDK's libcurl (macOS) — resolution
+        // still succeeds so a Dart-only consumer is never blocked.
+        curlSource == .vendored
+            ? .binaryTarget(
+                name: "NitroCurl",
+                path: "Frameworks/NitroCurl.xcframework"
+              )
+            : .binaryTarget(
+                name: "NitroCurl",
+                url: "https://github.com/Shreemanarjun/nitro_http/releases/download/"
+                   + "\(curlRelease ?? "")/NitroCurl.xcframework.zip",
+                checksum: curlChecksum ?? ""
+              ),
     ].filter { target in
-        hasVendoredCurl || target.name != "NitroCurl"
+        usesNitroCurl || target.name != "NitroCurl"
     },
     cxxLanguageStandard: .cxx17
 )

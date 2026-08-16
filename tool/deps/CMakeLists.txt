@@ -58,8 +58,43 @@ foreach(_p "${CMAKE_INSTALL_PREFIX}" "${CMAKE_BINARY_DIR}" "${CMAKE_CURRENT_LIST
 endforeach()
 
 set(NH_PREFIX "${CMAKE_INSTALL_PREFIX}")
-set(NH_DL     "${CMAKE_BINARY_DIR}/downloads")
 set(NH_TOOLS  "${CMAKE_CURRENT_LIST_DIR}")
+
+# ── Cross-slice cache ────────────────────────────────────────────────────────
+# CMAKE_BINARY_DIR is per-slice (out/build/<slice>), so anything derived from it
+# is fetched again for every slice — five times for `apple`, three for
+# `android` — even though sources do not depend on the target architecture.
+# Only the BUILD is per-arch. Measured per slice: 8.7 MB of tarballs and a
+# 316 MB BoringSSL checkout, 63 MB of it git objects over the network.
+#
+# NH_CACHE_DIR (passed by build.sh as out/cache) shares the expensive half.
+# Leaving it unset keeps everything per-slice, which is what a one-off
+# `cmake -S tool/deps` invocation wants.
+#
+# DOWNLOAD_DIR stays PER-SLICE deliberately. Sharing it across slices looks like
+# free bandwidth, and it is — right up until the slices run concurrently, which
+# tool/build-curl.sh now does. ExternalProject downloads straight to the target
+# path, so two slices fetching the same archive clobber each other and the
+# survivor fails verification:
+#
+#   -- [download 100% complete]
+#   -- verifying file...
+#   CMake Error: file SHA256 failed to read file "…/nghttp2-1.70.0.tar.xz":
+#     No such file or directory
+#
+# All three Android slices died that way. The tarballs are only ~8.7 MB total;
+# BoringSSL is ~63 MB of the ~70 MB, and that IS shared below through a git
+# mirror, which git makes safe with a lock. Re-fetching 8.7 MB per slice buys
+# back a whole class of race for a rounding error.
+set(NH_DL "${CMAKE_BINARY_DIR}/downloads")
+
+# Where BoringSSL's objects come from. A bare mirror under the cache when one
+# exists, upstream otherwise — see the DOWNLOAD_COMMAND on nh_boringssl.
+set(NH_BORINGSSL_ORIGIN "https://github.com/google/boringssl.git")
+if(NH_CACHE_DIR AND EXISTS "${NH_CACHE_DIR}/boringssl.git")
+  set(NH_BORINGSSL_ORIGIN "${NH_CACHE_DIR}/boringssl.git")
+  message(STATUS "nitro_http deps: BoringSSL from local mirror ${NH_BORINGSSL_ORIGIN}")
+endif()
 
 # BoringSSL's symbol-prefix flow lives in prefix_symbols.sh so that there is one
 # implementation of it, usable both here and by hand. That costs us a bash
@@ -274,9 +309,15 @@ endfunction()
 # linker — different struct layouts, immediate memory corruption.
 ExternalProject_Add(nh_boringssl
   ${NH_EP_DEFAULTS}
+  # Fetched from a local mirror when build.sh primed one, and straight from
+  # GitHub otherwise. The commit is pinned either way, so the mirror changes
+  # only where the objects come from — a slice still checks out exactly
+  # NH_BORINGSSL_COMMIT. This is the single biggest saving in a multi-slice
+  # build: without it every slice pulls ~62 MB of git objects over the network
+  # for a source tree that is identical across architectures.
   DOWNLOAD_COMMAND  "${GIT_EXECUTABLE}" init --quiet <SOURCE_DIR>
             COMMAND "${GIT_EXECUTABLE}" -C <SOURCE_DIR> fetch --quiet --depth 1
-                    https://github.com/google/boringssl.git "${NH_BORINGSSL_COMMIT}"
+                    "${NH_BORINGSSL_ORIGIN}" "${NH_BORINGSSL_COMMIT}"
             COMMAND "${GIT_EXECUTABLE}" -C <SOURCE_DIR> checkout --quiet --force FETCH_HEAD
   CONFIGURE_COMMAND ""
   BUILD_COMMAND     "${NH_BASH}" "${NH_TOOLS}/prefix_symbols.sh"
@@ -336,7 +377,12 @@ set(NH_LAST nh_nghttp2)
 nh_add_normalize_step(nh_nghttp2 OFF)
 
 # ── 4./5. nghttp3 + ngtcp2 (HTTP/3) ──────────────────────────────────────────
-# Roughly 40 % of a slice's byte size. NITRO_HTTP_ENABLE_HTTP3=OFF is the
+# Turning this OFF drops two of the eight sub-projects (nghttp3 and ngtcp2) and
+# ~10 % of the staged archives — but only ~0.4 MB, about 9 %, off the linked
+# .so, because -Wl,--gc-sections already discards the QUIC code nothing calls.
+# Measured on android-arm64-v8a: 4.53 MB -> 4.15 MB stripped. This comment used
+# to claim 40 %; that was never true of any artifact that ships.
+# NITRO_HTTP_ENABLE_HTTP3=OFF is the
 # documented escape hatch for size-sensitive apps; the engine already reports
 # h3 availability from curl_version_info() at runtime, so the Dart API behaves
 # correctly either way.

@@ -375,12 +375,14 @@ jobs:
         run: tool/build-curl.sh apple
 
       # With SwiftPM enabled (the Flutter default) the podspec never runs, so
-      # Package.swift must find ios/Frameworks/NitroCurl.xcframework by path —
-      # merge_apple.sh vendors it there. A cache saved by an older script holds
-      # only the per-arch slices; re-merging is seconds when those exist.
+      # Package.swift must find the xcframework by path — merge_apple.sh vendors
+      # it INSIDE the SwiftPM package (ios/nitro_http/Frameworks/), because a
+      # binary target's path may not escape the package root through Flutter's
+      # .packages symlink. A cache saved by an older script holds only the
+      # per-arch slices; re-merging is seconds when those exist.
       - name: Ensure NitroCurl.xcframework is vendored
         run: |
-          [ -d ios/Frameworks/NitroCurl.xcframework ] || tool/deps/merge_apple.sh
+          [ -d ios/nitro_http/Frameworks/NitroCurl.xcframework ] || tool/deps/merge_apple.sh
 
       - uses: dtolnay/rust-toolchain@stable
 

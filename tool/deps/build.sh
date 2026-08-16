@@ -37,7 +37,7 @@ usage: build.sh --platform <p> --arch <a> [options]
                linux     : x64 | arm64
   --out DIR    output root (default: tool/deps/out)
   --no-http3   skip ngtcp2 + nghttp3 and build curl without HTTP/3
-               (~40% smaller; the engine reports h3 unavailable at runtime)
+               (~0.4 MB / ~9% smaller .so; h3 reported unavailable at runtime)
   --jobs N     parallel build jobs (default: detected core count)
   --clean      delete the build and stage trees for this slice first
 EOF
@@ -180,9 +180,62 @@ fi
 
 echo "==> nitro_http deps: $STAGE_NAME (http3=$HTTP3, generator=$GENERATOR, jobs=$JOBS)"
 
+# ── Cross-slice cache ────────────────────────────────────────────────────────
+# Sources do not vary by architecture, only builds do, so every slice after the
+# first should be a cache hit rather than another download. Priming the
+# BoringSSL mirror here — once, before the first slice needs it — turns the
+# per-slice ~62 MB network clone into a local object copy.
+CACHE_DIR="${NITRO_HTTP_DEPS_CACHE:-$OUT/cache}"
+mkdir -p "$CACHE_DIR"
+
+# The commit is read from deps/versions.cmake rather than duplicated here —
+# that file is the single source of truth, and a second copy of a 40-character
+# hash is a silent-drift bug waiting to happen.
+BORINGSSL_COMMIT=$(sed -n \
+  's/^set(NH_BORINGSSL_COMMIT[[:space:]]*\([0-9a-f]\{40\}\).*/\1/p' \
+  "$HERE/../../deps/versions.cmake" | head -1)
+[ -n "$BORINGSSL_COMMIT" ] || die \
+  "could not read NH_BORINGSSL_COMMIT from deps/versions.cmake"
+
+BORINGSSL_MIRROR="$CACHE_DIR/boringssl.git"
+
+# Priming the mirror is a critical section, because tool/build-curl.sh runs
+# slices CONCURRENTLY and they all share this one directory. Without a lock the
+# first parallel Android build failed exactly this way: one slice died in
+# `git init` copying hook templates over another's ("File exists"), a second on
+# `shallow.lock` mid-fetch, and only the slice that happened to win produced
+# libraries. Reading FROM the mirror afterwards needs no lock — concurrent
+# fetches only read it.
+#
+# mkdir is atomic on POSIX, which makes it the portable lock primitive; the EXIT
+# trap releases it even when `die` fires inside the section.
+NH_LOCK="$CACHE_DIR/.boringssl.lock"
+waited=0
+while ! mkdir "$NH_LOCK" 2>/dev/null; do
+  waited=$((waited + 1))
+  [ "$waited" -gt 900 ] && die \
+    "timed out waiting for $NH_LOCK — delete it if a previous build was killed"
+  sleep 1
+done
+trap 'rmdir "$NH_LOCK" 2>/dev/null || true' EXIT
+
+[ -d "$BORINGSSL_MIRROR" ] || git init --bare --quiet "$BORINGSSL_MIRROR"
+# Cheap on every slice after the first: the object is already present, so this
+# is a local ref check rather than a transfer.
+if ! git -C "$BORINGSSL_MIRROR" cat-file -e "${BORINGSSL_COMMIT}^{commit}" 2>/dev/null; then
+  echo "==> priming BoringSSL mirror once for every slice (${BORINGSSL_COMMIT:0:12})"
+  git -C "$BORINGSSL_MIRROR" fetch --quiet --depth 1 \
+    https://github.com/google/boringssl.git "$BORINGSSL_COMMIT" \
+    || die "could not fetch BoringSSL $BORINGSSL_COMMIT into $BORINGSSL_MIRROR"
+fi
+
+rmdir "$NH_LOCK" 2>/dev/null || true
+trap - EXIT
+
 cmake -S "$HERE" -B "$BUILD_DIR" -G "$GENERATOR" \
   "-DCMAKE_INSTALL_PREFIX=$STAGE_DIR" \
   "-DNITRO_HTTP_ENABLE_HTTP3=$HTTP3" \
+  "-DNH_CACHE_DIR=$CACHE_DIR" \
   "${TOOLCHAIN_ARGS[@]}"
 
 cmake --build "$BUILD_DIR" --parallel "$JOBS"

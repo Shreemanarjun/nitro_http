@@ -27,16 +27,18 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 DEPS=tool/deps
 
 usage() {
-  echo "usage: tool/build-curl.sh [apple|android|linux|all] [--list] [build.sh flags]" >&2
+  echo "usage: tool/build-curl.sh [apple|android|linux|all] [--list] [--serial] [build.sh flags]" >&2
   exit 2
 }
 
 LIST_ONLY=0
+SERIAL=0
 TARGET=""
 EXTRA=()
 for arg in "$@"; do
   case "$arg" in
     --list) LIST_ONLY=1 ;;
+    --serial) SERIAL=1 ;;   # one slice at a time, live output — for debugging
     apple|android|linux|all) [ -n "$TARGET" ] && usage; TARGET="$arg" ;;
     -*) EXTRA+=("$arg") ;;   # forwarded to build.sh (e.g. --no-http3)
     *) usage ;;
@@ -92,13 +94,92 @@ if plan "$TARGET" | grep -q "platform android" && [ -z "${ANDROID_NDK_HOME:-}" ]
   done
 fi
 
-plan "$TARGET" | while read -r cmd; do
-  # Extra flags apply to build.sh slices, not to the merge step.
-  flags=""
-  case "$cmd" in build.sh*) flags="${EXTRA[*]:-}" ;; esac
-  echo "==> $DEPS/$cmd $flags"
+# ── Run the slices ───────────────────────────────────────────────────────────
+# Slices are independent of one another, but each one internally is a strict
+# chain: boringssl → zlib → nghttp2 → nghttp3 → ngtcp2 → brotli → zstd → curl.
+# Only one link builds at a time, and the small links do not parallelise, so a
+# single slice leaves most of the machine idle no matter how high --jobs goes.
+# Running the slices together fills it instead.
+#
+# Cores are divided between them rather than handed to each, so the total stays
+# at roughly one job per core; oversubscribing turns a build into swap.
+#
+# Output would interleave into nonsense, so each slice writes to its own log and
+# the log is replayed when it finishes. --serial restores one-at-a-time output,
+# which is what you want when a slice is failing and you need to watch it.
+CORES=2
+if command -v nproc >/dev/null 2>&1; then CORES="$(nproc)"
+elif command -v sysctl >/dev/null 2>&1; then CORES="$(sysctl -n hw.ncpu)"; fi
+
+SLICES=()
+POST=()
+while read -r cmd; do
+  case "$cmd" in build.sh*) SLICES+=("$cmd") ;; *) POST+=("$cmd") ;; esac
+done <<EOF
+$(plan "$TARGET")
+EOF
+
+if [ "$SERIAL" = 1 ] || [ "${#SLICES[@]}" -le 1 ]; then
+  for cmd in ${SLICES[@]+"${SLICES[@]}"}; do
+    echo "==> $DEPS/$cmd ${EXTRA[*]:-}"
+    # shellcheck disable=SC2086
+    (cd "$DEPS" && ./${cmd} ${EXTRA[*]:-})
+  done
+else
+  # Ceiling, not floor. Flooring 8 cores over 5 slices gives 1 job each and
+  # leaves the machine at ~5/8 busy, because a slice is idle whenever it is
+  # configuring, downloading or linking rather than compiling. Rounding up
+  # oversubscribes slightly on purpose so those gaps get filled.
+  per=$(( (CORES + ${#SLICES[@]} - 1) / ${#SLICES[@]} )); [ "$per" -lt 1 ] && per=1
+  echo "==> ${#SLICES[@]} slices in parallel, $per job(s) each (of $CORES cores)"
+  echo "    --serial builds them one at a time with live output"
+  mkdir -p "$DEPS/out/logs"
+  pids=()
+  names=()
+  for cmd in ${SLICES[@]+"${SLICES[@]}"}; do
+    # Name the log after the slice, not the index, so a failure is findable.
+    name=$(echo "$cmd" | sed 's/.*--platform \([^ ]*\).*--arch \([^ ]*\).*/\1-\2/')
+    log="$DEPS/out/logs/$name.log"
+    echo "    $name -> $log"
+    # shellcheck disable=SC2086
+    (cd "$DEPS" && ./${cmd} --jobs "$per" ${EXTRA[*]:-}) >"$log" 2>&1 &
+    pids+=("$!")
+    names+=("$name")
+  done
+  # bash 3.2 on macOS has no `wait -n`, so wait on each pid in turn and keep
+  # going after a failure — reporting every broken slice beats reporting the
+  # first one and hiding the rest.
+  failed=()
+  i=0
+  while [ "$i" -lt "${#pids[@]}" ]; do
+    if wait "${pids[$i]}"; then
+      echo "==> ok   ${names[$i]}"
+    else
+      echo "==> FAIL ${names[$i]}  (see $DEPS/out/logs/${names[$i]}.log)"
+      failed+=("${names[$i]}")
+    fi
+    i=$((i + 1))
+  done
+  if [ "${#failed[@]}" -gt 0 ]; then
+    echo
+    echo "${#failed[@]} slice(s) failed: ${failed[*]}"
+    for n in ${failed[@]+"${failed[@]}"}; do
+      echo "── tail of $n ──"
+      tail -25 "$DEPS/out/logs/$n.log"
+    done
+    exit 1
+  fi
+fi
+
+# The merge folds finished slices together, so it can only run once they are all
+# present — never inside the parallel section above.
+# bash 3.2 reads "${arr[@]}" on an EMPTY array as an unbound variable under
+# `set -u`, and POST is empty for every target except apple — so this needs
+# the ${arr[@]+...} guard or android/linux abort here rather than finishing.
+for cmd in ${POST[@]+"${POST[@]}"}; do
+  echo "==> $DEPS/$cmd"
   # shellcheck disable=SC2086
-  (cd "$DEPS" && ./${cmd} $flags)
+  (cd "$DEPS" && ./${cmd})
 done
 
 echo

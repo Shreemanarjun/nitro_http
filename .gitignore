@@ -33,8 +33,8 @@ migrate_working_dir/
 /coverage/
 
 # Prebuilt native dependencies, fetched and SHA-256-verified at build time.
-/ios/Frameworks/
-/macos/Frameworks/
+/ios/nitro_http/Frameworks/
+/macos/nitro_http/Frameworks/
 /.nitro_http_deps/
 
 # The dependency superbuild's output. `tool/deps/build.sh` defaults its --out to

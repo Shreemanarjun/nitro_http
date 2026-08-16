@@ -30,8 +30,7 @@ android {
         // ANDROID_ABI/ANDROID_PLATFORM, and ANDROID_STL defaults to
         // c++_shared, which is what a Flutter app wants — every plugin .so in
         // the APK then shares one libc++_shared.so instead of statically
-        // duplicating the runtime. Nor are abiFilters set: restricting ABIs is
-        // the *app's* call, not a plugin's.
+        // duplicating the runtime.
         cmake { path = "../src/CMakeLists.txt" }
     }
 
@@ -53,6 +52,38 @@ android {
     defaultConfig {
         consumerProguardFiles "consumer-rules.pro"
         minSdk = 24
+
+        ndk {
+            // The three ABIs deps/versions.cmake pins a libcurl slice for.
+            //
+            // Restricting ABIs is normally the app's call, not a plugin's — but
+            // this plugin CANNOT build an ABI it has no prebuilt dependency
+            // for, so this is a constraint rather than a policy.
+            //
+            // Without it the build breaks, and not obviously. Flutter applies
+            // its own abiFilters to the APP module's buildTypes, and that does
+            // not reach a library module's externalNativeBuild. A library with
+            // no filters gets the NDK's default set, which is FOUR ABIs — the
+            // three below plus 32-bit `x86` (`default: true` in the NDK's
+            // meta/abis.json). AGP then really does create a
+            // `buildCMakeDebug[x86]` task for this plugin.
+            //
+            // That task has no slice to download: there is no
+            // NH_SLICE_android-x86_SHA256, so src/deps.cmake falls through to
+            // its system-libcurl path, and Android has no system libcurl. The
+            // failure surfaces as `#include <curl/curl.h>` not found — which
+            // points at the engine sources rather than at a missing pin four
+            // files away.
+            //
+            // Nothing is lost by excluding it. Flutter's PLATFORM_ARCH_MAP maps
+            // only android-arm/arm64/x64 to armeabi-v7a/arm64-v8a/x86_64 and
+            // throws on anything else, so no Flutter app can target 32-bit x86
+            // in the first place. This list IS Flutter's full supported set.
+            //
+            // If a slice for a new ABI is ever published, add the pin to
+            // deps/versions.cmake and the ABI here, together.
+            abiFilters "arm64-v8a", "armeabi-v7a", "x86_64"
+        }
     }
 }
 

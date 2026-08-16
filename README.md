@@ -64,7 +64,7 @@ identically on all five. There is no "works differently on Android".
   in production.
 - **Drop-in adapters.** Already on `package:http` or `dio`? Change one line and
   keep every call site.
-- **Honest about limits.** No web, HTTP/1.1-only WebSockets, ~1.5–3 MB per ABI.
+- **Honest about limits.** No web, HTTP/1.1-only WebSockets, ~3–4.8 MB per ABI.
   All of it in [Limitations](#limitations), not buried.
 
 ## How fast is it
@@ -807,7 +807,9 @@ TLS, proxies and DNS-over-HTTPS have more to them than fits here — see
   does not implement it, and neither does reqwest.
 - **Cookies have no public-suffix list**, so do not treat the jar as a security
   boundary against a hostile server.
-- **Binary size is roughly 1.5–3 MB per ABI** with the bundled native stack.
+- **Binary size is 3.0–4.8 MB per ABI** with the bundled native stack — measured
+  in a release APK: 2.96 MB armeabi-v7a, 4.53 MB arm64-v8a, 4.76 MB x86_64.
+  Building the dependencies with `--no-http3` saves about 0.4 MB of that.
 - **It is a 0.0.x release.** The API is complete and tested, but it has not yet
   been through a wide range of real apps, so treat breaking changes in a minor
   version as possible until 1.0.

@@ -14,7 +14,7 @@
 nitro_curl_fetch = <<~'SH'
   set -eu
 
-  frameworks_dir="Frameworks"
+  frameworks_dir="nitro_http/Frameworks"
   framework="$frameworks_dir/NitroCurl.xcframework"
   archive_name="NitroCurl.xcframework.zip"
 
@@ -85,7 +85,7 @@ nitro_curl_fetch = <<~'SH'
     echo "warning: nitro_http:   1. Build with network access so this step can fetch $url" >&2
     echo "warning: nitro_http:   2. Build the binary yourself (tool/deps/build.sh --platform macos --arch arm64," >&2
     echo "warning: nitro_http:      then tool/deps/merge_apple.sh) and export NITRO_HTTP_DEPS_DIR=<dir holding NitroCurl.xcframework>" >&2
-    echo "warning: nitro_http:   3. Download $archive_name by hand and unzip it into macos/Frameworks/" >&2
+    echo "warning: nitro_http:   3. Download $archive_name by hand and unzip it into macos/nitro_http/Frameworks/" >&2
     echo "warning: nitro_http: Installation continues; only the Dart layer of nitro_http is usable until then." >&2
     exit 0
   }
@@ -118,11 +118,30 @@ nitro_curl_fetch = <<~'SH'
     # An empty pin means no deps release has been cut yet; refusing to download
     # is better than trusting an unverified archive.
     [ -n "${expected:-}" ] || giveup "no SHA-256 is pinned for the Apple slice in deps/versions.cmake yet."
-    tmp=$(mktemp -d)
-    echo "nitro_http: downloading $url"
-    curl -fsSL --retry 3 --connect-timeout 15 -o "$tmp/$archive_name" "$url" \
-      || giveup "download failed (no network, or the $release release has no Apple artifact)."
-    archive="$tmp/$archive_name"
+
+    # Cached in a USER-level directory keyed by the release tag, matching
+    # src/deps.cmake. This archive is ~18 MB and used to land in `mktemp -d`,
+    # so it was re-downloaded on every `pod install` in a new project and on
+    # every nitro_http upgrade — even though deps-v1 has not moved across any
+    # release so far. The pin makes the cache safe: a hit is only a hit when
+    # the bytes already match the SHA-256 we are about to verify anyway.
+    cache="${NITRO_HTTP_DEPS_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/nitro_http/deps}/$release"
+    cached="$cache/$archive_name"
+    if [ -f "$cached" ] && \
+       [ "$(shasum -a 256 "$cached" 2>/dev/null | awk '{print $1}')" = "$expected" ]; then
+      echo "nitro_http: using cached $archive_name ($cache)"
+      archive="$cached"
+    else
+      mkdir -p "$cache" 2>/dev/null || cache=$(mktemp -d)   # unwritable HOME: still build
+      cached="$cache/$archive_name"
+      echo "nitro_http: downloading $url"
+      # Download to .part and rename, so a concurrent `pod install` never sees
+      # a half-written archive and treats it as a cache hit.
+      curl -fsSL --retry 3 --connect-timeout 15 -o "$cached.part" "$url" \
+        || giveup "download failed (no network, or the $release release has no Apple artifact)."
+      mv -f "$cached.part" "$cached"
+      archive="$cached"
+    fi
   fi
 
   if [ -n "${expected:-}" ]; then
@@ -170,7 +189,7 @@ overrides and DoH, cookies, a disk cache, and WebSockets.
   # source is listed here.
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
-  s.preserve_paths = 'Frameworks/**/*'
+  s.preserve_paths = 'nitro_http/Frameworks/**/*'
   s.dependency 'FlutterMacOS'
   s.platform = :osx, '10.15'
   s.dependency 'nitro'
@@ -182,7 +201,7 @@ overrides and DoH, cookies, a disk cache, and WebSockets.
   have_vendored_curl =
     File.directory?(File.join(__dir__, 'Frameworks', 'NitroCurl.xcframework'))
   if have_vendored_curl
-    s.vendored_frameworks = 'Frameworks/NitroCurl.xcframework'
+    s.vendored_frameworks = 'nitro_http/Frameworks/NitroCurl.xcframework'
   end
 
   # z + resolv: libcurl's zlib transfer decoding and its threaded resolver.
@@ -211,7 +230,7 @@ overrides and DoH, cookies, a disk cache, and WebSockets.
     # The trailing `/**` on the xcframework makes Xcode search every slice
     # recursively, so `#include <curl/curl.h>` resolves without hardcoding a
     # slice directory name (macos-arm64_x86_64, …).
-    'HEADER_SEARCH_PATHS' => '$(inherited) "${PODS_ROOT}/../Flutter/ephemeral/.symlinks/plugins/nitro/src/native" "${PODS_TARGET_SRCROOT}/../src" "${PODS_TARGET_SRCROOT}/../src/engine" "${PODS_TARGET_SRCROOT}/../lib/src/generated/cpp" "${PODS_TARGET_SRCROOT}/Frameworks/NitroCurl.xcframework/**"'
+    'HEADER_SEARCH_PATHS' => '$(inherited) "${PODS_ROOT}/../Flutter/ephemeral/.symlinks/plugins/nitro/src/native" "${PODS_TARGET_SRCROOT}/../src" "${PODS_TARGET_SRCROOT}/../src/engine" "${PODS_TARGET_SRCROOT}/../lib/src/generated/cpp" "${PODS_TARGET_SRCROOT}/nitro_http/Frameworks/NitroCurl.xcframework/**"'
   }
   s.swift_version = '5.9'
 end

@@ -103,7 +103,9 @@ release builds on real hardware, are in the README.
   security boundary against a hostile server.
 * **`TlsSettings.sniHostname` is accepted but not applied.** It round-trips
   through the configuration; the engine does not yet override SNI from it.
-* **Binary size** is roughly 1.5–3 MB per ABI with the vendored stack. Building
-  the dependencies with `--no-http3` removes about 40 % of that.
+* **Binary size** is 3.0–4.8 MB per ABI with the vendored stack (release APK:
+  2.96 MB armeabi-v7a, 4.53 MB arm64-v8a, 4.76 MB x86_64). Building the
+  dependencies with `--no-http3` saves about 0.4 MB, not the 40 % this entry
+  claimed at 0.0.1 — see 0.0.4.
 * **Prebuilt binaries cover x64 and arm64 only.** Windows arm64 has no slice and
   needs a system libcurl, or one built locally with `tool/deps/build.ps1`.

@@ -142,16 +142,16 @@ cp -R "$XCF" "$STAGE/NitroCurl.xcframework"
 # CocoaPods alike, in-repo and in the pub cache.
 ROOT="$(cd "$HERE/../.." && pwd)"
 for platform in ios macos; do
-  mkdir -p "$ROOT/$platform/Frameworks"
-  rm -rf "$ROOT/$platform/Frameworks/NitroCurl.xcframework"
-  cp -R "$XCF" "$ROOT/$platform/Frameworks/NitroCurl.xcframework"
+  mkdir -p "$ROOT/$platform/nitro_http/Frameworks"
+  rm -rf "$ROOT/$platform/nitro_http/Frameworks/NitroCurl.xcframework"
+  cp -R "$XCF" "$ROOT/$platform/nitro_http/Frameworks/NitroCurl.xcframework"
   # Record that this build put it here. The podspecs replace a framework they
   # installed themselves when the pin moves, but must never delete one somebody
   # built on purpose — an unstamped directory is indistinguishable from a stale
   # one, and a local build is exactly what you cannot re-download.
   printf 'local-build=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    > "$ROOT/$platform/Frameworks/.nitro_curl_provenance"
-  echo "==> vendored into $platform/Frameworks/NitroCurl.xcframework"
+    > "$ROOT/$platform/nitro_http/Frameworks/.nitro_curl_provenance"
+  echo "==> vendored into $platform/nitro_http/Frameworks/NitroCurl.xcframework"
 done
 
 # ── The `apple-xcframework` CMake slice ──────────────────────────────────────

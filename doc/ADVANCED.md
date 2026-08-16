@@ -275,7 +275,9 @@ flutter pub run nitro_http:build_curl --list   # print the plan, build nothing
 ```
 
 On Windows the same command runs `tool/deps/build.ps1` (VS 2022 x64, NASM,
-Ninja). Add `--no-http3` to drop QUIC, which is roughly 40 % of the binary; the
+Ninja). Add `--no-http3` to drop QUIC, worth about 0.4 MB per ABI — ~9 % of the
+linked `.so`, not the 40 % this once claimed, because `-Wl,--gc-sections`
+already discards the QUIC code nothing references; the
 engine then reports HTTP/3 as unavailable instead of failing. For per-slice
 control, pinned component versions, or offline setups, see `tool/deps/` — the
 scripts there are what this command runs.

@@ -19,6 +19,30 @@ if(NOT "${_NITRO_CFG}" MATCHES "^(DEBUG|RELEASE|RELWITHDEBINFO|MINSIZEREL|)$")
   set(CMAKE_CXX_FLAGS_${_NITRO_CFG} "-O3 -DNDEBUG")
 endif()
 
+# ── Optimization-level override, for A/B measurement only ────────────────────
+# AGP maps the release variant to RelWithDebInfo, whose CMake default is
+# `-O2 -g -DNDEBUG`, so the engine ships at -O2. Setting NITRO_HTTP_OPT_LEVEL
+# (env or -D) swaps that level for the ACTIVE config, which is what makes an
+# -O2-vs--O3 benchmark reproducible instead of a one-off patch someone has to
+# re-derive.
+#
+# It deliberately rewrites only the -O token and leaves -g/-DNDEBUG alone, so a
+# measurement differs from the shipping build in exactly one dimension.
+# Unset — the normal case — changes nothing.
+if(NOT NITRO_HTTP_OPT_LEVEL AND DEFINED ENV{NITRO_HTTP_OPT_LEVEL})
+  set(NITRO_HTTP_OPT_LEVEL "$ENV{NITRO_HTTP_OPT_LEVEL}")
+endif()
+if(NITRO_HTTP_OPT_LEVEL AND _NITRO_CFG)
+  foreach(_lang C CXX)
+    string(REGEX REPLACE "-O[0-3sgz]+" "${NITRO_HTTP_OPT_LEVEL}"
+           _nitro_patched "${CMAKE_${_lang}_FLAGS_${_NITRO_CFG}}")
+    set(CMAKE_${_lang}_FLAGS_${_NITRO_CFG} "${_nitro_patched}")
+  endforeach()
+  message(STATUS
+    "nitro_http: engine optimization overridden to ${NITRO_HTTP_OPT_LEVEL} "
+    "(${_NITRO_CFG}: ${CMAKE_CXX_FLAGS_${_NITRO_CFG}})")
+endif()
+
 set(NITRO_NATIVE "${CMAKE_CURRENT_SOURCE_DIR}/native")
 # NITRO_LINK_SPEC_CHECKSUM 532789d18515e810
 set(GENERATED_CPP "${CMAKE_CURRENT_SOURCE_DIR}/../lib/src/generated/cpp")

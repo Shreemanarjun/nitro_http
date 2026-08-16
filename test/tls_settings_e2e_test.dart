@@ -104,6 +104,19 @@ void main() {
       );
     }, skip: skipReason);
 
+    test('verifyCertificates:false accepts the untrusted chain', () async {
+      // The counterpart to the control above: the same server, the same lack of
+      // a trusted root, but verification switched off.
+      client = NitroHttpClient(
+        settings: const ClientSettings(
+          timeout: Duration(seconds: 20),
+          throwOnStatusCode: false,
+          tlsSettings: TlsSettings.insecure(),
+        ),
+      );
+      expect((await client!.get(server.url('/insecure'))).statusCode, 200);
+    }, skip: skipReason);
+
     // ── SPKI pinning ─────────────────────────────────────────────────────────
     // A pin that is silently ignored is worse than no pin: the app believes it
     // is protected. Both directions are asserted for that reason.
@@ -149,8 +162,8 @@ void main() {
       );
       await expectLater(
         client!.get(server.url('/none')),
-        throwsA(isA<NitroHttpException>()),
-        reason: 'a request with no trust anchors must not succeed',
+        throwsA(isA<NitroHttpConfigurationException>()),
+        reason: 'refused settings, not an unknown transport fault',
       );
     }, skip: skipReason);
 
@@ -201,6 +214,25 @@ void main() {
       final res = await trusting(minVersion: TlsVersion.tls13)
           .get(server.url('/v13'));
       expect(res.statusCode, 200);
+    }, skip: skipReason);
+
+    test('an unsatisfiable version range is rejected', () async {
+      // maxVersion below minVersion can never be met, so the engine refuses it
+      // rather than opening a connection that must fail. Needs no server: it is
+      // caught before a socket exists.
+      client = NitroHttpClient(
+        settings: const ClientSettings(
+          timeout: Duration(seconds: 20),
+          tlsSettings: TlsSettings(
+            minVersion: TlsVersion.tls13,
+            maxVersion: TlsVersion.tls12,
+          ),
+        ),
+      );
+      await expectLater(
+        client!.get(server.url('/range')),
+        throwsA(isA<NitroHttpConfigurationException>()),
+      );
     }, skip: skipReason);
 
     // ── Mutual TLS ───────────────────────────────────────────────────────────

@@ -672,12 +672,10 @@ void main() {
           ConnectionFailure.receive,
         ),
       ),
-      RawErrorKind.tlsHandshake: (e) => expect(
-        e,
-        isA<NitroHttpCertificateException>()
-            .having((x) => x.isPinMismatch, 'isPinMismatch', false)
-            .having((x) => x.isClientAuthFailure, 'isClientAuthFailure', false),
-      ),
+      // A handshake that never reached a certificate is NOT a certificate
+      // failure: no shared version or cipher is a different problem with a
+      // different fix, and conflating them sends the reader to the wrong place.
+      RawErrorKind.tlsHandshake: (e) => expect(e, isA<NitroHttpTlsException>()),
       RawErrorKind.certificateInvalid: (e) => expect(
         e,
         isA<NitroHttpCertificateException>()
@@ -713,8 +711,10 @@ void main() {
       RawErrorKind.io: (e) => expect(e, isA<NitroHttpUnknownException>()),
       RawErrorKind.engineError: (e) =>
           expect(e, isA<NitroHttpUnknownException>()),
+      // Settings the engine refused: a programming error, not a transient
+      // fault, so it must not read as "unknown" and invite a retry.
       RawErrorKind.badRequest: (e) =>
-          expect(e, isA<NitroHttpUnknownException>()),
+          expect(e, isA<NitroHttpConfigurationException>()),
       RawErrorKind.unknown: (e) => expect(e, isA<NitroHttpUnknownException>()),
     };
 

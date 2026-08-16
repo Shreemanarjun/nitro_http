@@ -129,11 +129,15 @@ class RetryPolicy {
         NitroHttpStatusCodeException(:final statusCode) =>
           retryableStatusCodes.contains(statusCode),
         // Everything below is a permanent failure of this request: a rejected
-        // certificate, a redirect loop, a malformed reply, a body that would
-        // not decode, an empty cache under `onlyIfCached`, a disposed client,
-        // or a failure the engine could not classify. Replaying any of them
-        // just spends the retry budget on the same outcome.
+        // certificate, a handshake with no shared version or cipher, a
+        // configuration the engine refused, a redirect loop, a malformed reply,
+        // a body that would not decode, an empty cache under `onlyIfCached`, a
+        // disposed client, or a failure the engine could not classify.
+        // Replaying any of them just spends the retry budget on the same
+        // outcome.
         NitroHttpCertificateException() ||
+        NitroHttpTlsException() ||
+        NitroHttpConfigurationException() ||
         NitroHttpRedirectException() ||
         NitroHttpProtocolException() ||
         NitroHttpDecodingException() ||

@@ -189,6 +189,49 @@ final class NitroHttpStatusCodeException extends NitroHttpException {
 }
 
 /// The peer's TLS certificate was rejected.
+/// The TLS handshake itself failed, before any certificate was judged.
+///
+/// Distinct from [NitroHttpCertificateException] on purpose: a chain that is
+/// untrusted, expired or mispinned is a *trust* decision the caller can often
+/// act on, whereas this means the two ends could not agree on how to talk at
+/// all — no shared protocol version or cipher suite. Clamping
+/// `TlsSettings.minVersion` above what a server offers lands here, and
+/// reporting it as a certificate problem sends the reader looking in entirely
+/// the wrong place.
+final class NitroHttpTlsException extends NitroHttpException {
+  /// Creates a handshake failure.
+  NitroHttpTlsException({
+    super.request,
+    super.message,
+    super.engineMessage,
+    super.engineErrorCode,
+  });
+
+  @override
+  String _describe() => 'TLS handshake failed';
+}
+
+/// The request was rejected before it reached the network because its
+/// configuration cannot be satisfied.
+///
+/// A programming error rather than a transport failure: a PEM with no
+/// certificate in it, a TLS version the linked backend does not know, or
+/// `RootCaSource.none` with no pin to authenticate against. These used to
+/// surface as [NitroHttpUnknownException], which reads like a transient fault
+/// and invites a retry that can never succeed.
+final class NitroHttpConfigurationException extends NitroHttpException {
+  /// Creates a configuration rejection.
+  NitroHttpConfigurationException({
+    super.request,
+    super.message,
+    super.engineMessage,
+    super.engineErrorCode,
+  });
+
+  @override
+  String _describe() => 'Request configuration was rejected';
+}
+
 final class NitroHttpCertificateException extends NitroHttpException {
   /// Creates a certificate failure.
   NitroHttpCertificateException({

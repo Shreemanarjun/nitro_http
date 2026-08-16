@@ -129,6 +129,8 @@ class NitroHttpCompatClient extends http.BaseClient {
           // all `package:http` can express.
           NitroHttpCancelException() ||
           NitroHttpTimeoutException() ||
+          NitroHttpTlsException() ||
+          NitroHttpConfigurationException() ||
           NitroHttpStatusCodeException() ||
           NitroHttpCertificateException() ||
           NitroHttpConnectionException() ||

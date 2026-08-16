@@ -13,6 +13,7 @@ for someone using it. If you only want to make requests, the README is enough.
 - [TLS: versions, roots, pinning, mTLS](#tls-versions-roots-pinning-mtls)
 - [Proxies](#proxies)
 - [DNS overrides and DNS-over-HTTPS](#dns-overrides-and-dns-over-https)
+- [Resuming an interrupted transfer](#resuming-an-interrupted-transfer)
 - [Runtime capabilities and hot restart](#runtime-capabilities-and-hot-restart)
 - [How it compares, feature by feature](#how-it-compares)
 - [Native dependencies and building a slice](#native-dependencies)
@@ -95,9 +96,22 @@ await client.post(
 `RootCaSource.platform` (the default) validates against the operating system
 trust store, honouring user-installed and MDM-deployed roots. `bundled` uses the
 Mozilla CA set compiled into the plugin, `custom` uses only
-`TlsSettings.trustedRootsPem`, and `none` trusts nothing — useful only alongside
-a pin. `TlsSettings.insecure()` exists for local development and logs a warning
-on every request; it must never reach a shipped build.
+`TlsSettings.trustedRootsPem`, and `none` removes every anchor — so it is
+**refused unless a pin is configured**, since without one it would accept any
+certificate rather than none. `TlsSettings.insecure()` exists for local
+development and logs a warning on every request; it must never reach a shipped
+build.
+
+Three failures here are easy to confuse, and each points somewhere different:
+
+| exception | meaning |
+|---|---|
+| `NitroHttpCertificateException` | the chain was judged and rejected — untrusted, expired, or not matching a pin (`isPinMismatch` tells those apart) |
+| `NitroHttpTlsException` | the handshake never reached a certificate: no shared protocol version or cipher, which is what a `minVersion` clamp above the server's ceiling produces |
+| `NitroHttpConfigurationException` | the settings themselves were refused before a socket opened — an unsatisfiable version range, a PEM with no certificate, `none` without a pin |
+
+None of the three is retryable, but only the last is fixed by changing code
+rather than by reaching a different server.
 ### Proxies
 
 ```dart
@@ -132,6 +146,58 @@ const ClientSettings(
 
 Static overrides map onto `CURLOPT_RESOLVE`, so they are keyed by `host:port` —
 which is why the port is part of the settings object rather than guessed.
+### Resuming an interrupted transfer
+
+Resume is a header protocol, and the engine stays out of its way: `Range` and
+`Content-Range` reach the wire untouched, a `206 Partial Content` arrives as a
+206 rather than being normalised to 200, and a partial body is handed over as-is
+instead of being stitched back into a whole one.
+
+Downloading the rest of a file you already have part of:
+
+```dart
+final have = await file.length();
+final response = await client.requestStream(
+  HttpMethod.get,
+  'https://cdn.example.com/large.bin',
+  headers: HttpHeaders.fromMap({'Range': 'bytes=$have-'}),
+);
+
+if (response.statusCode == 206) {
+  final sink = file.openWrite(mode: FileMode.append);
+  await response.body.pipe(sink);        // appends; nothing buffers whole
+} else if (response.statusCode == 200) {
+  // The server ignored the Range header — this is the whole file, so start over.
+  await file.writeAsBytes(await response.body.expand((c) => c).toList());
+}
+```
+
+Check `Accept-Ranges: bytes` on a `HEAD` first if you want to know whether it is
+worth trying. Always handle the 200 case: a server is allowed to ignore `Range`,
+and appending a full body to a partial file is how you get a corrupt download.
+
+Uploading from an offset is the same shape — the source stream starts mid-file
+and the engine neither rewinds it nor recomputes its length:
+
+```dart
+final response = await client.put(
+  'https://uploads.example.com/session/$id',
+  body: HttpBody.stream(
+    file.openRead(offset),
+    contentLength: total - offset,
+  ),
+  headers: HttpHeaders.fromMap({
+    'Content-Range': 'bytes $offset-${total - 1}/$total',
+  }),
+);
+```
+
+What the package does **not** provide is the policy layer above this: there is no
+`download(resume: true)` that checkpoints progress, remembers an upload session
+URL, or decides when to retry. That part depends on your server's resume protocol
+— plain `Range`, RFC 9110 `Content-Range` PUT, tus, or a vendor's session API —
+so it belongs in your code, with `RetryInterceptor` for the backoff.
+
 ### Runtime capabilities and hot restart
 
 One binary has to behave correctly against whatever libcurl it was linked with,

@@ -546,9 +546,7 @@ NitroHttpException mapError({
       engineMessage: message,
       engineErrorCode: engineErrorCode,
     ),
-    RawErrorKind.tlsHandshake => NitroHttpCertificateException(
-      isPinMismatch: false,
-      isClientAuthFailure: false,
+    RawErrorKind.tlsHandshake => NitroHttpTlsException(
       request: request,
       engineMessage: message,
       engineErrorCode: engineErrorCode,
@@ -595,9 +593,13 @@ NitroHttpException mapError({
       engineMessage: message,
       engineErrorCode: engineErrorCode,
     ),
+    RawErrorKind.badRequest => NitroHttpConfigurationException(
+      request: request,
+      engineMessage: message,
+      engineErrorCode: engineErrorCode,
+    ),
     RawErrorKind.io ||
     RawErrorKind.engineError ||
-    RawErrorKind.badRequest ||
     RawErrorKind.unknown => NitroHttpUnknownException(
       request: request,
       engineMessage: message,

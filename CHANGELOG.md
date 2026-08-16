@@ -31,6 +31,34 @@
 
 ### Added
 
+* **Two new exception types, so TLS failures are distinguishable.**
+  `NitroHttpTlsException` covers a handshake that never reached a certificate —
+  no shared version or cipher — which previously arrived as
+  `NitroHttpCertificateException` and sent readers looking at their trust store
+  for a problem that was never there. `NitroHttpConfigurationException` covers
+  settings the engine refuses before opening a socket; those used to surface as
+  `NitroHttpUnknownException`, which reads like a transient fault and invites a
+  retry that can never succeed. Both are permanent failures for
+  `RetryInterceptor`.
+
+  The exception family is sealed, so an exhaustive `switch` over
+  `NitroHttpException` needs the two new cases added.
+
+* **End-to-end coverage for the settings the engine is supposed to honour.**
+  An audit found 30 public settings with configuration tests but no behavioural
+  ones — the shape that let `RootCaSource.none`, the Apple trust path and
+  `sniHostname` all ship broken. 22 now have end-to-end tests: redirect caps,
+  cookie suppression and persistence, the idle deadline, compression
+  negotiation, pool limits, SOCKS5 and proxy credentials, upload progress,
+  chunk-batching modes, custom verbs, alt-svc recording, DoH, and protocol
+  negotiation through h3.
+
+* **Resumable downloads and uploads are covered by tests.** `Range` and
+  `Content-Range` always passed through, but nothing proved a `206` survived as
+  a `206` or that a streamed upload could start mid-file. Both now have
+  end-to-end tests, and [ADVANCED.md](doc/ADVANCED.md#resuming-an-interrupted-transfer)
+  shows the append-on-206 / restart-on-200 shape that a resumed download needs.
+
 * **WebSockets accept `TlsSettings`.** `RawWsConfig` carried no TLS block, so a
   `wss://` socket could not use custom roots, SPKI pinning, mTLS or a version
   clamp even when the same client applied them to its HTTP requests — the 0.0.1

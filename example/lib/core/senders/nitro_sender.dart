@@ -305,7 +305,11 @@ final class NitroSender implements HttpSender {
         // Disposal cancels everything in flight, which is what the caller sees.
         nitro.NitroHttpCancelException() ||
         nitro.NitroHttpDisposedException() => SendFailureKind.cancelled,
-        nitro.NitroHttpCertificateException() => SendFailureKind.certificate,
+        // A rejected chain and a handshake that never got to one are both
+        // "the TLS layer said no" as far as the benchmark UI cares.
+        nitro.NitroHttpCertificateException() ||
+        nitro.NitroHttpTlsException() => SendFailureKind.certificate,
+        nitro.NitroHttpConfigurationException() => SendFailureKind.unsupported,
         nitro.NitroHttpConnectionException(:final failure) =>
           failure == nitro.ConnectionFailure.unsupportedScheme
               ? SendFailureKind.unsupported

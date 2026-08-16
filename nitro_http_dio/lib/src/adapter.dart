@@ -371,7 +371,12 @@ DioExceptionType dioExceptionTypeOf(nh.NitroHttpException error) =>
         nh.TimeoutStage.idle => DioExceptionType.receiveTimeout,
       },
       nh.NitroHttpCancelException() => DioExceptionType.cancel,
-      nh.NitroHttpCertificateException() => DioExceptionType.badCertificate,
+      // dio has one TLS bucket, so a rejected chain and a handshake that never
+      // produced one share it; a refused configuration is not a transport
+      // fault at all and stays `unknown`.
+      nh.NitroHttpCertificateException() ||
+      nh.NitroHttpTlsException() => DioExceptionType.badCertificate,
+      nh.NitroHttpConfigurationException() => DioExceptionType.unknown,
       nh.NitroHttpConnectionException() => DioExceptionType.connectionError,
       // Only reachable through a borrowed client left on
       // `throwOnStatusCode: true`; an adapter-owned client never throws these.

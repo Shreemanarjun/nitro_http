@@ -365,6 +365,9 @@ void main() {
             'status $statusCode',
           NitroHttpCertificateException(:final isPinMismatch) =>
             isPinMismatch ? 'pin mismatch' : 'bad certificate',
+          NitroHttpTlsException() => 'no shared TLS version or cipher',
+          NitroHttpConfigurationException() =>
+            'these settings cannot be satisfied',
           NitroHttpConnectionException(:final failure) =>
             'connection ${failure.name}',
           NitroHttpRedirectException(:final redirectCount) =>

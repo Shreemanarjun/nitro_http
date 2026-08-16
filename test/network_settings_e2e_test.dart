@@ -13,6 +13,7 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nitro_http/nitro_http.dart';
@@ -46,6 +47,7 @@ class _MarkerProxy {
   final HttpServer _server;
   int hits = 0;
   final absoluteUris = <String>[];
+  final proxyAuth = <String>[];
 
   int get port => _server.port;
 
@@ -57,6 +59,8 @@ class _MarkerProxy {
       // A proxied request carries the ABSOLUTE url in the request line, which
       // is the wire-level proof that curl treated this as a proxy hop.
       proxy.absoluteUris.add(request.uri.toString());
+      final auth = request.headers.value('proxy-authorization');
+      if (auth != null) proxy.proxyAuth.add(auth);
       request.response
         ..statusCode = 200
         ..write('via-proxy');
@@ -75,6 +79,7 @@ class _Origin {
   int hits = 0;
   int live = 0;
   int peakConcurrent = 0;
+  final methods = <String>[];
 
   int get port => _server.port;
 
@@ -83,6 +88,7 @@ class _Origin {
     final origin = _Origin(s);
     s.listen((request) async {
       origin.hits++;
+      origin.methods.add(request.method);
       origin.live++;
       if (origin.live > origin.peakConcurrent) {
         origin.peakConcurrent = origin.live;
@@ -117,6 +123,26 @@ class _Origin {
           ..headers.contentType = ContentType.json
           ..write(jsonEncode(
               {'ae': request.headers.value('accept-encoding') ?? ''}));
+      } else if (WebSocketTransformer.isUpgradeRequest(request)) {
+        final socket = await WebSocketTransformer.upgrade(request);
+        socket.listen(socket.add, onError: (_) {}, onDone: () {});
+        origin.live--;
+        return;
+      } else if (path == '/upload') {
+        var got = 0;
+        await for (final chunk in request) {
+          got += chunk.length;
+        }
+        response
+          ..statusCode = 200
+          ..headers.contentType = ContentType.json
+          ..write(jsonEncode({'got': got}));
+      } else if (path.startsWith('/big/')) {
+        final n = int.parse(path.split('/').last);
+        response
+          ..statusCode = 200
+          ..headers.contentLength = n
+          ..add(Uint8List(n));
       } else if (path.startsWith('/slow')) {
         await Future<void>.delayed(const Duration(milliseconds: 120));
         response..statusCode = 200..write('ok');
@@ -432,6 +458,54 @@ void main() {
       expect(origin.peakConcurrent, lessThanOrEqualTo(2));
     }, skip: skipReason);
 
+    test('maxConnections bounds the whole pool', () async {
+      client = NitroHttpClient(
+        settings: const ClientSettings(
+          timeout: Duration(seconds: 30),
+          // Deliberately looser per-host than global, so only the global cap
+          // can produce the observed ceiling.
+          poolSettings: PoolSettings(maxConnections: 1, maxConnectionsPerHost: 8),
+        ),
+      );
+      origin.peakConcurrent = 0;
+      await Future.wait([
+        for (var i = 0; i < 6; i++)
+          client!.get('http://127.0.0.1:${origin.port}/slow$i'),
+      ]);
+      expect(origin.peakConcurrent, lessThanOrEqualTo(1));
+    }, skip: skipReason);
+
+    test('the explicit follow/system defaults behave as defaults', () async {
+      // RedirectSettings.follow() and ProxySettings.system() are what an
+      // untouched client already uses; asserting them explicitly keeps the
+      // named constructors from drifting away from that meaning.
+      client = NitroHttpClient(
+        settings: const ClientSettings(
+          timeout: Duration(seconds: 20),
+          redirectSettings: RedirectSettings.follow(),
+          proxySettings: ProxySettings.system(),
+          dnsSettings: DnsSettings.system(),
+        ),
+      );
+      final r = await client!.get('http://127.0.0.1:${origin.port}/plain');
+      expect(r.statusCode, 200);
+      expect(origin.hits, 1);
+    }, skip: skipReason);
+
+    test('a WebSocket configured with a ping interval stays open', () async {
+      final ws = await NitroWebSocket.connect(
+        Uri.parse('ws://127.0.0.1:${origin.port}/ws'),
+        pingInterval: const Duration(milliseconds: 500),
+      );
+      final sub = ws.events.listen((_) {});
+      // Long enough for several ping cycles: a mishandled interval shows up as
+      // a dropped or errored socket rather than a counted frame.
+      await Future<void>.delayed(const Duration(seconds: 2));
+      ws.sendText('still here');
+      await sub.cancel();
+      await ws.close(1000, 'done');
+    }, skip: skipReason);
+
     test('a SOCKS5 proxy is routed through, not bypassed', () async {
       // Port 1 accepts nothing. If the setting were ignored the request would
       // reach the origin instead of failing.
@@ -446,6 +520,156 @@ void main() {
         throwsA(isA<NitroHttpException>()),
       );
       expect(origin.hits, 0);
+    }, skip: skipReason);
+  });
+
+  // ── Transfer-shaping settings ──────────────────────────────────────────────
+  group('transfer settings the engine must honour', () {
+    late _Origin origin;
+    NitroHttpClient? client;
+
+    setUp(() async => origin = await _Origin.start());
+    tearDown(() async {
+      client?.dispose();
+      client = null;
+      await origin.stop();
+    });
+
+    test('onSendProgress reports upload progress to completion', () async {
+      client = NitroHttpClient(
+        settings: const ClientSettings(timeout: Duration(seconds: 20)),
+      );
+      const size = 512 * 1024;
+      final sent = <int>[];
+      final res = await client!.post(
+        'http://127.0.0.1:${origin.port}/upload',
+        body: HttpBody.bytes(Uint8List(size)),
+        onSendProgress: (soFar, total) => sent.add(soFar),
+      );
+      expect((res.bodyToJson()! as Map)['got'], size);
+      expect(sent, isNotEmpty, reason: 'no upload progress was reported');
+      expect(sent.last, size, reason: 'progress must end at the full body');
+    }, skip: skipReason);
+
+    test('wantTimings:false suppresses timing collection', () async {
+      client = NitroHttpClient(
+        settings: const ClientSettings(timeout: Duration(seconds: 20)),
+      );
+      final on = await client!.get('http://127.0.0.1:${origin.port}/t');
+      final off = await client!.get(
+        'http://127.0.0.1:${origin.port}/t',
+        options: const RequestOptions(wantTimings: false),
+      );
+      expect(on.timings.total, greaterThan(Duration.zero));
+      expect(off.timings.total, Duration.zero);
+    }, skip: skipReason);
+
+    test('streamChunks changes the delivered chunk count', () async {
+      // 1 MiB delivered three ways. The counts are exact, not approximate:
+      // fixed(64 KiB) must yield 16 chunks and adaptive batches to 128 KiB, so
+      // a setting that was ignored would show up as the same count every time.
+      const size = 1048576;
+      final counts = <String, int>{};
+      for (final entry in {
+        'immediate': const StreamChunkSettings.immediate(),
+        'fixed64k': const StreamChunkSettings.fixed(64 * 1024),
+        'adaptive': const StreamChunkSettings.adaptive(),
+      }.entries) {
+        final c = NitroHttpClient(
+          settings: ClientSettings(
+            timeout: const Duration(seconds: 30),
+            streamChunks: entry.value,
+          ),
+        );
+        try {
+          final r = await c.requestStream(
+              HttpMethod.get, 'http://127.0.0.1:${origin.port}/big/$size');
+          var chunks = 0, bytes = 0;
+          await for (final ch in r.body) {
+            chunks++;
+            bytes += ch.length;
+          }
+          expect(bytes, size, reason: '${entry.key} lost bytes');
+          counts[entry.key] = chunks;
+        } finally {
+          c.dispose();
+        }
+      }
+      expect(counts['fixed64k'], size ~/ (64 * 1024));
+      expect(counts['immediate'], greaterThan(counts['fixed64k']!));
+      expect(counts['adaptive'], lessThan(counts['fixed64k']!));
+    }, skip: skipReason);
+
+    test('a custom method reaches the server', () async {
+      client = NitroHttpClient(
+        settings: const ClientSettings(timeout: Duration(seconds: 20)),
+      );
+      final r = await client!.requestText(
+        HttpMethod.custom,
+        'http://127.0.0.1:${origin.port}/purge',
+        customMethod: 'PURGE',
+      );
+      expect(r.statusCode, 200);
+      expect(origin.methods, contains('PURGE'));
+    }, skip: skipReason);
+
+    test('proxy credentials are sent, and socks5Hostname is routed', () async {
+      final proxy = await _MarkerProxy.start();
+      try {
+        final withAuth = NitroHttpClient(
+          settings: ClientSettings(
+            timeout: const Duration(seconds: 15),
+            proxySettings: ProxySettings.http('127.0.0.1:${proxy.port}',
+                username: 'u', password: 'p'),
+          ),
+        );
+        try {
+          await withAuth.get('http://example.invalid/x');
+        } on NitroHttpException {
+          // The marker proxy answers 200, but a 407 dance is not modelled; the
+          // header is what matters.
+        } finally {
+          withAuth.dispose();
+        }
+        expect(proxy.proxyAuth, isNotEmpty,
+            reason: 'no Proxy-Authorization header reached the proxy');
+
+        // socks5Hostname at a dead port must fail rather than go direct.
+        final socks = NitroHttpClient(
+          settings: const ClientSettings(
+            timeout: Duration(seconds: 10),
+            proxySettings: ProxySettings.socks5Hostname('127.0.0.1:1'),
+          ),
+        );
+        try {
+          await expectLater(
+            socks.get('http://127.0.0.1:${origin.port}/direct'),
+            throwsA(isA<NitroHttpException>()),
+          );
+          expect(origin.hits, 0);
+        } finally {
+          socks.dispose();
+        }
+      } finally {
+        await proxy.stop();
+      }
+    }, skip: skipReason);
+
+    test('a cookie jar is persisted to persistPath', () async {
+      final dir = Directory.systemTemp.createTempSync('nh_jar');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final path = '${dir.path}/cookies.txt';
+      client = NitroHttpClient(
+        settings: ClientSettings(
+          timeout: const Duration(seconds: 15),
+          cookieSettings: CookieSettings(storeCookies: true, persistPath: path),
+        ),
+      );
+      await client!.get('http://127.0.0.1:${origin.port}/setcookie');
+      client!.dispose();
+      client = null;
+      expect(File(path).existsSync(), isTrue,
+          reason: 'the jar must be flushed on dispose');
     }, skip: skipReason);
   });
 
@@ -469,7 +693,9 @@ void main() {
         );
         await expectLater(
           client!.get('https://tls-v1-2.badssl.com:1012/'),
-          throwsA(isA<NitroHttpException>()),
+          // A version mismatch is a HANDSHAKE failure, not a certificate one:
+          // the chain was never judged.
+          throwsA(isA<NitroHttpTlsException>()),
           reason: 'an ignored clamp would connect over TLS 1.2',
         );
       });
@@ -485,6 +711,39 @@ void main() {
           ),
         );
         expect((await client!.get('https://tls-v1-2.badssl.com:1012/')).statusCode, 200);
+      });
+    }, skip: netSkip);
+  });
+
+  // ── Alt-Svc cache ──────────────────────────────────────────────────────────
+  group('altSvcCachePath', () {
+    test('records an advertised h3 endpoint', () async {
+      await skipIfOffline(() async {
+        final dir = Directory.systemTemp.createTempSync('nh_altsvc');
+        addTearDown(() => dir.deleteSync(recursive: true));
+        final path = '${dir.path}/altsvc.txt';
+
+        final c = NitroHttpClient(
+          settings: ClientSettings(
+            timeout: const Duration(seconds: 25),
+            altSvcCachePath: path,
+          ),
+        );
+        final res = await c.get('https://cloudflare-quic.com/');
+        expect(res.statusCode, 200);
+        c.dispose();
+
+        // The flush happens when the ENGINE tears down its handles, not when
+        // the client is disposed — the engine outlives a client. Checking
+        // after dispose alone finds no file and looks like a broken setting.
+        expect(File(path).existsSync(), isFalse,
+            reason: 'documents that dispose() alone does not flush');
+        NitroHttp.reset();
+        await Future<void>.delayed(const Duration(seconds: 1));
+
+        expect(File(path).existsSync(), isTrue);
+        expect(File(path).readAsStringSync(), contains('h3'),
+            reason: 'the advertised h3 endpoint should be recorded');
       });
     }, skip: netSkip);
   });

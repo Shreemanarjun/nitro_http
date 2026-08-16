@@ -861,7 +861,10 @@ void RequestTask::emitHeadIfNeeded() {
   if (requested < 0) {
     coalesceTarget_ = 0;  // explicitly disabled by the caller
   } else {
-    const int64_t minLength = cfg.streamChunkMinContentLength > 0
+    // `>= 0`, not `> 0`: zero is a real setting — "batch every response
+    // whatever its size" — and Dart always sends an explicit value, so only a
+    // negative can mean "unset".
+    const int64_t minLength = cfg.streamChunkMinContentLength >= 0
                                   ? cfg.streamChunkMinContentLength
                                   : kDefaultCoalesceMinContentLength;
     if (contentLength_ >= minLength) {
@@ -870,7 +873,7 @@ void RequestTask::emitHeadIfNeeded() {
                             : adaptiveCoalesceBytes(contentLength_);
     }
   }
-  coalesceMaxHoldMs_ = cfg.streamChunkMaxHoldMs > 0
+  coalesceMaxHoldMs_ = cfg.streamChunkMaxHoldMs >= 0
                            ? static_cast<double>(cfg.streamChunkMaxHoldMs)
                            : kDefaultCoalesceMaxHoldMs;
   if (coalesceTarget_ > 0) coalesceBuf_.reserve(coalesceTarget_);
@@ -1007,6 +1010,18 @@ void RequestTask::emitChunk(const uint8_t* data, size_t len) {
   ++emittedSeq_;
 
   if (streamSink().chunk) streamSink().chunk(chunk);
+}
+
+double RequestTask::coalesceHoldRemainingMs(double now) const {
+  // Nothing held, or nothing allowed to cross: either way there is no deadline
+  // for the loop to wake up for.
+  if (coalesceBuf_.empty() || credits_ <= 0) return -1.0;
+  const double left = coalesceMaxHoldMs_ - (now - coalesceStartedMs_);
+  return left > 0.0 ? left : 0.0;
+}
+
+void RequestTask::flushAgedCoalesce(double now) {
+  if (coalesceHoldRemainingMs(now) == 0.0) flushCoalesced();
 }
 
 void RequestTask::flushCoalesced() {

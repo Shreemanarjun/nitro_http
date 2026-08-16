@@ -267,6 +267,7 @@ void CurlEngine::loop() {
     flushCompletionBatch();
 
     enforceIdleDeadlines();
+    flushAgedCoalesceBuffers();
   }
 
   completeAllWith(shutdownError());
@@ -356,6 +357,8 @@ int CurlEngine::nextPollTimeoutMs() {
     for (const auto& entry : tasks_) {
       const double left = entry.second->idleBudgetRemainingMs(now);
       if (left >= 0.0 && left < soonest) soonest = left;
+      const double hold = entry.second->coalesceHoldRemainingMs(now);
+      if (hold >= 0.0 && hold < soonest) soonest = hold;
     }
   }
   // Floored rather than allowed to reach zero: a zero timeout turns the loop
@@ -363,6 +366,26 @@ int CurlEngine::nextPollTimeoutMs() {
   // `enforceIdleDeadlines` is what clears it anyway.
   if (soonest < kMinPollTimeoutMs) return kMinPollTimeoutMs;
   return static_cast<int>(soonest) + 1;
+}
+
+void CurlEngine::flushAgedCoalesceBuffers() {
+  NITRO_HTTP_ASSERT_THREAD(loopGuard_);
+
+  const double now = monotonicMs();
+
+  std::vector<int64_t> due;
+  {
+    std::lock_guard<std::mutex> lock(inboxMtx_);
+    for (const auto& entry : tasks_) {
+      if (entry.second->coalesceHoldRemainingMs(now) == 0.0) {
+        due.push_back(entry.first);
+      }
+    }
+  }
+  // Emitted outside the lock, as the idle sweep does: this posts to a Dart port.
+  for (const int64_t id : due) {
+    if (RequestTask* task = find(id)) task->flushAgedCoalesce(now);
+  }
 }
 
 void CurlEngine::enforceIdleDeadlines() {

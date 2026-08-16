@@ -166,6 +166,9 @@ class CurlEngine {
   /// Loop thread. Completes and retires every transfer whose peer went quiet
   /// for longer than the client's `idleTimeout`.
   void enforceIdleDeadlines();
+
+  /// Emits stream chunks whose `maxHold` has elapsed while the link was quiet.
+  void flushAgedCoalesceBuffers();
   /// Executes every queued op. Returns whether any op was executed, which is
   /// what tells the loop it did real work and may keep spinning.
   bool drainInbox();

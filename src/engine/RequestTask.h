@@ -169,6 +169,18 @@ class RequestTask {
   /// consumer that stopped granting credit is not a peer that went quiet.
   double idleBudgetRemainingMs(double now) const;
 
+  /// Milliseconds until a part-full `coalesceBuf_` must be emitted anyway, `0`
+  /// when it is already due, or `-1` when nothing is held back.
+  ///
+  /// The size threshold is checked as blocks arrive, which is enough for a fast
+  /// body but bounds nothing on a slow one — a link that goes quiet mid-chunk
+  /// stops producing the very callbacks that would notice the chunk ageing. The
+  /// loop therefore polls against this instead.
+  double coalesceHoldRemainingMs(double now) const;
+
+  /// Emits the held chunk if it is due. Loop thread only.
+  void flushAgedCoalesce(double now);
+
   /// Loop thread. Completes the task with `timeoutIdle`; the caller retires it.
   void completeWithIdleTimeout();
 

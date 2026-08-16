@@ -80,6 +80,9 @@ class _Origin {
   int live = 0;
   int peakConcurrent = 0;
   final methods = <String>[];
+  // A reused connection keeps its ephemeral port, so distinct ports is the
+  // server-side way to see the pool open a new one.
+  final clientPorts = <int>{};
 
   int get port => _server.port;
 
@@ -89,6 +92,8 @@ class _Origin {
     s.listen((request) async {
       origin.hits++;
       origin.methods.add(request.method);
+      final remote = request.connectionInfo?.remotePort;
+      if (remote != null) origin.clientPorts.add(remote);
       origin.live++;
       if (origin.live > origin.peakConcurrent) {
         origin.peakConcurrent = origin.live;
@@ -505,6 +510,176 @@ void main() {
       await sub.cancel();
       await ws.close(1000, 'done');
     }, skip: skipReason);
+
+    test('expectedBody selects how the body is delivered', () async {
+      // The verb helpers hard-code this, so the enum is only reachable through
+      // a hand-built request — which is exactly the path nothing exercised.
+      client = NitroHttpClient(
+        settings: const ClientSettings(timeout: Duration(seconds: 20)),
+      );
+      final url = Uri.parse('http://127.0.0.1:${origin.port}/plain');
+
+      final text = await client!.request(
+        HttpRequest(method: HttpMethod.get, url: url),
+      );
+      expect(text, isA<HttpTextResponse>());
+
+      final bytes = await client!.request(
+        HttpRequest(
+          method: HttpMethod.get,
+          url: url,
+          expectedBody: HttpExpectedBody.bytes,
+        ),
+      );
+      expect(bytes, isA<HttpBytesResponse>());
+
+      final streamed = await client!.request(
+        HttpRequest(
+          method: HttpMethod.get,
+          url: url,
+          expectedBody: HttpExpectedBody.stream,
+        ),
+      );
+      expect(streamed, isA<HttpStreamResponse>());
+      // Drain it: an undrained stream holds a native transfer open.
+      await (streamed as HttpStreamResponse).body.drain<void>();
+    }, skip: skipReason);
+
+    test('maxHold emits a part-full chunk instead of waiting for it to fill',
+        () async {
+      // A raw socket, not HttpServer: dart:io buffers a fixed-length response
+      // until close, which would hide the early bytes from the client entirely
+      // and make this test pass for the wrong reason.
+      final stall = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(stall.close);
+      stall.listen((socket) async {
+        await socket.first;
+        socket.add('HTTP/1.1 200 OK\r\nContent-Length: 2100\r\n\r\n'.codeUnits);
+        socket.add(Uint8List(100));
+        await socket.flush();
+        await Future<void>.delayed(const Duration(milliseconds: 1200));
+        socket.add(Uint8List(2000));
+        await socket.flush();
+        await socket.close();
+      });
+
+      // 100 bytes arrive at once and the rest 1200 ms later. The batch is 1 MiB,
+      // so only maxHold can decide whether those bytes come out on their own or
+      // wait for the remainder.
+      Future<({int firstMs, int chunks})> firstChunkMs(Duration hold) async {
+        final c = NitroHttpClient(
+          settings: ClientSettings(
+            timeout: const Duration(seconds: 30),
+            streamChunks: StreamChunkSettings.fixed(
+              1024 * 1024,
+              minContentLength: 0,
+              maxHold: hold,
+            ),
+          ),
+        );
+        try {
+          final watch = Stopwatch()..start();
+          final r = await c.requestStream(
+            HttpMethod.get,
+            'http://127.0.0.1:${stall.port}/',
+          );
+          var elapsed = -1, seen = 0, chunks = 0;
+          await for (final chunk in r.body) {
+            if (elapsed < 0) elapsed = watch.elapsedMilliseconds;
+            seen += chunk.length;
+            chunks++;
+          }
+          expect(seen, 2100, reason: 'lost bytes with maxHold $hold');
+          return (firstMs: elapsed, chunks: chunks);
+        } finally {
+          c.dispose();
+        }
+      }
+
+      final short = await firstChunkMs(const Duration(milliseconds: 50));
+      final long = await firstChunkMs(const Duration(seconds: 5));
+
+      // The hold has to be released by the clock: no further block arrives to
+      // notice the chunk ageing, which is what made this silently do nothing.
+      expect(short.firstMs, lessThan(600),
+          reason: 'a 50 ms hold should release the part-full chunk long before '
+              'the stall ends (got ${short.firstMs}ms)');
+      expect(short.chunks, 2);
+      expect(long.firstMs, greaterThan(1000),
+          reason: 'a 5 s hold should keep it across the stall '
+              '(got ${long.firstMs}ms)');
+      expect(long.chunks, 1, reason: 'the whole body should arrive coalesced');
+    }, timeout: const Timeout(Duration(seconds: 60)), skip: skipReason);
+
+    test('minContentLength decides whether a body batches at all', () async {
+      // Same 1 MiB body and the same 64 KiB batch both times; only the
+      // threshold moves across it.
+      Future<int> chunksWithThreshold(int minContentLength) async {
+        final c = NitroHttpClient(
+          settings: ClientSettings(
+            timeout: const Duration(seconds: 30),
+            streamChunks: StreamChunkSettings.fixed(
+              64 * 1024,
+              minContentLength: minContentLength,
+            ),
+          ),
+        );
+        try {
+          final r = await c.requestStream(
+            HttpMethod.get,
+            'http://127.0.0.1:${origin.port}/big/1048576',
+          );
+          var chunks = 0, bytes = 0;
+          await for (final chunk in r.body) {
+            chunks++;
+            bytes += chunk.length;
+          }
+          expect(bytes, 1048576);
+          return chunks;
+        } finally {
+          c.dispose();
+        }
+      }
+
+      final batched = await chunksWithThreshold(512 * 1024);
+      final unbatched = await chunksWithThreshold(4 * 1024 * 1024);
+      // Zero means "batch everything, whatever its size". It used to be read as
+      // "unset" and silently replaced with the 1 MiB default, so a client that
+      // asked for it got no batching at all below 1 MiB.
+      final always = await chunksWithThreshold(0);
+      expect(batched, 1048576 ~/ (64 * 1024));
+      expect(always, batched);
+      expect(unbatched, greaterThan(batched),
+          reason: 'a body under the threshold should stream as it arrives');
+    }, skip: skipReason);
+
+    test('maxLifetime retires a pooled connection once it is old enough',
+        () async {
+      // Two requests either side of a 1 s lifetime. A reused socket keeps its
+      // ephemeral port, so a second port is the pool having opened a new one.
+      Future<int> portsAcross(Duration lifetime) async {
+        origin.clientPorts.clear();
+        final c = NitroHttpClient(
+          settings: ClientSettings(
+            timeout: const Duration(seconds: 20),
+            poolSettings: PoolSettings(maxLifetime: lifetime),
+          ),
+        );
+        try {
+          await c.get('http://127.0.0.1:${origin.port}/plain');
+          await Future<void>.delayed(const Duration(milliseconds: 1400));
+          await c.get('http://127.0.0.1:${origin.port}/plain');
+          return origin.clientPorts.length;
+        } finally {
+          c.dispose();
+        }
+      }
+
+      expect(await portsAcross(const Duration(seconds: 1)), 2,
+          reason: 'a connection older than maxLifetime must not be reused');
+      expect(await portsAcross(const Duration(minutes: 10)), 1,
+          reason: 'a young connection should still be reused');
+    }, timeout: const Timeout(Duration(seconds: 60)), skip: skipReason);
 
     test('a SOCKS5 proxy is routed through, not bypassed', () async {
       // Port 1 accepts nothing. If the setting were ignored the request would

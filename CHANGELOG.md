@@ -2,6 +2,14 @@
 
 ### Fixed
 
+* **`RootCaSource.none` did the opposite of what it documents.** It is specified
+  as "no trust anchors at all — every chain fails unless a pin matches", but the
+  engine implemented it by clearing `CURLOPT_SSL_VERIFYPEER`, so every chain
+  *succeeded*: the option that reads as the strictest was silently the least
+  safe. Without a pin it is now refused outright, with a message pointing at
+  `TlsSettings.insecure()` for callers who really do want no verification.
+  With a pin it is unchanged — the documented pin-only mode.
+
 * **HTTPS was completely broken on iOS and macOS.** `CertStore` assumed an
   Apple platform meant a Keychain-integrated TLS backend, which is true of the
   SDK's libcurl but not of the vendored slice — that links BoringSSL, which has

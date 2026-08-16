@@ -135,6 +135,57 @@ void main() {
       );
     }, skip: skipReason);
 
+    // ── RootCaSource.none ────────────────────────────────────────────────────
+    // Documented as "no trust anchors at all — every chain fails unless a pin
+    // matches". The engine used to implement that by clearing VERIFYPEER, which
+    // is the exact inverse: every chain succeeded, so the option that reads as
+    // the strictest was silently the least safe.
+    test('none without a pin is refused, not silently permissive', () async {
+      client = NitroHttpClient(
+        settings: const ClientSettings(
+          timeout: Duration(seconds: 20),
+          tlsSettings: TlsSettings(rootCaSource: RootCaSource.none),
+        ),
+      );
+      await expectLater(
+        client!.get(server.url('/none')),
+        throwsA(isA<NitroHttpException>()),
+        reason: 'a request with no trust anchors must not succeed',
+      );
+    }, skip: skipReason);
+
+    test('none WITH a matching pin is pin-only mode', () async {
+      client = NitroHttpClient(
+        settings: ClientSettings(
+          timeout: const Duration(seconds: 20),
+          throwOnStatusCode: false,
+          tlsSettings: TlsSettings(
+            rootCaSource: RootCaSource.none,
+            pinnedSpkiSha256: [fixture.serverSpkiSha256],
+          ),
+        ),
+      );
+      // No CA is trusted, so only the pin can authenticate this — which is the
+      // documented use for `none`.
+      expect((await client!.get(server.url('/none'))).statusCode, 200);
+    }, skip: skipReason);
+
+    test('none with a wrong pin is rejected', () async {
+      client = NitroHttpClient(
+        settings: const ClientSettings(
+          timeout: Duration(seconds: 20),
+          tlsSettings: TlsSettings(
+            rootCaSource: RootCaSource.none,
+            pinnedSpkiSha256: ['AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='],
+          ),
+        ),
+      );
+      await expectLater(
+        client!.get(server.url('/none')),
+        throwsA(isA<NitroHttpCertificateException>()),
+      );
+    }, skip: skipReason);
+
     // ── TLS version clamp ────────────────────────────────────────────────────
     test('minVersion TLS 1.2 still connects', () async {
       final res = await trusting(minVersion: TlsVersion.tls12)

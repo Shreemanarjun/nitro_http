@@ -494,10 +494,23 @@ EngineError CertStore::apply(CURL* easy, const RawTlsConfig& tls,
     }
 
     case RootCaSource::None: {
+      // `none` means "no trust anchors", which the API documents as every chain
+      // FAILING unless a pin matches. Clearing VERIFYPEER on its own is the
+      // exact inverse — every chain succeeds — so without a pin this refuses
+      // rather than silently handing back the least safe mode to someone who
+      // picked what reads like the strictest one. With a pin it is the intended
+      // pin-only mode: curl still enforces CURLOPT_PINNEDPUBLICKEY.
+      if (tls.pinnedSpkiSha256.empty() && pinOverride.empty()) {
+        return EngineError::make(
+            RawErrorKind::RAWERRORKIND_BAD_REQUEST,
+            "rootCaSource 'none' removes every trust anchor, so it is only "
+            "usable with pinnedSpkiSha256; use TlsSettings.insecure() if you "
+            "really want to skip verification");
+      }
       curl_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER, 0L);
       warnOnce(g_warnTrustNone,
-               "nitro_http: rootCaSource is 'none', so no certificate chain is "
-               "verified on this client");
+               "nitro_http: rootCaSource is 'none', so the SPKI pin is the only "
+               "thing authenticating this connection");
       break;
     }
 

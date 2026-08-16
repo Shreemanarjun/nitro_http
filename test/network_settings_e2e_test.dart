@@ -73,6 +73,8 @@ class _Origin {
   _Origin(this._server);
   final HttpServer _server;
   int hits = 0;
+  int live = 0;
+  int peakConcurrent = 0;
 
   int get port => _server.port;
 
@@ -81,14 +83,54 @@ class _Origin {
     final origin = _Origin(s);
     s.listen((request) async {
       origin.hits++;
-      request.response
-        ..statusCode = 200
-        ..headers.contentType = ContentType.json
-        ..write(jsonEncode({
-          'host': request.headers.value('host'),
-          'path': request.uri.path,
-        }));
-      await request.response.close();
+      origin.live++;
+      if (origin.live > origin.peakConcurrent) {
+        origin.peakConcurrent = origin.live;
+      }
+      final path = request.uri.path;
+      final response = request.response;
+      if (path.startsWith('/loop/')) {
+        // Redirects forever, so only a cap can end it.
+        final n = int.parse(path.split('/').last);
+        response
+          ..statusCode = 302
+          ..headers.set('location', '/loop/${n + 1}');
+      } else if (path == '/setcookie') {
+        response
+          ..statusCode = 200
+          ..headers.add('set-cookie', 'sid=abc; Path=/')
+          ..write('ok');
+      } else if (path == '/readcookie') {
+        response
+          ..statusCode = 200
+          ..write(request.headers.value('cookie') ?? '');
+      } else if (path == '/stall') {
+        // Answers, then goes quiet: the total timeout would not fire in time,
+        // so this isolates the idle deadline.
+        response..statusCode = 200..headers.contentType = ContentType.binary;
+        response.add([1]);
+        await response.flush();
+        await Future<void>.delayed(const Duration(seconds: 8));
+      } else if (path == '/echohdr') {
+        response
+          ..statusCode = 200
+          ..headers.contentType = ContentType.json
+          ..write(jsonEncode(
+              {'ae': request.headers.value('accept-encoding') ?? ''}));
+      } else if (path.startsWith('/slow')) {
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+        response..statusCode = 200..write('ok');
+      } else {
+        response
+          ..statusCode = 200
+          ..headers.contentType = ContentType.json
+          ..write(jsonEncode({
+            'host': request.headers.value('host'),
+            'path': path,
+          }));
+      }
+      await response.close();
+      origin.live--;
     });
     return origin;
   }
@@ -298,6 +340,151 @@ void main() {
         expect(res.statusCode, 200);
         expect(res.version, HttpVersion.http3,
             reason: 'cloudflare-quic.com advertises h3');
+      });
+    }, skip: netSkip);
+  });
+
+  // ── Settings that were configuration-tested only ───────────────────────────
+  // Each of these could be accepted and then ignored without any existing test
+  // noticing — the failure mode that shipped twice already.
+  group('settings the engine must honour', () {
+    late _Origin origin;
+    NitroHttpClient? client;
+
+    setUp(() async => origin = await _Origin.start());
+    tearDown(() async {
+      client?.dispose();
+      client = null;
+      await origin.stop();
+    });
+
+    test('maxRedirects caps a redirect chain', () async {
+      client = NitroHttpClient(
+        settings: const ClientSettings(
+          timeout: Duration(seconds: 20),
+          redirectSettings: RedirectSettings.limited(3),
+        ),
+      );
+      // /loop/N redirects forever, so an uncapped client would spin.
+      await expectLater(
+        client!.get('http://127.0.0.1:${origin.port}/loop/0'),
+        throwsA(isA<NitroHttpRedirectException>()),
+      );
+    }, skip: skipReason);
+
+    test('storeCookies:false does not replay a cookie', () async {
+      client = NitroHttpClient(
+        settings: const ClientSettings(
+          timeout: Duration(seconds: 20),
+          cookieSettings: CookieSettings(storeCookies: false),
+        ),
+      );
+      await client!.get('http://127.0.0.1:${origin.port}/setcookie');
+      final r = await client!.get('http://127.0.0.1:${origin.port}/readcookie');
+      expect(r.body, isNot(contains('sid=')));
+    }, skip: skipReason);
+
+    test('idleTimeout fires on a body that stalls mid-transfer', () async {
+      client = NitroHttpClient(
+        settings: const ClientSettings(
+          timeout: Duration(seconds: 30),
+          idleTimeout: Duration(seconds: 2),
+        ),
+      );
+      // Distinct from the total timeout: the response starts promptly and then
+      // goes quiet, so only an idle deadline can catch it.
+      await expectLater(
+        client!.get('http://127.0.0.1:${origin.port}/stall'),
+        throwsA(isA<NitroHttpTimeoutException>()),
+      );
+    }, skip: skipReason);
+
+    test('enableCompression controls Accept-Encoding', () async {
+      for (final on in [true, false]) {
+        final c = NitroHttpClient(
+          settings: ClientSettings(
+            timeout: const Duration(seconds: 20),
+            enableCompression: on,
+          ),
+        );
+        try {
+          final r = await c.get('http://127.0.0.1:${origin.port}/echohdr');
+          final ae = (r.bodyToJson()! as Map)['ae'] as String;
+          expect(ae.isNotEmpty, on, reason: 'enableCompression=$on');
+        } finally {
+          c.dispose();
+        }
+      }
+    }, skip: skipReason);
+
+    test('maxConnectionsPerHost bounds concurrency', () async {
+      client = NitroHttpClient(
+        settings: const ClientSettings(
+          timeout: Duration(seconds: 30),
+          poolSettings: PoolSettings(maxConnectionsPerHost: 2),
+        ),
+      );
+      origin.peakConcurrent = 0;
+      await Future.wait([
+        for (var i = 0; i < 10; i++)
+          client!.get('http://127.0.0.1:${origin.port}/slow$i'),
+      ]);
+      expect(origin.peakConcurrent, lessThanOrEqualTo(2));
+    }, skip: skipReason);
+
+    test('a SOCKS5 proxy is routed through, not bypassed', () async {
+      // Port 1 accepts nothing. If the setting were ignored the request would
+      // reach the origin instead of failing.
+      client = NitroHttpClient(
+        settings: const ClientSettings(
+          timeout: Duration(seconds: 10),
+          proxySettings: ProxySettings.socks5('127.0.0.1:1'),
+        ),
+      );
+      await expectLater(
+        client!.get('http://127.0.0.1:${origin.port}/direct'),
+        throwsA(isA<NitroHttpException>()),
+      );
+      expect(origin.hits, 0);
+    }, skip: skipReason);
+  });
+
+  // ── TLS version clamp ──────────────────────────────────────────────────────
+  // Needs a server that speaks ONE version, which dart:io cannot configure, so
+  // this is the one clamp assertion that has to leave the loopback.
+  group('TLS version clamp', () {
+    NitroHttpClient? client;
+    tearDown(() {
+      client?.dispose();
+      client = null;
+    });
+
+    test('minVersion tls13 refuses a TLS-1.2-only server', () async {
+      await skipIfOffline(() async {
+        client = NitroHttpClient(
+          settings: const ClientSettings(
+            timeout: Duration(seconds: 20),
+            tlsSettings: TlsSettings(minVersion: TlsVersion.tls13),
+          ),
+        );
+        await expectLater(
+          client!.get('https://tls-v1-2.badssl.com:1012/'),
+          throwsA(isA<NitroHttpException>()),
+          reason: 'an ignored clamp would connect over TLS 1.2',
+        );
+      });
+    }, skip: netSkip);
+
+    test('the same server is reachable without the clamp', () async {
+      // Control: proves the refusal above is the clamp, not an unreachable host.
+      await skipIfOffline(() async {
+        client = NitroHttpClient(
+          settings: const ClientSettings(
+            timeout: Duration(seconds: 20),
+            throwOnStatusCode: false,
+          ),
+        );
+        expect((await client!.get('https://tls-v1-2.badssl.com:1012/')).statusCode, 200);
       });
     }, skip: netSkip);
   });

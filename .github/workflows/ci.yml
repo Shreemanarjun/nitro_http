@@ -212,7 +212,7 @@ jobs:
           flutter build linux --release
 
   macos:
-    name: example macos + integration tests (real engine)
+    name: macos — unit (vendored engine) + example + integration
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -230,6 +230,26 @@ jobs:
         run: |
           flutter pub get
           flutter build macos --release
+
+      # The unit suite against the VENDORED slice, which is the only place the
+      # Apple TLS path is exercised. The analyze job builds against a system
+      # libcurl (OpenSSL) on Linux, where platform trust reads /etc/ssl and
+      # works; the shipped slice links BoringSSL, which has no platform trust of
+      # its own — the difference that made every HTTPS request fail on macOS and
+      # iOS through 0.0.1-0.0.3 while CI stayed green.
+      #
+      # test/tls_settings_e2e_test.dart also needs `openssl` to generate its CA;
+      # macOS runners have it.
+      - name: Build the engine (vendored slice)
+        run: |
+          brew install ninja || true
+          cmake -S src -B build/lib -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/lib --parallel
+
+      - name: Unit tests against the vendored engine
+        run: |
+          flutter pub get
+          flutter test
 
       # The one CI job that exercises the engine end to end: in-process server,
       # real transfers, on the SDK's libcurl fallback. The FUNCTIONAL suites
@@ -397,3 +417,27 @@ jobs:
           export NITRO_HTTP_DEPS_DIR="$GITHUB_WORKSPACE/tool/deps/out/stage"
           flutter pub get
           flutter build ios --release --no-codesign
+
+  # ── C++ engine coverage ────────────────────────────────────────────────────
+  # The Dart floor in `analyze` covers ~2 200 lines of glue. The engine is
+  # ~11 000 lines of C++ and had 245 passing tests with no coverage number at
+  # all, so nothing stopped a change landing in an untested path.
+  cpp-coverage:
+    name: C++ engine coverage floor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake libcurl4-openssl-dev llvm
+
+      # llvm-cov and llvm-profdata must match the clang that produced the
+      # profiles, so the build uses the same clang the report tool comes from.
+      - name: Coverage
+        env:
+          CC: clang
+          CXX: clang++
+        run: bash tool/cpp-coverage.sh 75

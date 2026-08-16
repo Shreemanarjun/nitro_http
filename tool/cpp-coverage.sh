@@ -30,10 +30,21 @@ done
 
 # Prefer the toolchain's own llvm tools: a Homebrew llvm-cov and an Xcode clang
 # disagree about the profile format and fail with an unhelpful version error.
-PROFDATA="$(xcrun -f llvm-profdata 2>/dev/null || command -v llvm-profdata)"
-COV="$(xcrun -f llvm-cov 2>/dev/null || command -v llvm-cov)"
-[ -x "$PROFDATA" ] && [ -x "$COV" ] || {
-  echo "llvm-profdata/llvm-cov not found — install the LLVM tools" >&2; exit 1; }
+# Debian/Ubuntu ships VERSIONED names only (llvm-profdata-18), so plain-name
+# lookup finds nothing there and the versioned fallback is not optional.
+find_llvm() {
+  local base="$1" found
+  found="$(xcrun -f "$base" 2>/dev/null)" && [ -x "$found" ] && { echo "$found"; return; }
+  found="$(command -v "$base" 2>/dev/null)" && { echo "$found"; return; }
+  for v in 21 20 19 18 17 16 15 14; do
+    found="$(command -v "$base-$v" 2>/dev/null)" && { echo "$found"; return; }
+  done
+  return 1
+}
+PROFDATA="$(find_llvm llvm-profdata)" || {
+  echo "llvm-profdata not found — install the LLVM tools" >&2; exit 1; }
+COV="$(find_llvm llvm-cov)" || {
+  echo "llvm-cov not found — install the LLVM tools" >&2; exit 1; }
 
 BUILD=build/cppcov
 echo "==> configuring instrumented build"

@@ -13,6 +13,7 @@ for someone using it. If you only want to make requests, the README is enough.
 - [TLS: versions, roots, pinning, mTLS](#tls-versions-roots-pinning-mtls)
 - [Proxies](#proxies)
 - [DNS overrides and DNS-over-HTTPS](#dns-overrides-and-dns-over-https)
+- [Logging, and running interceptors in parallel](#logging-and-running-interceptors-in-parallel)
 - [Resuming an interrupted transfer](#resuming-an-interrupted-transfer)
 - [Runtime capabilities and hot restart](#runtime-capabilities-and-hot-restart)
 - [How it compares, feature by feature](#how-it-compares)
@@ -146,6 +147,96 @@ const ClientSettings(
 
 Static overrides map onto `CURLOPT_RESOLVE`, so they are keyed by `host:port` —
 which is why the port is part of the settings object rather than guessed.
+### Logging, and running interceptors in parallel
+
+`LogInterceptor` writes one line per call and is built so that leaving it
+installed in release costs a branch:
+
+```dart
+final client = NitroHttpClient(
+  settings: const ClientSettings(baseUrl: 'https://api.example.com'),
+  interceptors: [
+    LogInterceptor(
+      level: kDebugMode ? HttpLogLevel.headers : HttpLogLevel.none,
+      sink: (line) => developer.log(line, name: 'http'),
+    ),
+  ],
+);
+```
+
+```
+--> GET https://api.example.com/users/7
+<-- 200 OK https://api.example.com/users/7 431b 38ms
+```
+
+Four levels: `none`, `basic` (the line above), `headers`, `body`. The level is
+checked before anything is formatted, so a level you are not using costs nothing
+to have configured.
+
+Three things keep it off the critical path:
+
+- **A streamed body is never drained.** Logging one would mean buffering the
+  whole response to replay it to the caller, turning a constant-memory download
+  into an unbounded one — so at `body` level a stream logs as `<stream>`. The
+  same applies to a streamed or file request body.
+- **Duration comes from the engine.** `HttpTimings.total` is already measured
+  natively, so there is no stopwatch and no request-to-start-time map to leak
+  when a call never completes. It reads `-` under `wantTimings: false`.
+- **`authorization`, `proxy-authorization`, `cookie` and `set-cookie` are
+  redacted** — logs get pasted into issues. `redactedHeaders` replaces that set
+  rather than adding to it, so widening it means listing the defaults too.
+
+Measured against an in-process chain (JIT, so read these as relative): the
+logger adds **~1 µs per request** while logging and is indistinguishable from a
+bare interceptor at `none`. The chain itself costs ~18 µs per interceptor, which
+dwarfs it — if interceptor overhead matters to you, the number of interceptors
+is the thing to look at, not what they do.
+
+Whatever sink you pass is awaited in the chain. Point it at `print` or
+`developer.log` and it is negligible; point it at something that does I/O and
+every request waits for it.
+
+#### Sequential by default, parallel when they are independent
+
+The chain is sequential on purpose: each interceptor sees what the one before it
+produced, which is what makes `auth → sign → retry` compose. Registration order
+is the middleware order — first-registered is outermost, so it rewrites the
+request first and observes the response last.
+
+That ordering costs latency when the members are not actually cooperating.
+Several independent observers that each await I/O add up end to end, so group
+those with `ParallelInterceptors`:
+
+```dart
+NitroHttpClient(
+  interceptors: [
+    AuthInterceptor(),                 // sequential: must run before signing
+    SigningInterceptor(),
+    ParallelInterceptors([             // concurrent: independent of each other
+      RemoteLogInterceptor(),          // awaits a network write
+      MetricsInterceptor(),            // awaits a metrics flush
+    ]),
+  ],
+);
+```
+
+Three 120 ms hooks take ~120 ms grouped against ~360 ms in turn.
+
+**Only reach for it when the hooks await something.** Running cheap synchronous
+observers through `Future.wait` is slower than letting them run in turn, not
+faster — a `LogInterceptor` writing to `print` belongs in the ordinary list.
+
+Members must be observers. One that returns a replacement, stops the chain or
+resolves it throws `StateError`, because "first one wins" would depend on
+completion order and so would differ run to run. Anything that rewrites goes in
+the sequential list. If one member throws, the others are still awaited before
+the error propagates — an abandoned hook would go on writing after the call it
+belonged to had finished.
+
+One interceptor instance serves every request on its client, including
+concurrent ones, so anything you store on it is shared. Keep per-request state in
+the request or response rather than in a field.
+
 ### Resuming an interrupted transfer
 
 Resume is a header protocol, and the engine stays out of its way: `Range` and

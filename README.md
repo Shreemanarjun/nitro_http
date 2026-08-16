@@ -44,7 +44,7 @@ first.
 | **Transfers** | streaming both ways · upload &amp; download progress · cancellation · per-request timings · resumable via byte ranges |
 | **Security** | TLS 1.2/1.3 · SPKI pinning, per client or per request · mTLS · custom roots · DNS-over-HTTPS |
 | **Caching** | RFC 9111 subset — `Cache-Control`, `ETag`, `Last-Modified`, 304 revalidation · prefetch |
-| **Plumbing** | interceptors · retry with backoff · cookie jar · HTTP and SOCKS5 proxies · connection pool |
+| **Plumbing** | interceptors · request logging · retry with backoff · cookie jar · HTTP and SOCKS5 proxies · connection pool |
 | **Platforms** | iOS · Android · macOS · Windows · Linux |
 
 One engine means proxies, pinning, redirects, timeouts and cookies behave

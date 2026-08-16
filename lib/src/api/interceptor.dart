@@ -76,21 +76,34 @@ abstract class Interceptor {
   /// Return [Interceptor.next] with a rewritten [HttpRequest] to modify the
   /// call, or [Interceptor.resolve] to answer it without touching the network.
   Future<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) =>
-      Future.value(next());
+      _proceedRequest;
 
   /// Called after a successful transfer, in reverse registration order.
   ///
   /// "Successful" means the transport completed; a 500 arrives here, not in
   /// [onError], unless `throwOnStatusCode` is enabled.
   Future<InterceptorResult<HttpResponse>> afterResponse(HttpResponse response) =>
-      Future.value(next());
+      _proceedResponse;
 
   /// Called when the request failed, in reverse registration order.
   ///
   /// Return [Interceptor.resolve] to turn the failure into a response — the
   /// canonical use is refreshing a token after a 401 and replaying the call.
   Future<InterceptorResult<HttpResponse>> onError(NitroHttpException exception) =>
-      Future.value(next());
+      _proceedResponse;
+
+  /// "Carry on unchanged", shared rather than rebuilt per call.
+  ///
+  /// [InterceptorResult] is immutable and a completed [Future] can be awaited
+  /// any number of times, so the pass-through answer is the same object every
+  /// time. That matters because these defaults run on every hook a subclass did
+  /// not override: a two-interceptor client used to allocate six results and six
+  /// futures per request just to say nothing.
+  static final Future<InterceptorResult<HttpRequest>> _proceedRequest =
+      Future<InterceptorResult<HttpRequest>>.value(next<HttpRequest>());
+
+  static final Future<InterceptorResult<HttpResponse>> _proceedResponse =
+      Future<InterceptorResult<HttpResponse>>.value(next<HttpResponse>());
 
   /// Continues the chain, replacing the in-flight value when [value] is
   /// non-null.
@@ -140,6 +153,81 @@ class DelegatingInterceptor extends Interceptor {
   @override
   Future<InterceptorResult<HttpResponse>> onError(NitroHttpException exception) =>
       onFailure?.call(exception) ?? super.onError(exception);
+}
+
+/// Runs a group of observing interceptors concurrently instead of in turn.
+///
+/// The chain is sequential by design: each interceptor sees what the one before
+/// it produced, which is what makes `auth → sign → retry` composable. That
+/// ordering costs latency when the members are not actually cooperating —
+/// several independent observers that each await I/O add up end to end.
+///
+/// ```dart
+/// NitroHttpClient(
+///   interceptors: [
+///     AuthInterceptor(),                 // sequential: must run before signing
+///     SigningInterceptor(),
+///     ParallelInterceptors([             // concurrent: independent of each other
+///       RemoteLogInterceptor(),
+///       MetricsInterceptor(),
+///     ]),
+///   ],
+/// );
+/// ```
+///
+/// **Use this only for hooks that await something.** Running cheap synchronous
+/// observers through [Future.wait] is slower than letting them run in turn, not
+/// faster — a [LogInterceptor] writing to `print` belongs in the ordinary list.
+///
+/// Members must be observers: a member that returns a replacement value, stops
+/// the chain or resolves it throws [StateError], because "first one wins" would
+/// depend on completion order and so would silently differ run to run. Put an
+/// interceptor that rewrites anything in the sequential list.
+final class ParallelInterceptors extends Interceptor {
+  /// Groups [members] to run concurrently within the enclosing chain.
+  const ParallelInterceptors(this.members);
+
+  /// The interceptors run concurrently. Each must be a pure observer.
+  final List<Interceptor> members;
+
+  @override
+  Future<InterceptorResult<HttpRequest>> beforeRequest(HttpRequest request) async {
+    if (members.isEmpty) return Interceptor.next();
+    await _all(members.map((m) => m.beforeRequest(request)));
+    return Interceptor.next();
+  }
+
+  @override
+  Future<InterceptorResult<HttpResponse>> afterResponse(HttpResponse response) async {
+    if (members.isEmpty) return Interceptor.next();
+    await _all(members.map((m) => m.afterResponse(response)));
+    return Interceptor.next();
+  }
+
+  @override
+  Future<InterceptorResult<HttpResponse>> onError(NitroHttpException exception) async {
+    if (members.isEmpty) return Interceptor.next();
+    await _all(members.map((m) => m.onError(exception)));
+    return Interceptor.next();
+  }
+
+  /// Awaits every member and rejects any attempt to alter the chain.
+  ///
+  /// `Future.wait` with the default `eagerError: false` so one member throwing
+  /// does not leave the others unawaited — an abandoned hook would go on writing
+  /// after the call it belongs to had finished.
+  Future<void> _all<T>(Iterable<Future<InterceptorResult<T>>> hooks) async {
+    final results = await Future.wait(hooks);
+    for (final result in results) {
+      if (result.disposition != InterceptorDisposition.next ||
+          result.value != null) {
+        throw StateError(
+          'ParallelInterceptors members must observe, not modify: one returned '
+          '${result.disposition.name}. Move it to the sequential list.',
+        );
+      }
+    }
+  }
 }
 
 /// The result of running one hook across every interceptor.

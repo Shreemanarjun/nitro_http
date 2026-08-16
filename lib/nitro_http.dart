@@ -41,6 +41,7 @@ export 'src/api/exceptions.dart';
 export 'src/api/fetch.dart';
 export 'src/api/headers.dart';
 export 'src/api/interceptor.dart';
+export 'src/api/log_interceptor.dart';
 export 'src/api/progress.dart';
 export 'src/api/request.dart';
 export 'src/api/response.dart';

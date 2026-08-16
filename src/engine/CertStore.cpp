@@ -8,6 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 #include "CertStore.h"
 
+#include <cctype>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -196,10 +197,37 @@ bool backendHasSsl() {
   return info != nullptr && (info->features & CURL_VERSION_SSL) != 0;
 }
 
+// Whether the linked TLS backend resolves trust through the Keychain on its
+// own. Apple's own libcurl does, because it is built against Secure Transport;
+// a vendored build against BoringSSL does NOT, and there is no compiled-in CA
+// bundle either, so supplying nothing leaves it with an EMPTY trust store.
+//
+// This used to be assumed from the platform (`#if defined(__APPLE__)` => true),
+// which was correct only for the SDK's libcurl. Against the vendored NitroCurl
+// slice — the normal case — every HTTPS request failed with CURLcode 60,
+// "SSL peer certificate ... was not OK", on macOS. Nothing caught it because
+// every benchmark and native test talks to a PLAINTEXT loopback server, so
+// certificate verification against a public CA was never exercised.
+//
+// Read from curl at runtime instead of guessed at compile time: one binary can
+// be linked either way, and only curl knows which.
+bool backendResolvesAppleTrust() {
+  const curl_version_info_data* info = curl_version_info(CURLVERSION_NOW);
+  if (info == nullptr || info->ssl_version == nullptr) return false;
+  std::string name(info->ssl_version);
+  for (char& c : name) c = static_cast<char>(std::tolower(c));
+  // curl spells it "SecureTransport"; older builds used "AppleTLS"/"darwinssl".
+  return name.find("securetransport") != std::string::npos ||
+         name.find("secure transport") != std::string::npos ||
+         name.find("appletls") != std::string::npos ||
+         name.find("darwinssl") != std::string::npos;
+}
+
 std::once_flag g_warnVerifyDisabled;
 std::once_flag g_warnTrustNone;
 std::once_flag g_warnNoBlobSupport;
 std::once_flag g_warnEmptyBundle;
+std::once_flag g_warnAppleKeychainUnavailable;
 #if NITRO_HTTP_SCANS_TRUST_FILES
 std::once_flag g_warnNoPlatformRoots;
 #endif
@@ -301,11 +329,11 @@ const std::string& CertStore::bundledRootsPem() {
 
 bool CertStore::usesPlatformVerifyCallback() {
 #if defined(__APPLE__)
-  // On Apple we supply no bundle at all: the system libcurl this plugin links
-  // is built against a platform-integrated backend, so curl's own default trust
-  // already resolves to the Keychain (including user-installed and MDM roots).
-  // Overriding CAINFO there would *narrow* trust, not widen it.
-  return true;
+  // Only when the backend really does resolve the Keychain itself. Against
+  // Apple's Secure-Transport libcurl, overriding CAINFO would *narrow* trust,
+  // so nothing is installed. Against the vendored BoringSSL slice, installing
+  // nothing means trusting nothing — see backendResolvesAppleTrust().
+  return certdetail::backendResolvesAppleTrust();
 #else
   return false;
 #endif
@@ -404,8 +432,36 @@ EngineError CertStore::apply(CURL* easy, const RawTlsConfig& tls,
                  "falling back to its compiled-in trust store");
       }
 #elif defined(__APPLE__)
-      // Nothing to install: curl's default trust already resolves through the
-      // platform-integrated backend. See usesPlatformVerifyCallback().
+      // Only Apple's own Secure-Transport libcurl resolves the Keychain by
+      // itself. The vendored NitroCurl slice links BoringSSL, which has NEITHER
+      // platform trust NOR a compiled-in CA bundle, so installing nothing left
+      // it trusting nothing at all: every HTTPS request failed with CURLcode 60
+      // on macOS and iOS alike. It went unnoticed because every benchmark and
+      // native test uses a PLAINTEXT loopback server, so no public certificate
+      // was ever verified.
+      if (!usesPlatformVerifyCallback()) {
+        const std::string& roots = bundledRootsPem();
+        if (roots.empty()) {
+          warnOnce(g_warnEmptyBundle,
+                   "nitro_http: no CA roots available from the compiled-in "
+                   "bundle (run tool/gen_mozilla_roots.sh); HTTPS will fail");
+        } else if (!setCaBundleBlob(easy, roots, true)) {
+          warnOnce(g_warnNoBlobSupport,
+                   "nitro_http: this libcurl predates CURLOPT_CAINFO_BLOB; "
+                   "falling back to its compiled-in trust store");
+        } else {
+          // Honest about what this costs: the compiled-in bundle is Mozilla's
+          // root list, so a root the USER or an MDM profile added to the
+          // Keychain is not trusted. Serving those needs a custom verify
+          // callback into SecTrustEvaluateWithError, which is the follow-up.
+          warnOnce(g_warnAppleKeychainUnavailable,
+                   "nitro_http: the linked TLS backend cannot read the Apple "
+                   "Keychain, so RootCaSource.platform is served by the "
+                   "compiled-in Mozilla bundle; user- or MDM-installed roots "
+                   "are not trusted. Pass RootCaSource.custom with your own "
+                   "PEM if you need them.");
+        }
+      }
 #else
       // Unknown platform: the compiled-in bundle is the only thing we know is
       // there. Trust that cannot see user-installed roots beats no trust.

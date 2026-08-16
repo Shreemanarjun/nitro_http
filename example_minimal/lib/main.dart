@@ -1,17 +1,20 @@
-// A deliberately minimal nitro_http app.
+// A deliberately minimal nitro_http app: this package and nothing else.
 //
-// The main `example/` is a benchmark harness: it also depends on dio, rhttp and
-// package:http so it can race them. That makes it a poor place to answer "does
-// nitro_http work on this platform?", because a failure might belong to any of
-// them — a missing Rust toolchain for rhttp has broken its build more than once.
+// The main `example/` is a benchmark harness that also depends on dio, rhttp
+// and package:http so it can race them. That makes it a poor instrument for
+// "does nitro_http work on this platform?" — a red build there might belong to
+// any of the four, and rhttp's Rust toolchain has broken it more than once for
+// reasons unrelated to this package.
 //
-// This app depends on nitro_http and nothing else, so anything that goes wrong
-// here is ours. It is the app to reach for when checking a fresh platform
-// setup, a new Flutter version, or an SDK bump.
-import 'dart:async';
+// Everything here runs against https://httpbin.io over a real network, so DNS,
+// TLS, redirects and content negotiation are all exercised. The check matrix
+// lives in checks.dart.
+import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
 import 'package:nitro_http/nitro_http.dart';
+
+import 'checks.dart';
 
 void main() => runApp(const MinimalApp());
 
@@ -26,6 +29,15 @@ class MinimalApp extends StatelessWidget {
   );
 }
 
+enum Outcome { pending, running, pass, fail }
+
+class CheckRow {
+  CheckRow(this.check);
+  final Check check;
+  Outcome outcome = Outcome.pending;
+  String detail = '';
+}
+
 class Home extends StatefulWidget {
   const Home({super.key});
   @override
@@ -33,15 +45,29 @@ class Home extends StatefulWidget {
 }
 
 class _HomeState extends State<Home> {
-  final _client = NitroHttpClient(
+  late final NitroHttpClient _client = NitroHttpClient(
     settings: const ClientSettings(
-      baseUrl: 'https://httpbin.org',
+      baseUrl: httpbin,
       userAgent: 'nitro_http_minimal/1.0',
-      timeout: Duration(seconds: 20),
+      timeout: Duration(seconds: 30),
+      cookieSettings: CookieSettings(storeCookies: true),
+      cacheSettings: CacheSettings(enabled: true),
+      // A checking app wants to INSPECT a 404 or 401, not have it thrown. The
+      // default (true) is the right default for an app; it is wrong here.
+      throwOnStatusCode: false,
     ),
   );
 
-  final _log = <String>[];
+  late final List<CheckRow> _rows = checks.map(CheckRow.new).toList();
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Run on launch: this app exists to answer "does the engine work here?",
+    // and making that require a tap means a terminal or CI run answers nothing.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _runAll());
+  }
 
   @override
   void dispose() {
@@ -49,101 +75,128 @@ class _HomeState extends State<Home> {
     super.dispose();
   }
 
-  void _say(String line) {
-    if (mounted) setState(() => _log.insert(0, line));
-  }
-
-  /// What the linked engine can actually do. Reported by the binary at runtime
-  /// rather than assumed, so a build that silently fell back to a system
-  /// libcurl shows up here as `http3 false` instead of failing much later.
-  void _capabilities() {
-    _say('engine    ${NitroHttp.engineVersion}');
-    _say('http3 ${NitroHttp.supportsHttp3}  ws ${NitroHttp.supportsWebSockets}  '
-        'brotli ${NitroHttp.supportsBrotli}  zstd ${NitroHttp.supportsZstd}');
-  }
-
-  Future<void> _get() async {
-    try {
-      final res = await _client.get('/json');
-      final keys = (res.bodyToJson()! as Map).keys.join(', ');
-      _say('GET /json -> ${res.statusCode} ${res.version.label} '
-          '${res.bodyBytes.length}B  keys: $keys');
-      _say('  dns ${res.timings.dns}  tls ${res.timings.tls}  '
-          'ttfb ${res.timings.firstByte}');
-    } on NitroHttpException catch (e) {
-      _say('GET failed: ${e.runtimeType} — ${e.message}');
-    }
-  }
-
-  /// Streaming with backpressure: chunks arrive as the socket delivers them and
-  /// nothing buffers the whole body in the Dart heap.
-  Future<void> _stream() async {
-    try {
-      final res = await _client.requestStream(HttpMethod.get, '/bytes/1048576');
-      var seen = 0;
-      await for (final chunk in res.body) {
-        seen += chunk.length;
+  Future<void> _runAll() async {
+    setState(() {
+      _busy = true;
+      for (final r in _rows) {
+        r
+          ..outcome = Outcome.pending
+          ..detail = '';
       }
-      _say('streamed 1 MiB -> $seen bytes, status ${res.statusCode}');
-    } on NitroHttpException catch (e) {
-      _say('stream failed: ${e.message}');
+    });
+    for (final row in _rows) {
+      setState(() => row.outcome = Outcome.running);
+      try {
+        final detail = await row.check.run(_client);
+        row
+          ..outcome = Outcome.pass
+          ..detail = detail;
+      } catch (e) {
+        row
+          ..outcome = Outcome.fail
+          ..detail = '$e';
+      }
+      _emit(row);
+      if (!mounted) return;
+      setState(() {});
     }
+    setState(() => _busy = false);
+    _line('NITRO_CHECKS_DONE $_passed passed, $_failed failed');
   }
 
-  /// Cancellation is enforced inside the engine, so this aborts the transfer
-  /// rather than merely dropping the Dart future.
-  Future<void> _cancel() async {
-    final token = CancelToken();
-    Timer(const Duration(milliseconds: 300), () => token.cancel('user tapped cancel'));
-    try {
-      await _client.get('/delay/5', cancelToken: token);
-      _say('cancel: request finished before the timer (unexpected)');
-    } on NitroHttpCancelException catch (e) {
-      _say('cancelled as expected: ${e.reason}');
-    } on NitroHttpException catch (e) {
-      _say('cancel test failed: ${e.message}');
-    }
+  void _emit(CheckRow row) {
+    final mark = row.outcome == Outcome.pass ? 'PASS' : 'FAIL';
+    _line('  $mark  ${row.check.group}/${row.check.name}  —  ${row.detail}');
   }
+
+  // debugPrint keeps long lines intact; developer.log makes them visible in a
+  // release run too, where print() is dropped on some platforms.
+  void _line(String s) {
+    debugPrint(s);
+    developer.log(s, name: 'nitro_http');
+  }
+
+  int get _passed => _rows.where((r) => r.outcome == Outcome.pass).length;
+  int get _failed => _rows.where((r) => r.outcome == Outcome.fail).length;
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('nitro_http · minimal')),
-    body: Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(12),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('nitro_http · checks'),
+        actions: [
+          if (_failed > 0)
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Center(
+                child: Text('$_passed passed, $_failed failed',
+                    style: TextStyle(color: theme.colorScheme.error)),
+              ),
+            )
+          else if (_passed > 0)
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Center(child: Text('$_passed passed')),
+            ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _busy ? null : _runAll,
+        icon: _busy
+            ? const SizedBox(
+                width: 16, height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2))
+            : const Icon(Icons.play_arrow),
+        label: Text(_busy ? 'Running…' : 'Run all'),
+      ),
+      body: ListView.builder(
+        padding: const EdgeInsets.only(bottom: 88),
+        itemCount: _rows.length,
+        itemBuilder: (_, i) {
+          final row = _rows[i];
+          final first = i == 0 || _rows[i - 1].check.group != row.check.group;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              FilledButton(onPressed: _capabilities, child: const Text('Capabilities')),
-              FilledButton(onPressed: _get, child: const Text('GET json')),
-              FilledButton(onPressed: _stream, child: const Text('Stream 1 MiB')),
-              FilledButton(onPressed: _cancel, child: const Text('Cancel')),
-              OutlinedButton(
-                onPressed: () => setState(_log.clear),
-                child: const Text('Clear'),
+              if (first)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 18, 16, 4),
+                  child: Text(row.check.group.toUpperCase(),
+                      style: theme.textTheme.labelSmall
+                          ?.copyWith(letterSpacing: 1.4)),
+                ),
+              ListTile(
+                dense: true,
+                leading: switch (row.outcome) {
+                  Outcome.pending => const Icon(Icons.remove, size: 18),
+                  Outcome.running => const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2)),
+                  Outcome.pass =>
+                    Icon(Icons.check, size: 18, color: Colors.green.shade600),
+                  Outcome.fail =>
+                    Icon(Icons.close, size: 18, color: theme.colorScheme.error),
+                },
+                title: Text(row.check.name,
+                    style: const TextStyle(fontSize: 13.5)),
+                subtitle: row.detail.isEmpty
+                    ? null
+                    : SelectableText(
+                        row.detail,
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11.5,
+                          color: row.outcome == Outcome.fail
+                              ? theme.colorScheme.error
+                              : theme.textTheme.bodySmall?.color,
+                        ),
+                      ),
               ),
             ],
-          ),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: _log.isEmpty
-              ? const Center(child: Text('Tap a button — results appear here.'))
-              : ListView.builder(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: _log.length,
-                  itemBuilder: (_, i) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 3),
-                    child: SelectableText(
-                      _log[i],
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-                    ),
-                  ),
-                ),
-        ),
-      ],
-    ),
-  );
+          );
+        },
+      ),
+    );
+  }
 }

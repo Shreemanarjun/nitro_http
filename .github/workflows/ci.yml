@@ -126,9 +126,13 @@ jobs:
       - name: nitrogen link
         run: nitrogen link
 
+      # `pubspec.lock` is excluded because nitrogen runs `pub get`, and pub
+      # resolves against whatever Flutter the runner ships. A newer SDK pins
+      # newer transitive versions, so the lock drifts on an SDK bump rather than
+      # on anything codegen did — which is not what this job is asserting.
       - name: Nothing changed
         run: |
-          if ! git diff --exit-code; then
+          if ! git diff --exit-code -- . ':(exclude)**/pubspec.lock'; then
             echo '::error::nitrogen generate/link modified tracked files.'
             echo 'Either commit the regenerated output, or move the hand-written'
             echo 'logic out of a nitrogen-managed section (see src/deps.cmake and'

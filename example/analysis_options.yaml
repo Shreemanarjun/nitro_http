@@ -18,6 +18,17 @@ analyzer:
     # an inexhaustive switch over a sealed type must not be a warning
     non_exhaustive_switch_statement: error
     non_exhaustive_switch_expression: error
+  exclude:
+    # Added by `nitrogen generate`. Committed so the codegen-is-a-no-op CI job
+    # stays green: nitrogen appends these when they are missing, and a fresh
+    # checkout would otherwise differ from the tree every run.
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
 
 linter:
   # The lint rules applied to this project can be customized in the

@@ -2,81 +2,82 @@
 
 ### Fixed
 
-* **`RootCaSource.none` did the opposite of what it documents.** It is specified
-  as "no trust anchors at all, so every chain fails unless a pin matches", but
-  the engine implemented it by clearing `CURLOPT_SSL_VERIFYPEER`, so every chain
-  succeeded instead. Without a pin it is now refused outright, with a message
-  pointing at `TlsSettings.insecure()`. With a pin it is unchanged.
+* `RootCaSource.none` verified nothing instead of trusting nothing — every chain
+  was accepted. It is now refused unless `pinnedSpkiSha256` is set; use
+  `TlsSettings.insecure()` to skip verification deliberately.
 
-* **HTTPS was completely broken on iOS and macOS.** `CertStore` assumed an Apple
-  platform meant a Keychain-integrated TLS backend. That holds for the SDK's
-  libcurl but not for the vendored slice, which links BoringSSL and has neither
-  platform trust nor a compiled-in CA bundle, so no roots were installed and
-  every request failed with `CURLcode 60`. The backend is now detected at
-  runtime and the bundled Mozilla roots are installed when it cannot read the
-  Keychain. Android was never affected.
+* HTTPS failed on every iOS and macOS request against the vendored engine
+  (`CURLcode 60`). The TLS backend is detected at runtime and the bundled
+  Mozilla roots are installed when the platform store is unreachable. Note that
+  `RootCaSource.platform` on Apple is then served by that bundle, so a root added
+  to the Keychain by a user or MDM profile is not trusted — use
+  `RootCaSource.custom` with your own PEM. Android was never affected.
 
-  One limit remains: `RootCaSource.platform` on Apple is served by that bundle,
-  so a root added to the Keychain by a user or MDM profile is not trusted. Use
-  `RootCaSource.custom` with your own PEM if you need one.
+* `wss://` segfaulted against any HTTP/2-capable server. The handshake pins
+  HTTP/1.1. Plain `ws://` was unaffected.
 
-* **`wss://` crashed the process against any HTTP/2-capable server.** The
-  handshake runs a `CONNECT_ONLY` handle and reads with `curl_easy_recv`, but
-  never pinned the HTTP version, so ALPN negotiated h2 and curl routed the read
-  through its nghttp2 filter, segfaulting in `Curl_multi_connchanged`. The
-  handshake now pins HTTP/1.1. Plain `ws://` was unaffected.
+* `StreamChunkSettings.minContentLength: 0` was read as "unset" and replaced with
+  the 1 MiB default, so nothing under 1 MiB batched.
 
-* **`StreamChunkSettings.minContentLength: 0` was ignored.** Zero was read as
-  "unset" and replaced with the 1 MiB default, so asking to batch every response
-  regardless of size produced no batching at all below 1 MiB.
-
-* **`maxHold` did nothing on a slow link.** A part-full chunk was only checked
-  for age when the next block arrived, so a connection that went quiet mid-chunk
-  never produced the callback that would have released it — precisely the case
-  the setting exists for. The engine loop now polls the deadline.
+* `StreamChunkSettings.maxHold` never fired while a connection was idle, which is
+  the case it exists for. The engine loop polls the deadline.
 
 ### Added
 
-* **`LogInterceptor` and `ParallelInterceptors`.** The logger writes one line per
-  call at four levels, redacts credential headers, and never drains a streamed
-  body to log it. `ParallelInterceptors` runs a group of observers concurrently,
-  for when each of them awaits I/O; members that modify the chain are rejected.
+* `LogInterceptor` — one line per call at four levels (`none`, `basic`,
+  `headers`, `body`), credential headers redacted, streamed bodies never drained,
+  duration taken from the engine's timings.
 
-* **Interceptor hooks can return `FutureOr`.** The chain stays synchronous until
-  a hook actually returns a future. Three synchronous interceptors cost 4.4 µs
-  per request against 50.8 µs before. `Interceptor.proceedRequest` and
-  `proceedResponse` are `const` results for hooks with nothing to say.
+* `ParallelInterceptors` — runs independent observers concurrently for when each
+  awaits I/O. Members that modify the chain throw.
 
-  Existing `async` hooks still compile. Two edges need a change: a subclass that
-  returns `super.beforeRequest(…)` from a method declared `Future<…>` must widen
-  it to `FutureOr`, and `InterceptorChain.runOnError` now throws synchronously
-  instead of returning a rejected future.
+* Interceptor hooks return `FutureOr`, and the chain stays synchronous until one
+  returns a future: three synchronous interceptors cost 4.4 µs per request
+  against 50.8 µs before. `Interceptor.proceedRequest` and
+  `Interceptor.proceedResponse` are `const` pass-through results.
 
-* **Two new exception types.** `NitroHttpTlsException` for a handshake that never
-  reached a certificate, `NitroHttpConfigurationException` for settings refused
-  before a socket opens. They previously arrived as
-  `NitroHttpCertificateException` and `NitroHttpUnknownException`. The family is
-  sealed, so exhaustive switches need the new cases.
+* `NitroHttpTlsException` for a handshake that failed before any certificate, and
+  `NitroHttpConfigurationException` for settings refused before a socket opens.
+  Split out of `NitroHttpCertificateException` and `NitroHttpUnknownException`.
 
-* **End-to-end tests for 26 settings that had only configuration tests.** That
-  gap is what let `RootCaSource.none`, the Apple trust path and `sniHostname`
-  ship broken. Now covered: redirect caps, cookie suppression and persistence,
-  the idle deadline, compression, pool limits, SOCKS5, proxy credentials, upload
-  progress, chunk batching, custom verbs, alt-svc, DoH and h3 negotiation. The
-  TLS settings run against a locally generated CA: custom roots, SPKI pinning
-  both directions, mutual TLS, the version clamp and `wss://`.
-  `TlsSettings.sniHostname` is a named skip, since it is still ignored.
+* `NitroWebSocket.connect` accepts `tlsSettings`, so `wss://` can use custom
+  roots, SPKI pinning, mTLS and a version clamp.
 
-* **Tests for resumable downloads and uploads.** `Range` and `Content-Range`
-  always worked; nothing proved it.
-  [ADVANCED.md](doc/ADVANCED.md#resuming-an-interrupted-transfer) shows the
-  append-on-206 shape a resumed download needs.
+### Changed
 
-* **WebSockets accept `TlsSettings`.** `RawWsConfig` carried no TLS block, so a
-  `wss://` socket could not use custom roots, pinning, mTLS or a version clamp
-  even when the same client applied them to its HTTP requests.
-  `NitroWebSocket.connect` now takes `tlsSettings` and defaults to the previous
-  behaviour.
+* Chunk-batching defaults are set where the engine config is constructed instead
+  of being inferred from `0` where it is read, so `0` means zero.
+
+### Migration
+
+* `NitroHttpException` is sealed: exhaustive switches need
+  `NitroHttpTlsException` and `NitroHttpConfigurationException`.
+
+* An `Interceptor` subclass that returns `super.beforeRequest(…)` from a method
+  declared `Future<…>` must widen its own return type to `FutureOr`. Ordinary
+  `async` overrides are unaffected.
+
+* `InterceptorChain.runOnError` throws synchronously for an unhandled failure
+  rather than returning a rejected future. `await` behaves as before.
+
+### Tests
+
+Behavioural coverage, added because the three TLS and WebSocket bugs above all
+shipped past configuration-only tests.
+
+* 26 settings that had configuration tests but no end-to-end ones: redirect caps,
+  cookie suppression and persistence, the idle deadline, compression, pool
+  limits, SOCKS5, proxy credentials, upload progress, chunk batching, custom
+  verbs, alt-svc, DoH, h3 negotiation, and the TLS settings against a locally
+  generated CA. `TlsSettings.sniHostname` is a named skip, since it is still
+  ignored.
+* WebSockets against a real peer: 7 engine tests (binary and 200 KB payloads,
+  empty frames, fragment reassembly, automatic pong, `maxFrameBytes`, send after
+  close) and 13 Dart tests (close codes, subprotocols, keepalive, burst
+  ordering, concurrent sockets not crossing streams).
+* Resumable downloads and uploads. `Range` and `Content-Range` always worked;
+  nothing proved it. See
+  [ADVANCED.md](doc/ADVANCED.md#resuming-an-interrupted-transfer).
 
 ## 0.0.3
 

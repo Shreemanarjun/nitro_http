@@ -4,6 +4,9 @@ version: 0.0.4
 homepage: https://github.com/Shreemanarjun/nitro_http
 repository: https://github.com/Shreemanarjun/nitro_http
 issue_tracker: https://github.com/Shreemanarjun/nitro_http/issues
+documentation: https://github.com/Shreemanarjun/nitro_http/blob/main/doc/ADVANCED.md
+funding:
+  - https://buymeacoffee.com/shreemanarjun
 topics:
   - http
   - network

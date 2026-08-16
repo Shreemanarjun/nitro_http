@@ -971,6 +971,18 @@ opening a pull request.
 
 Bugs and feature requests: [issue tracker](https://github.com/Shreemanarjun/nitro_http/issues).
 
+## Links
+
+| | |
+|---|---|
+| Documentation | [doc/ADVANCED.md](doc/ADVANCED.md) |
+| Nitro for Flutter | [nitro.shreeman.dev](https://nitro.shreeman.dev/) |
+| Issues | [github.com/Shreemanarjun/nitro_http/issues](https://github.com/Shreemanarjun/nitro_http/issues) |
+| Changelog | [CHANGELOG.md](CHANGELOG.md) |
+
+If this package saves you time, you can
+[buy me a coffee](https://buymeacoffee.com/shreemanarjun).
+
 ## License
 
 [MIT](LICENSE) © Shreeman Arjun Sahu.

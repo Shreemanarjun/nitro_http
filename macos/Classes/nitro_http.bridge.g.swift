@@ -1091,8 +1091,9 @@ public struct RawWsConfig: NitroEncodable {
   public var pingIntervalMs: Int64
   public var maxFrameBytes: Int64
   public var connectTimeoutMs: Int64
+  public var tls: RawTlsConfig
 
-  public init(socketId: Int64, url: String, protocols: [String], headers: [RawHeader], pingIntervalMs: Int64, maxFrameBytes: Int64, connectTimeoutMs: Int64) {
+  public init(socketId: Int64, url: String, protocols: [String], headers: [RawHeader], pingIntervalMs: Int64, maxFrameBytes: Int64, connectTimeoutMs: Int64, tls: RawTlsConfig) {
     self.socketId = socketId
     self.url = url
     self.protocols = protocols
@@ -1100,6 +1101,7 @@ public struct RawWsConfig: NitroEncodable {
     self.pingIntervalMs = pingIntervalMs
     self.maxFrameBytes = maxFrameBytes
     self.connectTimeoutMs = connectTimeoutMs
+    self.tls = tls
   }
 
   public static func fromNative(_ ptr: UnsafeMutablePointer<UInt8>) -> RawWsConfig {
@@ -1114,7 +1116,8 @@ public struct RawWsConfig: NitroEncodable {
       headers: (0..<Int(r.readInt32())).map { _ in RawHeader.fromReader(r) },
       pingIntervalMs: r.readInt(),
       maxFrameBytes: r.readInt(),
-      connectTimeoutMs: r.readInt()
+      connectTimeoutMs: r.readInt(),
+      tls: RawTlsConfig.fromReader(r)
     )
   }
 
@@ -1128,6 +1131,7 @@ public struct RawWsConfig: NitroEncodable {
     writer.writeInt(pingIntervalMs)
     writer.writeInt(maxFrameBytes)
     writer.writeInt(connectTimeoutMs)
+    tls.writeFields(writer)
   }
 
   public func toNative() -> UnsafeMutablePointer<UInt8>? {

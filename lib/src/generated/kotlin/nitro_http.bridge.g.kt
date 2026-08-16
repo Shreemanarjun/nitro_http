@@ -1276,7 +1276,7 @@ data class RawCacheStats(val entryCount: Long, val sizeBytes: Long, val hitCount
 }
 
 @androidx.annotation.Keep
-data class RawWsConfig(val socketId: Long, val url: String, val protocols: List<String>, val headers: List<RawHeader>, val pingIntervalMs: Long, val maxFrameBytes: Long, val connectTimeoutMs: Long) {
+data class RawWsConfig(val socketId: Long, val url: String, val protocols: List<String>, val headers: List<RawHeader>, val pingIntervalMs: Long, val maxFrameBytes: Long, val connectTimeoutMs: Long, val tls: RawTlsConfig) {
     companion object {
         @JvmStatic fun decodeFrom(buf: java.nio.ByteBuffer): RawWsConfig {
             val socketId = buf.long
@@ -1286,7 +1286,8 @@ data class RawWsConfig(val socketId: Long, val url: String, val protocols: List<
             val pingIntervalMs = buf.long
             val maxFrameBytes = buf.long
             val connectTimeoutMs = buf.long
-            return RawWsConfig(socketId, url, protocols, headers, pingIntervalMs, maxFrameBytes, connectTimeoutMs)
+            val tls = RawTlsConfig.decodeFrom(buf)
+            return RawWsConfig(socketId, url, protocols, headers, pingIntervalMs, maxFrameBytes, connectTimeoutMs, tls)
         }
         @JvmStatic fun decode(bytes: ByteArray): RawWsConfig {
             val buf = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
@@ -1301,10 +1302,11 @@ data class RawWsConfig(val socketId: Long, val url: String, val protocols: List<
                 headers = @Suppress("UNCHECKED_CAST") (map["headers"] as List<RawHeader>),
                 pingIntervalMs = (map["pingIntervalMs"] as Number).toLong(),
                 maxFrameBytes = (map["maxFrameBytes"] as Number).toLong(),
-                connectTimeoutMs = (map["connectTimeoutMs"] as Number).toLong()
+                connectTimeoutMs = (map["connectTimeoutMs"] as Number).toLong(),
+                tls = RawTlsConfig.fromJson(@Suppress("UNCHECKED_CAST") (map["tls"] as Map<String, Any?>))
         )
         // Thread-local encode buffers — avoids allocation per bridge call.
-        val _tlsOut = ThreadLocal.withInitial { java.io.ByteArrayOutputStream(140) }
+        val _tlsOut = ThreadLocal.withInitial { java.io.ByteArrayOutputStream(172) }
         val _tlsBuf = ThreadLocal.withInitial { java.nio.ByteBuffer.allocate(8).order(java.nio.ByteOrder.LITTLE_ENDIAN) }
     }
 
@@ -1323,6 +1325,7 @@ data class RawWsConfig(val socketId: Long, val url: String, val protocols: List<
         writeInt(pingIntervalMs.toLong())
         writeInt(maxFrameBytes.toLong())
         writeInt(connectTimeoutMs.toLong())
+        tls.writeFieldsTo(out, buf)
     }
 
     fun encode(): ByteArray {
@@ -1336,7 +1339,7 @@ data class RawWsConfig(val socketId: Long, val url: String, val protocols: List<
     }
 
     // --- toJson/fromJson for Map<String, RawWsConfig> support ---
-    fun toJson(): Map<String, Any?> = mapOf("socketId" to socketId, "url" to url, "protocols" to protocols, "headers" to headers, "pingIntervalMs" to pingIntervalMs, "maxFrameBytes" to maxFrameBytes, "connectTimeoutMs" to connectTimeoutMs)
+    fun toJson(): Map<String, Any?> = mapOf("socketId" to socketId, "url" to url, "protocols" to protocols, "headers" to headers, "pingIntervalMs" to pingIntervalMs, "maxFrameBytes" to maxFrameBytes, "connectTimeoutMs" to connectTimeoutMs, "tls" to tls.toJson())
 
 }
 
@@ -1708,67 +1711,67 @@ interface HybridNitroHttpNativeSpec {
     fun onActivityAttached(activity: Activity) {}
     fun onActivityDetached() {}
 
-    // source: nitro_http.native.dart:730
-    fun engineVersion(): String
-    // source: nitro_http.native.dart:732
-    fun supportsHttp3(): Boolean
-    // source: nitro_http.native.dart:733
-    fun supportsWebSockets(): Boolean
-    // source: nitro_http.native.dart:734
-    fun supportsBrotli(): Boolean
-    // source: nitro_http.native.dart:735
-    fun supportsZstd(): Boolean
     // source: nitro_http.native.dart:739
-    fun resetNative(): Unit
-    // source: nitro_http.native.dart:745
-    fun configureClient(config: RawClientConfig): Unit
+    fun engineVersion(): String
+    // source: nitro_http.native.dart:741
+    fun supportsHttp3(): Boolean
+    // source: nitro_http.native.dart:742
+    fun supportsWebSockets(): Boolean
+    // source: nitro_http.native.dart:743
+    fun supportsBrotli(): Boolean
+    // source: nitro_http.native.dart:744
+    fun supportsZstd(): Boolean
     // source: nitro_http.native.dart:748
+    fun resetNative(): Unit
+    // source: nitro_http.native.dart:754
+    fun configureClient(config: RawClientConfig): Unit
+    // source: nitro_http.native.dart:757
     suspend fun sendBuffered(request: RawRequest, body: java.nio.ByteBuffer): RawResponse
-    // source: nitro_http.native.dart:771
+    // source: nitro_http.native.dart:780
     fun sendBufferedCoalesced(callId: Long, request: RawRequest, body: java.nio.ByteBuffer, dartPort: Long): Unit
-    // source: nitro_http.native.dart:788
-    fun releaseRecord(address: Long): Unit
-    // source: nitro_http.native.dart:791
-    suspend fun startStreamed(request: RawRequest, body: java.nio.ByteBuffer): RawResponseHead
-    // source: nitro_http.native.dart:796
-    fun cancel(requestId: Long): Unit
     // source: nitro_http.native.dart:797
+    fun releaseRecord(address: Long): Unit
+    // source: nitro_http.native.dart:800
+    suspend fun startStreamed(request: RawRequest, body: java.nio.ByteBuffer): RawResponseHead
+    // source: nitro_http.native.dart:805
+    fun cancel(requestId: Long): Unit
+    // source: nitro_http.native.dart:806
     fun cancelAll(): Unit
-    // source: nitro_http.native.dart:809
+    // source: nitro_http.native.dart:818
     fun cancelToken(tokenId: Long, reason: String): Unit
-    // source: nitro_http.native.dart:817
+    // source: nitro_http.native.dart:826
     fun releaseCancelToken(tokenId: Long): Unit
-    // source: nitro_http.native.dart:832
-    fun grantCredit(requestId: Long, chunkCount: Long, ackedChunks: Long): Unit
-    // source: nitro_http.native.dart:836
-    fun feedUploadChunk(requestId: Long, chunk: java.nio.ByteBuffer): Long
-    // source: nitro_http.native.dart:838
-    fun finishUpload(requestId: Long): Unit
     // source: nitro_http.native.dart:841
-    fun failUpload(requestId: Long, message: String): Unit
-    // source: nitro_http.native.dart:844
-    fun getCookies(url: String): List<RawCookie>
+    fun grantCredit(requestId: Long, chunkCount: Long, ackedChunks: Long): Unit
     // source: nitro_http.native.dart:845
-    fun setCookie(cookie: RawCookie): Unit
-    // source: nitro_http.native.dart:846
-    fun clearCookies(): Unit
+    fun feedUploadChunk(requestId: Long, chunk: java.nio.ByteBuffer): Long
     // source: nitro_http.native.dart:847
-    fun flushCookies(): Unit
-    // source: nitro_http.native.dart:851
-    fun configureCache(config: RawCacheConfig): Unit
+    fun finishUpload(requestId: Long): Unit
+    // source: nitro_http.native.dart:850
+    fun failUpload(requestId: Long, message: String): Unit
+    // source: nitro_http.native.dart:853
+    fun getCookies(url: String): List<RawCookie>
+    // source: nitro_http.native.dart:854
+    fun setCookie(cookie: RawCookie): Unit
+    // source: nitro_http.native.dart:855
+    fun clearCookies(): Unit
     // source: nitro_http.native.dart:856
+    fun flushCookies(): Unit
+    // source: nitro_http.native.dart:860
+    fun configureCache(config: RawCacheConfig): Unit
+    // source: nitro_http.native.dart:865
     suspend fun prefetch(request: RawRequest): RawResponse
-    // source: nitro_http.native.dart:858
-    fun clearCache(): Unit
-    // source: nitro_http.native.dart:859
-    fun cacheStats(): RawCacheStats
-    // source: nitro_http.native.dart:864
-    suspend fun wsConnect(config: RawWsConfig): RawWsHandshake
     // source: nitro_http.native.dart:867
+    fun clearCache(): Unit
+    // source: nitro_http.native.dart:868
+    fun cacheStats(): RawCacheStats
+    // source: nitro_http.native.dart:873
+    suspend fun wsConnect(config: RawWsConfig): RawWsHandshake
+    // source: nitro_http.native.dart:876
     fun wsSend(opcode: Long, payload: java.nio.ByteBuffer): Long
-    // source: nitro_http.native.dart:869
+    // source: nitro_http.native.dart:878
     fun wsClose(code: Long, reason: String): Unit
-    // source: nitro_http.native.dart:872
+    // source: nitro_http.native.dart:881
     fun wsGrantCredit(frameCount: Long, ackedFrames: Long): Unit
     val chunks: Flow<RawChunk>
     val events: Flow<RawEvent>
@@ -1865,37 +1868,37 @@ object NitroHttpNativeJniBridge {
     // still posts exactly one message so the port fires either way.
     @JvmStatic external fun reportNativeAsyncError(errPtr: Long, name: String, message: String)
 
-    // source: nitro_http.native.dart:730
+    // source: nitro_http.native.dart:739
     @JvmStatic fun engineVersion_call(instanceId: Long): String {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         return impl.engineVersion()
     }
-    // source: nitro_http.native.dart:732
+    // source: nitro_http.native.dart:741
     @JvmStatic fun supportsHttp3_call(instanceId: Long): Boolean {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         return impl.supportsHttp3()
     }
-    // source: nitro_http.native.dart:733
+    // source: nitro_http.native.dart:742
     @JvmStatic fun supportsWebSockets_call(instanceId: Long): Boolean {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         return impl.supportsWebSockets()
     }
-    // source: nitro_http.native.dart:734
+    // source: nitro_http.native.dart:743
     @JvmStatic fun supportsBrotli_call(instanceId: Long): Boolean {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         return impl.supportsBrotli()
     }
-    // source: nitro_http.native.dart:735
+    // source: nitro_http.native.dart:744
     @JvmStatic fun supportsZstd_call(instanceId: Long): Boolean {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         return impl.supportsZstd()
     }
-    // source: nitro_http.native.dart:739
+    // source: nitro_http.native.dart:748
     @JvmStatic fun resetNative_call(instanceId: Long): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         impl.resetNative()
     }
-    // source: nitro_http.native.dart:745
+    // source: nitro_http.native.dart:754
     @JvmStatic fun configureClient_call(instanceId: Long, config: ByteArray): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         val configBuf = java.nio.ByteBuffer.wrap(config).order(java.nio.ByteOrder.LITTLE_ENDIAN)
@@ -1903,7 +1906,7 @@ object NitroHttpNativeJniBridge {
         val configDecoded = RawClientConfig.decodeFrom(configBuf)
         impl.configureClient(configDecoded)
     }
-    // source: nitro_http.native.dart:748
+    // source: nitro_http.native.dart:757
     @JvmStatic fun sendBuffered_call(instanceId: Long, request: ByteArray, body: java.nio.ByteBuffer, errPtr: Long, dartPort: Long) {
         val impl = _implementations[instanceId] ?: run {
             reportNativeAsyncError(errPtr, "IllegalStateException", "No implementation registered for instance")
@@ -1924,7 +1927,7 @@ object NitroHttpNativeJniBridge {
             }
         }
     }
-    // source: nitro_http.native.dart:771
+    // source: nitro_http.native.dart:780
     @JvmStatic fun sendBufferedCoalesced_call(instanceId: Long, callId: Long, request: ByteArray, body: java.nio.ByteBuffer, dartPort: Long): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         val requestBuf = java.nio.ByteBuffer.wrap(request).order(java.nio.ByteOrder.LITTLE_ENDIAN)
@@ -1932,12 +1935,12 @@ object NitroHttpNativeJniBridge {
         val requestDecoded = RawRequest.decodeFrom(requestBuf)
         impl.sendBufferedCoalesced(callId, requestDecoded, body, dartPort)
     }
-    // source: nitro_http.native.dart:788
+    // source: nitro_http.native.dart:797
     @JvmStatic fun releaseRecord_call(instanceId: Long, address: Long): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         impl.releaseRecord(address)
     }
-    // source: nitro_http.native.dart:791
+    // source: nitro_http.native.dart:800
     @JvmStatic fun startStreamed_call(instanceId: Long, request: ByteArray, body: java.nio.ByteBuffer, errPtr: Long, dartPort: Long) {
         val impl = _implementations[instanceId] ?: run {
             reportNativeAsyncError(errPtr, "IllegalStateException", "No implementation registered for instance")
@@ -1958,47 +1961,47 @@ object NitroHttpNativeJniBridge {
             }
         }
     }
-    // source: nitro_http.native.dart:796
+    // source: nitro_http.native.dart:805
     @JvmStatic fun cancel_call(instanceId: Long, requestId: Long): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         impl.cancel(requestId)
     }
-    // source: nitro_http.native.dart:797
+    // source: nitro_http.native.dart:806
     @JvmStatic fun cancelAll_call(instanceId: Long): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         impl.cancelAll()
     }
-    // source: nitro_http.native.dart:809
+    // source: nitro_http.native.dart:818
     @JvmStatic fun cancelToken_call(instanceId: Long, tokenId: Long, reason: String): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         impl.cancelToken(tokenId, reason)
     }
-    // source: nitro_http.native.dart:817
+    // source: nitro_http.native.dart:826
     @JvmStatic fun releaseCancelToken_call(instanceId: Long, tokenId: Long): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         impl.releaseCancelToken(tokenId)
     }
-    // source: nitro_http.native.dart:832
+    // source: nitro_http.native.dart:841
     @JvmStatic fun grantCredit_call(instanceId: Long, requestId: Long, chunkCount: Long, ackedChunks: Long): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         impl.grantCredit(requestId, chunkCount, ackedChunks)
     }
-    // source: nitro_http.native.dart:836
+    // source: nitro_http.native.dart:845
     @JvmStatic fun feedUploadChunk_call(instanceId: Long, requestId: Long, chunk: java.nio.ByteBuffer): Long {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         return impl.feedUploadChunk(requestId, chunk)
     }
-    // source: nitro_http.native.dart:838
+    // source: nitro_http.native.dart:847
     @JvmStatic fun finishUpload_call(instanceId: Long, requestId: Long): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         impl.finishUpload(requestId)
     }
-    // source: nitro_http.native.dart:841
+    // source: nitro_http.native.dart:850
     @JvmStatic fun failUpload_call(instanceId: Long, requestId: Long, message: String): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         impl.failUpload(requestId, message)
     }
-    // source: nitro_http.native.dart:844
+    // source: nitro_http.native.dart:853
     @JvmStatic fun getCookies_call(instanceId: Long, url: String): ByteArray {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         val result = impl.getCookies(url)
@@ -2022,7 +2025,7 @@ object NitroHttpNativeJniBridge {
         lenBuf.putInt(payload.size)
         return lenBuf.array() + payload
     }
-    // source: nitro_http.native.dart:845
+    // source: nitro_http.native.dart:854
     @JvmStatic fun setCookie_call(instanceId: Long, cookie: ByteArray): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         val cookieBuf = java.nio.ByteBuffer.wrap(cookie).order(java.nio.ByteOrder.LITTLE_ENDIAN)
@@ -2030,17 +2033,17 @@ object NitroHttpNativeJniBridge {
         val cookieDecoded = RawCookie.decodeFrom(cookieBuf)
         impl.setCookie(cookieDecoded)
     }
-    // source: nitro_http.native.dart:846
+    // source: nitro_http.native.dart:855
     @JvmStatic fun clearCookies_call(instanceId: Long): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         impl.clearCookies()
     }
-    // source: nitro_http.native.dart:847
+    // source: nitro_http.native.dart:856
     @JvmStatic fun flushCookies_call(instanceId: Long): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         impl.flushCookies()
     }
-    // source: nitro_http.native.dart:851
+    // source: nitro_http.native.dart:860
     @JvmStatic fun configureCache_call(instanceId: Long, config: ByteArray): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         val configBuf = java.nio.ByteBuffer.wrap(config).order(java.nio.ByteOrder.LITTLE_ENDIAN)
@@ -2048,7 +2051,7 @@ object NitroHttpNativeJniBridge {
         val configDecoded = RawCacheConfig.decodeFrom(configBuf)
         impl.configureCache(configDecoded)
     }
-    // source: nitro_http.native.dart:856
+    // source: nitro_http.native.dart:865
     @JvmStatic fun prefetch_call(instanceId: Long, request: ByteArray, errPtr: Long, dartPort: Long) {
         val impl = _implementations[instanceId] ?: run {
             reportNativeAsyncError(errPtr, "IllegalStateException", "No implementation registered for instance")
@@ -2069,18 +2072,18 @@ object NitroHttpNativeJniBridge {
             }
         }
     }
-    // source: nitro_http.native.dart:858
+    // source: nitro_http.native.dart:867
     @JvmStatic fun clearCache_call(instanceId: Long): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         impl.clearCache()
     }
-    // source: nitro_http.native.dart:859
+    // source: nitro_http.native.dart:868
     @JvmStatic fun cacheStats_call(instanceId: Long): ByteArray {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         val result = impl.cacheStats()
         return result.encode()
     }
-    // source: nitro_http.native.dart:864
+    // source: nitro_http.native.dart:873
     @JvmStatic fun wsConnect_call(instanceId: Long, config: ByteArray, errPtr: Long, dartPort: Long) {
         val impl = _implementations[instanceId] ?: run {
             reportNativeAsyncError(errPtr, "IllegalStateException", "No implementation registered for instance")
@@ -2101,17 +2104,17 @@ object NitroHttpNativeJniBridge {
             }
         }
     }
-    // source: nitro_http.native.dart:867
+    // source: nitro_http.native.dart:876
     @JvmStatic fun wsSend_call(instanceId: Long, opcode: Long, payload: java.nio.ByteBuffer): Long {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         return impl.wsSend(opcode, payload)
     }
-    // source: nitro_http.native.dart:869
+    // source: nitro_http.native.dart:878
     @JvmStatic fun wsClose_call(instanceId: Long, code: Long, reason: String): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         impl.wsClose(code, reason)
     }
-    // source: nitro_http.native.dart:872
+    // source: nitro_http.native.dart:881
     @JvmStatic fun wsGrantCredit_call(instanceId: Long, frameCount: Long, ackedFrames: Long): Unit {
         val impl = _implementations[instanceId] ?: throw IllegalStateException("NitroHttpNative instance $instanceId not registered")
         impl.wsGrantCredit(frameCount, ackedFrames)

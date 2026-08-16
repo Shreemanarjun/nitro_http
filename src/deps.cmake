@@ -104,20 +104,12 @@ endif()
 # ── Path 2: checksum-pinned prebuilt archive ─────────────────────────────────
 if(NOT _nh_root)
   set(_nh_sha "${NH_SLICE_${NH_SLICE}_SHA256}")
-  # A cache OUTSIDE the build tree, and outside the PACKAGE tree too.
-  #
-  # `flutter clean` must not force a re-download — that is why it is not under
-  # the build directory. But the package directory is no better: pub installs
-  # each version to its own path (…/pub.dev/nitro_http-0.0.3/), so a cache
-  # rooted there is empty again after every `pub upgrade`, and the slices are
-  # re-fetched even though the pin did not move. deps-v1 has been unchanged
-  # across every release so far, and each upgrade still cost ~12 MB on Android
-  # and ~24 MB on Apple for bytes already on disk.
-  #
-  # A user-level directory keyed by the release tag (below) fixes both: an
-  # upgrade is a cache hit, and every project on the machine shares one copy.
-  # NITRO_HTTP_DEPS_CACHE overrides it; CI usually wants that pointed at a
-  # workspace path it already caches between jobs.
+  # A cache outside the build tree, and outside the PACKAGE tree too.
+  # `flutter clean` must not force a re-download; nor must `pub upgrade`, and
+  # pub installs each version to its own path, so a cache rooted in the package
+  # directory starts empty every time even when the pin has not moved.
+  # A user-level directory keyed by the release tag (below) avoids both, and is
+  # shared by every project on the machine. NITRO_HTTP_DEPS_CACHE overrides it.
   if(DEFINED ENV{NITRO_HTTP_DEPS_CACHE})
     set(_nh_cache "$ENV{NITRO_HTTP_DEPS_CACHE}")
   elseif(WIN32 AND DEFINED ENV{LOCALAPPDATA})
@@ -127,9 +119,8 @@ if(NOT _nh_root)
   elseif(DEFINED ENV{HOME})
     set(_nh_cache "$ENV{HOME}/.cache/nitro_http/deps")
   else()
-    # No HOME (some CI containers, some Windows service accounts). Falling back
-    # to the package directory keeps the build working; it just re-downloads on
-    # upgrade, which is the behaviour everything had before.
+    # No HOME (some CI containers, service accounts): fall back to the package
+    # directory, which still builds but re-downloads on upgrade.
     set(_nh_cache "${CMAKE_CURRENT_LIST_DIR}/../.nitro_http_deps")
   endif()
   set(_nh_dest "${_nh_cache}/${NITRO_HTTP_DEPS_RELEASE}/${NH_SLICE}")

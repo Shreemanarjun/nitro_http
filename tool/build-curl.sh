@@ -95,18 +95,13 @@ if plan "$TARGET" | grep -q "platform android" && [ -z "${ANDROID_NDK_HOME:-}" ]
 fi
 
 # ── Run the slices ───────────────────────────────────────────────────────────
-# Slices are independent of one another, but each one internally is a strict
-# chain: boringssl → zlib → nghttp2 → nghttp3 → ngtcp2 → brotli → zstd → curl.
-# Only one link builds at a time, and the small links do not parallelise, so a
-# single slice leaves most of the machine idle no matter how high --jobs goes.
-# Running the slices together fills it instead.
+# Slices are independent, but each is internally a strict chain
+# (boringssl → zlib → nghttp2 → nghttp3 → ngtcp2 → brotli → zstd → curl), so one
+# slice leaves most of the machine idle however high --jobs goes. Running them
+# together fills it; cores are divided rather than handed to each.
 #
-# Cores are divided between them rather than handed to each, so the total stays
-# at roughly one job per core; oversubscribing turns a build into swap.
-#
-# Output would interleave into nonsense, so each slice writes to its own log and
-# the log is replayed when it finishes. --serial restores one-at-a-time output,
-# which is what you want when a slice is failing and you need to watch it.
+# Each slice logs to its own file because the output would otherwise interleave.
+# --serial restores one-at-a-time live output, for watching a failing slice.
 CORES=2
 if command -v nproc >/dev/null 2>&1; then CORES="$(nproc)"
 elif command -v sysctl >/dev/null 2>&1; then CORES="$(sysctl -n hw.ncpu)"; fi

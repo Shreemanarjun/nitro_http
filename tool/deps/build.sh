@@ -181,16 +181,13 @@ fi
 echo "==> nitro_http deps: $STAGE_NAME (http3=$HTTP3, generator=$GENERATOR, jobs=$JOBS)"
 
 # ── Cross-slice cache ────────────────────────────────────────────────────────
-# Sources do not vary by architecture, only builds do, so every slice after the
-# first should be a cache hit rather than another download. Priming the
-# BoringSSL mirror here — once, before the first slice needs it — turns the
-# per-slice ~62 MB network clone into a local object copy.
+# Sources do not vary by architecture, only builds do. Priming the BoringSSL
+# mirror once turns a ~62 MB clone per slice into a local object copy.
 CACHE_DIR="${NITRO_HTTP_DEPS_CACHE:-$OUT/cache}"
 mkdir -p "$CACHE_DIR"
 
-# The commit is read from deps/versions.cmake rather than duplicated here —
-# that file is the single source of truth, and a second copy of a 40-character
-# hash is a silent-drift bug waiting to happen.
+# Read from deps/versions.cmake rather than duplicated: a second copy of a
+# 40-character hash is a silent-drift bug waiting to happen.
 BORINGSSL_COMMIT=$(sed -n \
   's/^set(NH_BORINGSSL_COMMIT[[:space:]]*\([0-9a-f]\{40\}\).*/\1/p' \
   "$HERE/../../deps/versions.cmake" | head -1)
@@ -199,16 +196,10 @@ BORINGSSL_COMMIT=$(sed -n \
 
 BORINGSSL_MIRROR="$CACHE_DIR/boringssl.git"
 
-# Priming the mirror is a critical section, because tool/build-curl.sh runs
-# slices CONCURRENTLY and they all share this one directory. Without a lock the
-# first parallel Android build failed exactly this way: one slice died in
-# `git init` copying hook templates over another's ("File exists"), a second on
-# `shallow.lock` mid-fetch, and only the slice that happened to win produced
-# libraries. Reading FROM the mirror afterwards needs no lock — concurrent
-# fetches only read it.
-#
-# mkdir is atomic on POSIX, which makes it the portable lock primitive; the EXIT
-# trap releases it even when `die` fires inside the section.
+# A critical section: build-curl.sh runs slices concurrently and they share this
+# directory, so two `git init`/fetch calls collide without a lock. Reading FROM
+# the mirror afterwards needs none. mkdir is the portable atomic primitive; the
+# EXIT trap releases it even when `die` fires inside.
 NH_LOCK="$CACHE_DIR/.boringssl.lock"
 waited=0
 while ! mkdir "$NH_LOCK" 2>/dev/null; do

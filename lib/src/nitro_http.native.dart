@@ -613,6 +613,14 @@ class RawWsConfig {
   final int maxFrameBytes;
   final int connectTimeoutMs;
 
+  /// TLS for a `wss://` socket.
+  ///
+  /// Without this the engine had no choice but to hardcode its defaults —
+  /// verification on, platform roots — so a WebSocket could not use custom
+  /// roots, SPKI pinning, mTLS or a version clamp, even though the same client
+  /// applied all of them to its HTTP requests. Ignored for `ws://`.
+  final RawTlsConfig tls;
+
   const RawWsConfig({
     required this.socketId,
     required this.url,
@@ -621,6 +629,7 @@ class RawWsConfig {
     required this.pingIntervalMs,
     required this.maxFrameBytes,
     required this.connectTimeoutMs,
+    required this.tls,
   });
 }
 

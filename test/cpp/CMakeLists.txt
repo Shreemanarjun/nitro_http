@@ -161,3 +161,15 @@ add_test(NAME ExitPath.AnEngineStillAliveAtProcessExitDoesNotAbort
          COMMAND nitro_http_exit_path_test)
 set_tests_properties(ExitPath.AnEngineStillAliveAtProcessExitDoesNotAbort
                      PROPERTIES TIMEOUT 60)
+
+# Opt-in source-based coverage. The engine sources compile straight into these
+# targets (NITRO_HTTP_ENGINE_SOURCES above), so instrumenting the targets
+# measures the engine rather than a wrapper. Report with tool/cpp-coverage.sh.
+option(NITRO_HTTP_TESTS_COVERAGE "Instrument the C++ tests for coverage" OFF)
+if(NITRO_HTTP_TESTS_COVERAGE AND NOT MSVC)
+  foreach(_t nitro_http_engine_tests nitro_http_exit_path_test)
+    target_compile_options(${_t} PRIVATE
+      -fprofile-instr-generate -fcoverage-mapping -O0 -g)
+    target_link_options(${_t} PRIVATE -fprofile-instr-generate)
+  endforeach()
+endif()

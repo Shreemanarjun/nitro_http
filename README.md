@@ -97,39 +97,81 @@ Each panel's "wins N/9" note is what separates a result from a coin flip — bar
 length cannot show it. Where it loses, why, and how to reproduce any of this:
 **[the full benchmark record](doc/ADVANCED.md#benchmarks)**.
 
-## Install
+## Setup
 
 ```sh
 flutter pub add nitro_http
 ```
 
-Requires Dart `^3.12.2` and Flutter `>=3.3.0`. No extra setup: the native engine
-is downloaded as a checksum-pinned prebuilt on first build, for every platform
-below.
+Requires Dart `^3.12.2` and Flutter `>=3.3.0`. There is no manual step: the
+native engine is fetched as a checksum-pinned prebuilt the first time you build.
+
+**What the first build does.** It downloads the slice for each ABI you are
+building — about 12 MB for a three-ABI Android APK — and compiles the engine,
+which adds roughly 11 seconds over a plain Flutter app. Everything lands in a
+per-machine cache (`~/.cache/nitro_http`, `%LOCALAPPDATA%` on Windows) keyed by
+the dependency release, so later projects and package upgrades reuse it and
+`flutter clean` does not throw it away.
 
 **Platform support**
 
-| Platform | Status |
-|---|---|
-| Android | arm64-v8a, armeabi-v7a, x86_64 (minSdk 24) |
-| iOS | 13.0+, device and simulator |
-| macOS | 10.15+ |
-| Windows | x64 |
-| Linux | x64, arm64 |
-| Web | Not supported, and never will be — see below |
+| Platform | Requirement | Anything to do? |
+|---|---|---|
+| Android | minSdk 24 · arm64-v8a, armeabi-v7a, x86_64 | No |
+| iOS | 13.0+, device and simulator | No |
+| macOS | 10.15+ | **Yes — one entitlement, below** |
+| Windows | x64 | No |
+| Linux | x64, arm64 | No |
+| Web | — | Not supported, and never will be |
 
-There is no web build because the whole client *is* native code. Use
-`package:http`'s `BrowserClient` behind `kIsWeb`.
+### macOS: the one required step
 
-**macOS only:** an app in the App Sandbox needs one entitlement, or every request
-fails with "connection refused":
+A sandboxed macOS app needs the network-client entitlement or **every request
+fails with "connection refused"**. `flutter create` does not add it, so a new
+app will hit this:
 
 ```xml
 <key>com.apple.security.network.client</key>
 <true/>
 ```
 
-Add it to `Runner/DebugProfile.entitlements` and `Runner/Release.entitlements`.
+Add it to both `macos/Runner/DebugProfile.entitlements` and
+`macos/Runner/Release.entitlements`.
+
+### Web
+
+There is no web build because the whole client *is* native code. Use
+`package:http`'s `BrowserClient` behind `kIsWeb`.
+
+### Check the install
+
+The engine reports what it was actually linked against, which is the quickest
+way to confirm a build picked up the vendored slice rather than a system
+libcurl:
+
+```dart
+print(NitroHttp.engineVersion);      // libcurl/8.21.0 BoringSSL … ngtcp2/1.25.0
+print(NitroHttp.supportsHttp3);      // true with the shipped slice
+print(NitroHttp.supportsBrotli);
+print(NitroHttp.supportsZstd);
+```
+
+`supportsHttp3 == false` on a platform that should have it means the build fell
+back to a system libcurl — worth catching early, because nothing else about it
+looks wrong.
+
+### Building offline
+
+Point `NITRO_HTTP_DEPS_DIR` at a directory of prebuilt slices and nothing
+touches the network:
+
+```sh
+NITRO_HTTP_DEPS_DIR=/path/to/slices flutter build apk --release
+```
+
+Build those slices yourself with `dart run nitro_http:build_curl` — see
+[doc/ADVANCED.md](doc/ADVANCED.md#native-dependencies). You only need this for
+air-gapped or corporate-proxy machines; a normal build downloads them itself.
 
 ## Quick start
 

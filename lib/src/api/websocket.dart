@@ -20,7 +20,9 @@ import 'package:web_socket/web_socket.dart';
 import '../internal/instance_keys.dart';
 import '../internal/ws_runner.dart';
 import '../nitro_http.native.dart';
+import '../internal/raw_mapping.dart';
 import 'headers.dart';
+import 'settings.dart';
 
 export 'package:web_socket/web_socket.dart'
     show
@@ -68,6 +70,14 @@ final class NitroWebSocket implements WebSocket {
     Duration? pingInterval,
     Duration connectTimeout = const Duration(seconds: 30),
     int maxFrameBytes = 1 << 20,
+    /// TLS for a `wss://` URL. Ignored for `ws://`.
+    ///
+    /// Defaults to the same thing a `NitroHttpClient` with untouched settings
+    /// uses: verification on, platform roots. Pass a configured [TlsSettings]
+    /// to pin, supply a client certificate, or trust a private CA — none of
+    /// which a WebSocket could do before, because the wire config had no TLS
+    /// block and the engine hardcoded these defaults.
+    TlsSettings tlsSettings = const TlsSettings(),
     WsExecutor? executor,
     WsFrameDemux? demux,
   }) async {
@@ -101,6 +111,7 @@ final class NitroWebSocket implements WebSocket {
           ],
           pingIntervalMs: pingInterval?.inMilliseconds ?? 0,
           maxFrameBytes: maxFrameBytes,
+          tls: toRawTls(tlsSettings),
           connectTimeoutMs: connectTimeout.inMilliseconds,
         ),
       );

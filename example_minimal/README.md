@@ -52,4 +52,4 @@ loopback server cannot.
 
 A sandboxed macOS app without it fails every request with "connection refused".
 `flutter create` does not add it, so your own app will need the same line — see
-the [Install section](../README.md#install) of the main README.
+the [Setup section](../README.md#setup) of the main README.

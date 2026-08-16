@@ -199,12 +199,36 @@ class _Server {
   }
 }
 
+/// Runs [body], skipping the test when the machine simply has no network.
+///
+/// A connection failure means the host is unreachable; a certificate failure
+/// means the engine rejected a chain it should have accepted. Only the first is
+/// an excuse — the second is exactly what these tests exist to catch, so it is
+/// deliberately allowed to fail.
+Future<void> skipIfOffline(Future<void> Function() body) async {
+  try {
+    await body();
+  } on NitroHttpConnectionException catch (e) {
+    markTestSkipped('no network: ${e.message}');
+  }
+}
+
 void main() {
   final libraryPath = _locateLibrary();
   final skipReason = libraryPath == null
       ? 'native library not built — run: cmake -S src -B build/lib && '
             'cmake --build build/lib'
       : null;
+
+  // Public-TLS tests need the internet, which the rest of this file
+  // deliberately does not. NITRO_HTTP_NO_NETWORK_TESTS=1 opts out; an offline
+  // machine is handled at runtime by [skipIfOffline] instead, because only the
+  // failure itself can tell "no network" apart from "bad certificate" — and
+  // conflating those would silently disarm this whole group.
+  final tlsSkipReason = skipReason ??
+      (Platform.environment['NITRO_HTTP_NO_NETWORK_TESTS'] == '1'
+          ? 'NITRO_HTTP_NO_NETWORK_TESTS=1'
+          : null);
 
   group('native engine', () {
     late _Server server;
@@ -986,5 +1010,85 @@ void main() {
         );
       }, skip: skipReason);
     });
+  });
+
+  // ── Public TLS ─────────────────────────────────────────────────────────────
+  // Regression guard for the CertStore bug in 0.0.1-0.0.3: every other test
+  // here uses a PLAINTEXT loopback server, so no public chain was ever
+  // verified and the engine trusted nothing on Apple while the suite stayed
+  // green. A self-signed local root would not catch it — that exercises the
+  // custom-PEM path, not the default — so these tests use the network.
+  group('public TLS', () {
+    // Its own setUpAll: this group is a sibling of 'native engine', so it does
+    // not inherit that one, and without the dylib open every test here dies on
+    // `Failed to lookup symbol 'nitro_http_init_dart_api_dl'`.
+    setUpAll(() {
+      if (libraryPath == null) return;
+      DynamicLibrary.open(libraryPath);
+    });
+
+    // Nullable, not `late`: a test that throws before assigning would otherwise
+    // fail again in tearDown with LateInitializationError and bury the real
+    // error under it.
+    NitroHttpClient? client;
+
+    tearDown(() {
+      client?.dispose();
+      client = null;
+    });
+
+    test('the DEFAULT settings verify a real certificate chain', () => skipIfOffline(() async {
+      client = NitroHttpClient(
+        settings: const ClientSettings(timeout: Duration(seconds: 30)),
+      );
+      final res = await client!.get('https://example.com/');
+      expect(res.statusCode, 200);
+      expect(res.bodyBytes, isNotEmpty);
+    }), skip: tlsSkipReason);
+
+    test('RootCaSource.bundled verifies the same chain', () => skipIfOffline(() async {
+      client = NitroHttpClient(
+        settings: const ClientSettings(
+          timeout: Duration(seconds: 30),
+          tlsSettings: TlsSettings(rootCaSource: RootCaSource.bundled),
+        ),
+      );
+      expect((await client!.get('https://example.com/')).statusCode, 200);
+    }), skip: tlsSkipReason);
+
+    test('RootCaSource.platform verifies the same chain', () => skipIfOffline(() async {
+      // The exact configuration that was broken: `platform` is the default, so
+      // a regression here breaks every app that never touched TlsSettings.
+      client = NitroHttpClient(
+        settings: const ClientSettings(
+          timeout: Duration(seconds: 30),
+          tlsSettings: TlsSettings(rootCaSource: RootCaSource.platform),
+        ),
+      );
+      expect((await client!.get('https://example.com/')).statusCode, 200);
+    }), skip: tlsSkipReason);
+
+    test('an untrusted chain is still REJECTED', () async {
+      // The other half of the guard. Installing a CA bundle is only correct if
+      // it still refuses a bad certificate — a fix that trusted everything
+      // would pass the three tests above and be far worse than the bug.
+      client = NitroHttpClient(
+        settings: const ClientSettings(timeout: Duration(seconds: 30)),
+      );
+      await expectLater(
+        client!.get('https://self-signed.badssl.com/'),
+        throwsA(isA<NitroHttpCertificateException>()),
+      );
+    }, skip: tlsSkipReason);
+
+    test('verification can be disabled deliberately', () async {
+      client = NitroHttpClient(
+        settings: const ClientSettings(
+          timeout: Duration(seconds: 30),
+          tlsSettings: TlsSettings.insecure(),
+        ),
+      );
+      expect((await client!.get('https://self-signed.badssl.com/')).statusCode, 200);
+    }, skip: tlsSkipReason);
   });
 }

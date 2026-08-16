@@ -197,20 +197,13 @@ bool backendHasSsl() {
   return info != nullptr && (info->features & CURL_VERSION_SSL) != 0;
 }
 
-// Whether the linked TLS backend resolves trust through the Keychain on its
-// own. Apple's own libcurl does, because it is built against Secure Transport;
-// a vendored build against BoringSSL does NOT, and there is no compiled-in CA
-// bundle either, so supplying nothing leaves it with an EMPTY trust store.
+// Whether the linked TLS backend resolves trust through the Keychain itself.
+// Apple's own libcurl does, being built against Secure Transport; a vendored
+// build against BoringSSL does not, and has no compiled-in CA bundle either, so
+// supplying nothing would leave it trusting nothing.
 //
-// This used to be assumed from the platform (`#if defined(__APPLE__)` => true),
-// which was correct only for the SDK's libcurl. Against the vendored NitroCurl
-// slice — the normal case — every HTTPS request failed with CURLcode 60,
-// "SSL peer certificate ... was not OK", on macOS. Nothing caught it because
-// every benchmark and native test talks to a PLAINTEXT loopback server, so
-// certificate verification against a public CA was never exercised.
-//
-// Read from curl at runtime instead of guessed at compile time: one binary can
-// be linked either way, and only curl knows which.
+// Asked of curl at runtime rather than inferred from the platform: one binary
+// can be linked either way.
 bool backendResolvesAppleTrust() {
   const curl_version_info_data* info = curl_version_info(CURLVERSION_NOW);
   if (info == nullptr || info->ssl_version == nullptr) return false;
@@ -329,10 +322,8 @@ const std::string& CertStore::bundledRootsPem() {
 
 bool CertStore::usesPlatformVerifyCallback() {
 #if defined(__APPLE__)
-  // Only when the backend really does resolve the Keychain itself. Against
-  // Apple's Secure-Transport libcurl, overriding CAINFO would *narrow* trust,
-  // so nothing is installed. Against the vendored BoringSSL slice, installing
-  // nothing means trusting nothing — see backendResolvesAppleTrust().
+  // Overriding CAINFO against Secure Transport would *narrow* trust, so
+  // nothing is installed there; see backendResolvesAppleTrust().
   return certdetail::backendResolvesAppleTrust();
 #else
   return false;
@@ -432,13 +423,8 @@ EngineError CertStore::apply(CURL* easy, const RawTlsConfig& tls,
                  "falling back to its compiled-in trust store");
       }
 #elif defined(__APPLE__)
-      // Only Apple's own Secure-Transport libcurl resolves the Keychain by
-      // itself. The vendored NitroCurl slice links BoringSSL, which has NEITHER
-      // platform trust NOR a compiled-in CA bundle, so installing nothing left
-      // it trusting nothing at all: every HTTPS request failed with CURLcode 60
-      // on macOS and iOS alike. It went unnoticed because every benchmark and
-      // native test uses a PLAINTEXT loopback server, so no public certificate
-      // was ever verified.
+      // Nothing to install only when the backend reads the Keychain itself;
+      // otherwise the compiled-in bundle is the trust store.
       if (!usesPlatformVerifyCallback()) {
         const std::string& roots = bundledRootsPem();
         if (roots.empty()) {
@@ -450,10 +436,8 @@ EngineError CertStore::apply(CURL* easy, const RawTlsConfig& tls,
                    "nitro_http: this libcurl predates CURLOPT_CAINFO_BLOB; "
                    "falling back to its compiled-in trust store");
         } else {
-          // Honest about what this costs: the compiled-in bundle is Mozilla's
-          // root list, so a root the USER or an MDM profile added to the
-          // Keychain is not trusted. Serving those needs a custom verify
-          // callback into SecTrustEvaluateWithError, which is the follow-up.
+          // The bundle is Mozilla's root list, so a root added to the Keychain
+          // by a user or MDM profile is not trusted.
           warnOnce(g_warnAppleKeychainUnavailable,
                    "nitro_http: the linked TLS backend cannot read the Apple "
                    "Keychain, so RootCaSource.platform is served by the "

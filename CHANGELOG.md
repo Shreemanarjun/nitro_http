@@ -1,3 +1,42 @@
+## 0.0.4
+
+### Fixed
+
+* **HTTPS was completely broken on iOS and macOS.** `CertStore` assumed an
+  Apple platform meant a Keychain-integrated TLS backend, which is true of the
+  SDK's libcurl but not of the vendored slice — that links BoringSSL, which has
+  neither platform trust nor a compiled-in CA bundle, so the engine installed no
+  roots and trusted nothing. Every request failed with `CURLcode 60`. The linked
+  backend is now detected at runtime and the compiled-in Mozilla bundle is
+  installed when it cannot read the Keychain. Android was never affected.
+
+  Note the remaining limit: `RootCaSource.platform` on Apple is served by that
+  bundle, so a root a user or MDM profile added to the Keychain is not trusted.
+  Use `RootCaSource.custom` with your own PEM if you need one.
+
+* **`wss://` crashed the process against any HTTP/2-capable server.** The
+  handshake runs a `CONNECT_ONLY` handle and reads with `curl_easy_recv`, but
+  never pinned the HTTP version, so ALPN negotiated h2 and curl routed the read
+  through its nghttp2 filter — a segfault in `Curl_multi_connchanged`. A
+  WebSocket is an HTTP/1.1 Upgrade, so the handshake now pins HTTP/1.1. Plain
+  `ws://` was unaffected because it never negotiates ALPN.
+
+### Added
+
+* **WebSockets accept `TlsSettings`.** `RawWsConfig` carried no TLS block, so a
+  `wss://` socket could not use custom roots, SPKI pinning, mTLS or a version
+  clamp even when the same client applied them to its HTTP requests — the 0.0.1
+  note that WebSockets inherit the engine's TLS behaviour was only true of its
+  *defaults*. `NitroWebSocket.connect` now takes `tlsSettings`, defaulting to
+  the previous behaviour.
+
+* **End-to-end tests for the TLS settings the engine is supposed to honour**,
+  against a locally generated CA: custom roots, SPKI pinning (both directions),
+  mutual TLS, the version clamp, and `wss://`. Every one of these was previously
+  covered only by configuration tests, which is precisely how the two bugs above
+  shipped. `TlsSettings.sniHostname` is present as a named skip, because it is
+  still accepted-but-ignored.
+
 ## 0.0.3
 
 Documentation only. `lib/` and `src/` are still byte-identical to 0.0.1.
@@ -72,8 +111,9 @@ and cookies behave the same everywhere.
 * **A disk cache** implementing a subset of RFC 9111: freshness, revalidation
   with `ETag` / `Last-Modified`, LRU eviction against a byte budget, per-request
   `CacheMode`, and an explicit prefetch API.
-* **WebSockets** on the same engine, inheriting its TLS, proxy and DNS
-  behaviour. Implements `package:web_socket`'s `WebSocket` interface.
+* **WebSockets** on the same engine, inheriting its proxy and DNS behaviour,
+  and implementing `package:web_socket`'s `WebSocket` interface. (TLS settings
+  did not reach them until 0.0.4.)
 * **Adapters for `package:http` and `dio`**, so existing call sites keep
   working. The `package:http` adapter passes the official
   `http_client_conformance_tests` suite.

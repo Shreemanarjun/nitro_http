@@ -497,18 +497,17 @@ EngineError WsSession::performHandshake(const RawWsConfig& cfg,
   // CONNECT_ONLY = 1 stops after connect + TLS and hands us the socket; the
   // upgrade request below is ours, so curl never needs WebSocket support.
   curl_easy_setopt(easy_, CURLOPT_CONNECT_ONLY, 1L);
+  // Required, not a preference: a WebSocket is an HTTP/1.1 Upgrade, but ALPN
+  // offers h2 on wss:// and curl then reads through its nghttp2 filter, which a
+  // CONNECT_ONLY handle is not part of — curl_easy_recv segfaults.
+  curl_easy_setopt(easy_, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
   curl_easy_setopt(easy_, CURLOPT_CONNECTTIMEOUT_MS,
                    static_cast<long>(connectTimeoutMs));
   curl_easy_setopt(easy_, CURLOPT_NOSIGNAL, 1L);
 
-  // RawWsConfig carries no TLS block, so the socket gets the same defaults a
-  // client with untouched TlsSettings would: verification on, platform roots.
-  RawTlsConfig tls{};
-  tls.verifyCertificates = true;
-  tls.rootCaSource = static_cast<int64_t>(RootCaSource::Platform);
-  tls.minTlsVersion = 0;
-  tls.maxTlsVersion = 0;
-  const EngineError tlsErr = CertStore::apply(easy_, tls, std::string());
+  // Dart always fills this block, from a default TlsSettings when the caller
+  // passes none — so wss:// honours custom roots, pinning and mTLS.
+  const EngineError tlsErr = CertStore::apply(easy_, cfg.tls, std::string());
   if (!tlsErr.ok()) return tlsErr;
 
   const CURLcode rc = curl_easy_perform(easy_);

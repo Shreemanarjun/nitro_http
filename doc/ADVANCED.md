@@ -283,19 +283,35 @@ control, pinned component versions, or offline setups, see `tool/deps/` — the
 scripts there are what this command runs.
 ## Testing
 
-**Unit tests** — 621 of them, no device or native library needed. Coverage is
-96.4 % of hand-written lines, gated at 92 % in CI. Every code snippet in this
-README is also a test (`test/readme_examples_test.dart`), so a breaking API
-change breaks the build before it breaks a reader.
+**Unit tests** — 686 of them, most needing no device or native library. Dart
+coverage is 96.6 % of hand-written lines, gated at 92 % in CI. Every code
+snippet in the README is also a test (`test/readme_examples_test.dart`), so a
+breaking API change breaks the build before it breaks a reader.
 
 ```sh
 flutter test                  # unit suite
-tool/coverage.sh              # coverage report, fails under the floor
+tool/coverage.sh              # Dart coverage, fails under the floor
+tool/cpp-coverage.sh 75       # C++ ENGINE coverage, fails under the floor
 ```
+
+The two numbers measure different things: `tool/coverage.sh` covers ~2 200
+lines of Dart glue, `tool/cpp-coverage.sh` the ~11 000 lines of C++ engine.
+The engine sits at **80 % lines / 88 % functions**, with the thin spots being
+`DartPost.cpp` (21 %, needs a live isolate), `EngineRegistry.cpp` (21 %) and
+`ClientConfig.cpp` (58 %).
+
+**A passing suite is not a tested behaviour.** HTTPS was broken on Apple and
+`wss://` segfaulted against HTTP/2 servers through 0.0.1–0.0.3, with every test
+green: the suite only ever talked to a plaintext loopback server, and settings
+like `RootCaSource` had configuration tests that checked a value reached the
+wire but never that anything acted on it.
+`test/tls_settings_e2e_test.dart` and `test/network_settings_e2e_test.dart`
+cover TLS, proxies, DNS and protocol negotiation end to end; each assertion is
+paired with a control proving it could fail.
 
 **Integration tests** — run in `example/` against an in-process server on
 `127.0.0.1`, on any simulator, emulator or desktop target. On macOS add the
-[sandbox entitlement](../README.md#install) first.
+[sandbox entitlement](../README.md#setup) first.
 
 ```sh
 cd example
@@ -313,11 +329,10 @@ ctest --test-dir build/cpp --output-on-failure
 
 The charts in the [README](../README.md#how-fast-is-it) are the headline
 results: five scenarios, five clients, one in-process loopback server, p50 in
-release mode on real devices — an M1 Pro, an iPhone 12 and a OnePlus 11. They
-regenerate from the data tables in `tool/gen_platform_charts.py`, each annotated
-with the `build/bench/` directory it came from. Phone numbers vary run to run
-(heat alone moved every client 11–60 % between sets), so treat any margin under
-~10 % as a tie, and never compare numbers from different runs.
+release mode on an M1 Pro, an iPhone 12 and a OnePlus 11. They regenerate from
+`tool/gen_platform_charts.py`, each annotated with the `build/bench/` directory
+it came from. Treat any margin under ~10 % as a tie, and never compare numbers
+from different runs.
 
 This section is the part the charts cannot show.
 
@@ -405,14 +420,11 @@ tool/bench-android.sh 10      # thermally gated; needs one device attached
 tool/bench-ios.sh 10          # physical iPhone/iPad; pulls the report off the device
 ```
 
-Each refuses to start in a state that would produce a number someone quotes
-later, long after the machine state is forgotten. macOS: on battery, in Low
-Power Mode, above half load, with any process over 25 % CPU, or with a
-simulator, emulator or build alive. Android: on an emulator, below 30 % battery,
-behind a locked keyguard, or with the CPU zones above 42 °C — and it re-checks
-the temperature before *every* run, not just the first, because two sets taken
-minutes apart differed 11–60 % per client purely from heat. iOS: without a
-paired physical device.
+Each refuses to start in a state that would produce an unquotable number: a
+busy or battery-powered Mac, an Android emulator or a device below 30 % battery,
+locked, or above 42 °C, and iOS without a paired physical device. The Android
+thermal gate re-checks before *every* run — two sets minutes apart differed
+11–60 % per client purely from heat.
 
 All three then discard the first run as warm-up and hand the rest to
 `tool/bench_aggregate.py`, which applies four checks:

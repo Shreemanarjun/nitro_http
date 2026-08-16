@@ -871,6 +871,7 @@ extension RawWsConfigRecordExt on RawWsConfig {
     pingIntervalMs: r.readInt(),
     maxFrameBytes: r.readInt(),
     connectTimeoutMs: r.readInt(),
+    tls: RawTlsConfigRecordExt.fromReader(r),
   );
 
   void writeFields(RecordWriter writer) {
@@ -887,6 +888,7 @@ extension RawWsConfigRecordExt on RawWsConfig {
     writer.writeInt(pingIntervalMs);
     writer.writeInt(maxFrameBytes);
     writer.writeInt(connectTimeoutMs);
+    tls.writeFields(writer);
   }
 
   Pointer<Uint8> toNative(Allocator alloc) {
@@ -1031,7 +1033,7 @@ class _NitroHttpNativeImpl extends NitroHttpNative {
     }
     NitroRuntime.checkLinkChecksum(
       'nitro_http',
-      '156b5f063dfbcb47',
+      '715636835eecebca',
       () => _dylib
           .lookupFunction<Pointer<Utf8> Function(), Pointer<Utf8> Function()>(
             'nitro_http_nitro_bridge_checksum',

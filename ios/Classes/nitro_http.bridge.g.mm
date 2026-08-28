@@ -8,7 +8,12 @@
 #include <stdlib.h>
 #include <string>
 #include <stdexcept>
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#include "nitro_wasm_compat.h"
+#else
 #include "dart_api_dl.h"
+#endif
 #include "nitro_http.bridge.g.h"
 #include "nitro_http.native.g.h"
 
@@ -17,11 +22,33 @@ NITRO_EXPORT uint32_t nitro_http_nitro_abi_version(void) {
     return 1;
 }
 NITRO_EXPORT const char* nitro_http_nitro_bridge_checksum(void) {
-    return "6f1281bc8f754ca2";
+    return "20f1884978e5e296";
 }
 NITRO_EXPORT intptr_t nitro_http_init_dart_api_dl(void* data) {
     return Dart_InitializeApiDL(data);
 }
+#ifdef __EMSCRIPTEN__
+// Web replacement for Dart_PostCObject: Dart registers a function-table
+// callback here at module load (see nitro_wasm_compat.h for the envelope).
+NITRO_EXPORT __attribute__((weak)) void nitro_http_nitro_set_post_fn(NitroPostFn fn) {
+    g_nitro_post_fn = fn;
+}
+// Hot restart rebuilds the module but keeps globalThis, so JS helpers a
+// previous instance parked there still close over its dead heap: calls
+// land out of bounds and posts reach the old instance. Returns 1 the
+// first time THIS instance asks, so plugin bootstraps rebuild their
+// globals exactly once per instance. JS-callable from any EM_JS body.
+EM_JS(int, nitro_web_instance_changed, (), {
+    var reg = globalThis.__nitroInstances || (globalThis.__nitroInstances = {});
+    if (reg["nitro_http"] === wasmExports) return 0;
+    reg["nitro_http"] = wasmExports;
+    return 1;
+});
+EM_JS(void, nitro_web_own_globals, (const char* key), {
+    var o = globalThis[UTF8ToString(key)];
+    if (o) o.__nitroExports = wasmExports;
+});
+#endif
 }
 
 static thread_local NitroError g_nitro_error = { 0, nullptr, nullptr, nullptr, nullptr };

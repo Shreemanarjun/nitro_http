@@ -45,7 +45,7 @@ first.
 | **Security** | TLS 1.2/1.3 · SPKI pinning, per client or per request · mTLS · custom roots · DNS-over-HTTPS |
 | **Caching** | RFC 9111 subset — `Cache-Control`, `ETag`, `Last-Modified`, 304 revalidation · prefetch |
 | **Plumbing** | interceptors · request logging · retry with backoff · cookie jar · HTTP and SOCKS5 proxies · connection pool |
-| **Platforms** | iOS · Android · macOS · Windows · Linux |
+| **Platforms** | iOS · Android · macOS · Windows · Linux · Web (via `fetch`, [reduced](#web)) |
 
 One engine means proxies, pinning, redirects, timeouts and cookies behave
 identically on all five. There is no "works differently on Android".
@@ -140,8 +140,45 @@ Add it to both `macos/Runner/DebugProfile.entitlements` and
 
 ### Web
 
-There is no web build because the whole client *is* native code. Use
-`package:http`'s `BrowserClient` behind `kIsWeb`.
+The package compiles and runs on web, but not on the engine: a browser hands
+native code no TCP or UDP socket, so libcurl has nothing to talk through.
+
+Compiling libcurl to wasm is possible — [libcurl.js](https://libcurl.js.org/)
+does exactly that with Emscripten and Mbed TLS — but it does not remove that
+limit, it relocates it. Sockets are tunnelled over a WebSocket to a
+[Wisp](https://github.com/MercuryWorkshop/wisp-protocol) relay you have to
+operate, so every request depends on infrastructure you run; HTTP/3 is absent
+and HTTP/2 only exists through the proxy; and it adds ~550 KB and a second TLS
+stack. It earns its keep when you specifically need to bypass CORS or drive raw
+sockets from a page. For an HTTP client it is a steep price, so this package
+does not take it.
+
+`fetch` is the transport a page actually has, so on web the same API is served
+by it, and the code you write does not change:
+
+```dart
+final client = NitroHttpClient(settings: const ClientSettings());
+final res = await client.get('https://api.example.com/users');
+```
+
+**What still works:** every verb, headers, request and response bodies, streamed
+responses, redirects, cancellation, status handling, interceptors and retry.
+
+**What does not, and why:**
+
+| | |
+|---|---|
+| TLS settings — pinning, mTLS, custom roots, `insecure()` | the browser owns TLS; a page cannot see or override it |
+| proxies, DNS overrides, DoH | not exposed to a page |
+| HTTP version selection | the browser negotiates; you get what it picks |
+| connection pool, per-phase timings | not observable from a page |
+| the cookie jar | the browser manages cookies; `credentials` is the only lever |
+| the disk cache | the browser's HTTP cache applies instead |
+| streamed *uploads* | `fetch` needs the whole body before it is called |
+
+These **throw `NitroHttpConfigurationException` rather than being ignored** — a
+pin that silently stops being checked is worse than a build that stops working.
+Guard them with `kIsWeb`, or keep a separate `ClientSettings` per platform.
 
 ### Check the install
 

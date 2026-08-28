@@ -6,6 +6,7 @@ analyzer:
     # a hand fix would not survive. Its async unpack thunks declare untyped
     # `(raw)` parameters, which strict-inference rejects.
     - lib/src/nitro_http.g.dart
+    - lib/src/generated/native/**
     # Added by `nitrogen generate`. Committed so the codegen-is-a-no-op CI job
     # stays green: nitrogen appends these when they are missing, and a fresh
     # checkout would otherwise differ from the tree every run.

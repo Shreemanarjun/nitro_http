@@ -18,6 +18,7 @@
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
+import 'package:nitro/nitro.dart' show RecordReader, RecordWriter;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 // The generated record extensions are a `part of` this library, so importing
@@ -122,16 +123,20 @@ void main() {
     // when the registering call returns.
     final encodeRequest = _medianNanos(() {
       final arena = Arena();
-      RawRequestRecordExt(request).toNative(arena);
+      final w = RecordWriter();
+      request.writeFields(w);
+      w.toNative(arena);
       arena.releaseAll();
     });
 
     // Decode a response from native memory. Encode once outside the loop so the
     // measurement is the read path only.
     final holder = Arena();
-    final encoded = RawResponseRecordExt(response).toNative(holder);
+    final holderWriter = RecordWriter();
+    response.writeFields(holderWriter);
+    final encoded = holderWriter.toNative(holder);
     final decodeResponse = _medianNanos(() {
-      RawResponseRecordExt.fromNative(encoded);
+      RawResponseRecordExt.fromReader(RecordReader.fromNative(encoded));
     });
     holder.releaseAll();
 

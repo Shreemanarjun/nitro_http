@@ -32,6 +32,7 @@ dependencies:
   web_socket: ^1.0.0
 
 dev_dependencies:
+  stream_channel: ^2.1.2
   flutter_test:
     sdk: flutter
   integration_test:
@@ -65,6 +66,8 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+  assets:
+    - assets/web/
   # nitro_http is an FFI-only plugin on all five platforms: the Nitro spec
   # declares AppleNativeImpl.cpp / AndroidNativeImpl.cpp / NativeImpl.cpp, so
   # there is no Swift, Kotlin or Objective-C class to register. `ffiPlugin`

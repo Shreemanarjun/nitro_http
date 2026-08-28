@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import '../internal/instance_keys.dart';
 import '../internal/raw_mapping.dart';
+import '../internal/executor_default.dart';
 import '../internal/request_runner.dart';
 import 'body.dart';
 import 'cancel_token.dart';
@@ -53,8 +54,8 @@ class NitroHttpClient {
        _interceptors = InterceptorChain(interceptors),
        _retryPolicy = _findRetryPolicy(interceptors) {
     _runner = RequestRunner(
-      executor: executor ?? NativeRequestExecutor(_clientId),
-      demux: demux ?? NativeStreamDemux.instance,
+      executor: executor ?? defaultExecutor(_clientId),
+      demux: demux ?? defaultDemux,
       settings: settings,
     );
     _runner.configure(settings);

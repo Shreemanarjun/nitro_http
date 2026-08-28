@@ -17,8 +17,9 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nitro_http/nitro_http.dart';
-import 'package:nitro_http/src/internal/request_runner.dart'
+import 'package:nitro_http/src/internal/executor_native.dart'
     show NativeRequestExecutor;
+
 
 String? _locateLibrary() {
   final override = Platform.environment['NITRO_HTTP_DYLIB'];

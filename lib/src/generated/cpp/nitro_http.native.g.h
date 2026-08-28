@@ -1160,67 +1160,67 @@ public:
     virtual ~HybridNitroHttpNative() = default;
 
     // ── Methods ──────────────────────────────────────────────────────────
-    // source: nitro_http.native.dart:739
-    virtual std::string engineVersion() = 0;
-    // source: nitro_http.native.dart:741
-    virtual bool supportsHttp3() = 0;
-    // source: nitro_http.native.dart:742
-    virtual bool supportsWebSockets() = 0;
-    // source: nitro_http.native.dart:743
-    virtual bool supportsBrotli() = 0;
     // source: nitro_http.native.dart:744
-    virtual bool supportsZstd() = 0;
+    virtual std::string engineVersion() = 0;
+    // source: nitro_http.native.dart:746
+    virtual bool supportsHttp3() = 0;
+    // source: nitro_http.native.dart:747
+    virtual bool supportsWebSockets() = 0;
     // source: nitro_http.native.dart:748
+    virtual bool supportsBrotli() = 0;
+    // source: nitro_http.native.dart:749
+    virtual bool supportsZstd() = 0;
+    // source: nitro_http.native.dart:753
     virtual void resetNative() = 0;
-    // source: nitro_http.native.dart:754
+    // source: nitro_http.native.dart:759
     virtual void configureClient(NitroCppBuffer config) = 0;
-    // source: nitro_http.native.dart:757
+    // source: nitro_http.native.dart:762
     virtual void sendBuffered(NitroCppBuffer request, const uint8_t* body, size_t body_length, NitroError* _nitro_err, int64_t dartPort) = 0;
-    // source: nitro_http.native.dart:780
+    // source: nitro_http.native.dart:785
     virtual void sendBufferedCoalesced(int64_t callId, NitroCppBuffer request, const uint8_t* body, size_t body_length, int64_t dartPort) = 0;
-    // source: nitro_http.native.dart:797
+    // source: nitro_http.native.dart:802
     virtual void releaseRecord(int64_t address) = 0;
-    // source: nitro_http.native.dart:800
-    virtual void startStreamed(NitroCppBuffer request, const uint8_t* body, size_t body_length, NitroError* _nitro_err, int64_t dartPort) = 0;
     // source: nitro_http.native.dart:805
+    virtual void startStreamed(NitroCppBuffer request, const uint8_t* body, size_t body_length, NitroError* _nitro_err, int64_t dartPort) = 0;
+    // source: nitro_http.native.dart:810
     virtual void cancel(int64_t requestId) = 0;
-    // source: nitro_http.native.dart:806
+    // source: nitro_http.native.dart:811
     virtual void cancelAll() = 0;
-    // source: nitro_http.native.dart:818
+    // source: nitro_http.native.dart:823
     virtual void cancelToken(int64_t tokenId, const std::string& reason) = 0;
-    // source: nitro_http.native.dart:826
+    // source: nitro_http.native.dart:831
     virtual void releaseCancelToken(int64_t tokenId) = 0;
-    // source: nitro_http.native.dart:841
+    // source: nitro_http.native.dart:846
     virtual void grantCredit(int64_t requestId, int64_t chunkCount, int64_t ackedChunks) = 0;
-    // source: nitro_http.native.dart:845
-    virtual int64_t feedUploadChunk(int64_t requestId, const uint8_t* chunk, size_t chunk_length) = 0;
-    // source: nitro_http.native.dart:847
-    virtual void finishUpload(int64_t requestId) = 0;
     // source: nitro_http.native.dart:850
-    virtual void failUpload(int64_t requestId, const std::string& message) = 0;
-    // source: nitro_http.native.dart:853
-    virtual NitroCppBuffer getCookies(const std::string& url) = 0;
-    // source: nitro_http.native.dart:854
-    virtual void setCookie(NitroCppBuffer cookie) = 0;
+    virtual int64_t feedUploadChunk(int64_t requestId, const uint8_t* chunk, size_t chunk_length) = 0;
+    // source: nitro_http.native.dart:852
+    virtual void finishUpload(int64_t requestId) = 0;
     // source: nitro_http.native.dart:855
-    virtual void clearCookies() = 0;
-    // source: nitro_http.native.dart:856
-    virtual void flushCookies() = 0;
+    virtual void failUpload(int64_t requestId, const std::string& message) = 0;
+    // source: nitro_http.native.dart:858
+    virtual NitroCppBuffer getCookies(const std::string& url) = 0;
+    // source: nitro_http.native.dart:859
+    virtual void setCookie(NitroCppBuffer cookie) = 0;
     // source: nitro_http.native.dart:860
-    virtual void configureCache(NitroCppBuffer config) = 0;
+    virtual void clearCookies() = 0;
+    // source: nitro_http.native.dart:861
+    virtual void flushCookies() = 0;
     // source: nitro_http.native.dart:865
+    virtual void configureCache(NitroCppBuffer config) = 0;
+    // source: nitro_http.native.dart:870
     virtual void prefetch(NitroCppBuffer request, NitroError* _nitro_err, int64_t dartPort) = 0;
-    // source: nitro_http.native.dart:867
+    // source: nitro_http.native.dart:872
     virtual void clearCache() = 0;
-    // source: nitro_http.native.dart:868
-    virtual NitroCppBuffer cacheStats() = 0;
     // source: nitro_http.native.dart:873
-    virtual void wsConnect(NitroCppBuffer config, NitroError* _nitro_err, int64_t dartPort) = 0;
-    // source: nitro_http.native.dart:876
-    virtual int64_t wsSend(int64_t opcode, const uint8_t* payload, size_t payload_length) = 0;
+    virtual NitroCppBuffer cacheStats() = 0;
     // source: nitro_http.native.dart:878
-    virtual void wsClose(int64_t code, const std::string& reason) = 0;
+    virtual void wsConnect(NitroCppBuffer config, NitroError* _nitro_err, int64_t dartPort) = 0;
     // source: nitro_http.native.dart:881
+    virtual int64_t wsSend(int64_t opcode, const uint8_t* payload, size_t payload_length) = 0;
+    // source: nitro_http.native.dart:883
+    virtual void wsClose(int64_t code, const std::string& reason) = 0;
+    // source: nitro_http.native.dart:886
     virtual void wsGrantCredit(int64_t frameCount, int64_t ackedFrames) = 0;
 
     // ── Streams ──────────────────────────────────────────────────────────

@@ -26,8 +26,9 @@
 ///
 /// ## Not supported
 ///
-/// * **Web / WASM.** `dart:ffi` and `Dart_PostCObject_DL` do not exist there.
-///   Import `package:http`'s browser client behind `kIsWeb`.
+/// * **The engine, on web.** A browser gives no socket to native code, so web
+///   is served by `fetch` instead — see the web section of the README for what
+///   that costs. Everything below applies to every platform.
 /// * **WebSockets over HTTP/2** (RFC 8441). The transport is an HTTP/1.1
 ///   Upgrade, the same limitation reqwest has.
 library;

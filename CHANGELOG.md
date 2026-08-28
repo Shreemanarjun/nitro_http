@@ -1,5 +1,25 @@
 ## 0.0.5
 
+### Added
+
+* **Web support.** The package now compiles and runs under `flutter build web`
+  (dart2js and `--wasm`). A browser hands native code no socket, so the engine
+  cannot serve it — libcurl in wasm would need a WebSocket relay you operate and
+  would still lose HTTP/2 and HTTP/3 — so web is served by `fetch` through
+  `package:http`'s `BrowserClient` instead. The API is unchanged: verbs,
+  headers, bodies, streamed responses, redirects, cancellation, interceptors and
+  retry all work.
+
+  The settings that describe how the engine talks to the network — TLS pinning,
+  mTLS, custom roots, proxies, DNS, HTTP version, the pool, per-phase timings,
+  the cookie jar, the disk cache and streamed uploads — have no browser
+  equivalent and throw `NitroHttpConfigurationException` rather than being
+  quietly ignored. See the [web section](README.md#web).
+
+  Internally the native executor moved to `executor_native.dart` so that
+  `dart:ffi` is behind a conditional import: a library that imports it at all
+  cannot be compiled for the browser.
+
 ### Fixed
 
 * **Streams delivered nothing on `nitro` 0.7.4** ([#2]). 0.7.4 partitions stream

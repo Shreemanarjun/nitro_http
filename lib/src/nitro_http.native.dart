@@ -37,6 +37,8 @@
 
 import 'package:nitro/nitro.dart';
 
+import 'nitro_http.platform.g.dart';
+
 part 'nitro_http.g.dart';
 
 // ── Enumerations ─────────────────────────────────────────────────────────────
@@ -723,15 +725,21 @@ class RawWsFrame {
   // rather than each getting its own copy to drift apart.
   windows: NativeImpl.cpp,
   linux: NativeImpl.cpp,
+  // Declared so the generator splits the FFI types out of the shared bridge:
+  // `dart:ffi` in any transitively imported library fails a web compile, even
+  // though the browser never loads this module. `executor_web.dart` serves web
+  // through `fetch` and never touches the WASM bridge.
+  web: WebNativeImpl.wasm,
   cSymbolPrefix: 'nitro_http',
   lib: 'nitro_http',
 )
 abstract class NitroHttpNative extends HybridObject {
   /// Process-wide singleton: cache configuration, prefetch, capability queries.
-  static final NitroHttpNative engine = _NitroHttpNativeImpl('engine');
+  static final NitroHttpNative engine = createNitroHttpNativeInstance('engine');
 
   /// Role-typed instance. Keys: `engine` | `c:<clientId>` | `ws:<socketId>`.
-  static NitroHttpNative forKey(String key) => _NitroHttpNativeImpl(key);
+  static NitroHttpNative forKey(String key) =>
+      createNitroHttpNativeInstance(key);
 
   // ── Capabilities (valid on any instance) ───────────────────────────────────
 

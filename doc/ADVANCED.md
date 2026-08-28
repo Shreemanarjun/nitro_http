@@ -410,6 +410,7 @@ landed. Every "Yes" is shipped in 0.0.1, not planned.
 | Transfer timings (DNS/TLS/TTFB) | Partial | No | Yes, on by default, disable per request |
 | `package:http` adapter | Yes | No | Yes |
 | `dio` adapter | Yes | No | Yes, via `package:nitro_http/dio.dart` |
+| Web | Yes (fetch) | Yes (fetch) | Yes, via `fetch`; engine settings unavailable |
 | WebSockets | No | Separate package | Yes, HTTP/1.1 Upgrade only |
 | Disk cache (RFC 9111 subset) | No | Yes | Yes |
 | Prefetch | No | Yes | Yes |

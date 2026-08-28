@@ -28,7 +28,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:nitro_http/nitro_http.dart';
 // ignore: implementation_imports
-import 'package:nitro_http/src/internal/request_runner.dart';
+import 'package:nitro_http/src/internal/executor_native.dart';
 import 'package:nitro_http_example/server/local_server.dart';
 
 const int _serialIterations = 2000;

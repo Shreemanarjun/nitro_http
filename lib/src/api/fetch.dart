@@ -4,6 +4,7 @@ library;
 
 import 'dart:async';
 
+import '../internal/engine_default.dart';
 import '../internal/engine_runner.dart';
 import '../internal/raw_mapping.dart';
 import 'body.dart';
@@ -33,7 +34,7 @@ abstract final class NitroHttp {
       _client ??= NitroHttpClient(settings: const ClientSettings());
 
   static EngineExecutor get _engineExecutor =>
-      _engine ??= NativeEngineExecutor();
+      _engine ??= defaultEngineExecutor();
 
   /// Configures the default client. Replaces any existing one.
   static void init(

@@ -5,11 +5,11 @@
 /// clients sharing a cache is the entire point of having one.
 library;
 
+
 import 'dart:typed_data';
 
 import '../nitro_http.native.dart';
 import 'instance_keys.dart';
-import 'native_attach.dart';
 import 'raw_mapping.dart';
 
 /// Seam over the `engine` instance, so the cache and prefetch API are testable
@@ -29,45 +29,6 @@ abstract interface class EngineExecutor {
   RawCacheStats cacheStats();
 }
 
-final class NativeEngineExecutor implements EngineExecutor {
-  NativeEngineExecutor() : _native = attachedNative(kEngineKey);
-
-  final NitroHttpNative _native;
-
-  @override
-  String get engineVersion => _native.engineVersion();
-
-  @override
-  bool get supportsHttp3 => _native.supportsHttp3();
-
-  @override
-  bool get supportsWebSockets => _native.supportsWebSockets();
-
-  @override
-  bool get supportsBrotli => _native.supportsBrotli();
-
-  @override
-  bool get supportsZstd => _native.supportsZstd();
-
-  @override
-  void resetNative() => _native.resetNative();
-
-  @override
-  void configureCache(RawCacheConfig config) => _native.configureCache(config);
-
-  @override
-  Future<RawResponse> prefetch(RawRequest request) =>
-      _native.prefetch(request);
-
-  @override
-  void clearCache() => _native.clearCache();
-
-  @override
-  RawCacheStats cacheStats() => _native.cacheStats();
-}
-
-/// Runs a prefetch and converts a transport failure into the typed exception.
-///
 /// Lives here rather than in `fetch.dart` so the public API never has to name a
 /// `Raw*` type.
 Future<void> runPrefetch(

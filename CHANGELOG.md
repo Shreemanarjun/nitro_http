@@ -16,6 +16,12 @@
   equivalent and throw `NitroHttpConfigurationException` rather than being
   quietly ignored. See the [web section](README.md#web).
 
+  The static capability API — `NitroHttp.engineVersion`, `supportsHttp3` and
+  friends — answers for `fetch` on web instead of asking a native module that
+  was never loaded. It reports `supportsHttp3: false` and
+  `supportsWebSockets: false` because a page cannot ask for either, and the disk
+  cache throws rather than pretending.
+
   Internally the native executor moved to `executor_native.dart` so that
   `dart:ffi` is behind a conditional import: a library that imports it at all
   cannot be compiled for the browser. `web` is declared in the plugin block, so

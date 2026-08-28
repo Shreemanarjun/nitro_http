@@ -409,7 +409,7 @@ landed. Every "Yes" is shipped in 0.0.1, not planned.
 | Typed exception hierarchy | Yes | No | Yes, sealed |
 | Transfer timings (DNS/TLS/TTFB) | Partial | No | Yes, on by default, disable per request |
 | `package:http` adapter | Yes | No | Yes |
-| `dio` adapter | Yes | No | Yes, in `nitro_http_dio` |
+| `dio` adapter | Yes | No | Yes, via `package:nitro_http/dio.dart` |
 | WebSockets | No | Separate package | Yes, HTTP/1.1 Upgrade only |
 | Disk cache (RFC 9111 subset) | No | Yes | Yes |
 | Prefetch | No | Yes | Yes |

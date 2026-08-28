@@ -9,10 +9,10 @@ library;
 import 'package:dio/dio.dart';
 import 'package:nitro_http/nitro_http.dart'
     show ClientSettings, NitroHttpClient;
-import 'package:nitro_http_dio/nitro_http_dio.dart';
+import 'package:nitro_http/dio.dart';
 import 'package:test/test.dart';
 
-import 'support/fakes.dart';
+import 'fakes.dart';
 
 void main() {
   setUp(() {

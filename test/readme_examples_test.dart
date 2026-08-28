@@ -17,8 +17,9 @@
 ///
 ///   * "Why there is no web build" — imports `package:http/browser_client.dart`,
 ///     which only compiles for the web; a VM test file cannot contain it.
-///   * the `dio` snippet — lives in the `nitro_http_dio` package, which is
-///     where its compile check belongs.
+///   * the `dio` snippet — compiled and run by
+///     `test/dio/dio_readme_example_test.dart`, which owns the adapter seam it
+///     needs.
 ///   * `NitroHttp.init` — it constructs a real [NitroHttpClient], and that
 ///     constructor configures the native executor, so there is no seam to pass
 ///     a fake through. Covered against the real engine by the `NitroHttp.init`

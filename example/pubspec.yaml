@@ -20,7 +20,7 @@ dependencies:
 
   cupertino_icons: ^1.0.8
   signals_flutter: ^7.1.0
-  nitro: ^0.7.0
+  nitro: ^0.7.4
 
   # The demo and the integration suite both talk to an in-process `shelf`
   # server on 127.0.0.1. Nothing here ever reaches the public internet, so the

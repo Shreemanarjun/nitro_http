@@ -6,7 +6,7 @@ import 'dart:io' show HttpDate;
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
-import 'package:nitro_http/nitro_http.dart' as nh;
+import '../../nitro_http.dart' as nh;
 
 /// The `RequestOptions.extra` key that selects a [nh.CacheMode] for one
 /// request.

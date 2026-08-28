@@ -853,6 +853,8 @@ client.close();
 ```
 
 ```dart
+import 'package:nitro_http/dio.dart';
+
 final dio = Dio()..useNitroHttp();
 
 // or, with settings or a shared client:
@@ -862,9 +864,18 @@ final dio = Dio()
   );
 ```
 
-The `package:http` adapter is checked against the official
-`package:http_client_conformance_tests` suite. The dio adapter is the separate
-`nitro_http_dio` package.
+Both adapters ship in this package. The `package:http` one is checked against
+the official `package:http_client_conformance_tests` suite.
+
+The dio adapter lives behind its own entrypoint, so import that rather than the
+main barrel:
+
+```dart
+import 'package:nitro_http/dio.dart';
+```
+
+`package:nitro_http/nitro_http.dart` never imports `dio`, so an app that does
+not use the adapter tree-shakes it away.
 
 ### Engine capabilities and hot restart
 

@@ -24,6 +24,7 @@
 #include "../lib/src/generated/cpp/nitro_http.native.g.h"
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -210,26 +211,51 @@ class HybridNitroHttpImpl final : public HybridNitroHttpNative {
   RoleHandle role_;
 };
 
-/// A deliberately leaked instance used purely as the receiver for the generated
-/// `emit_*` member functions. Those functions never dereference `this` — they
-/// only touch the file-level static port registries — but they are declared as
-/// members, so the sink needs *some* object. Giving it process lifetime removes
-/// any possibility of emitting through a destroyed instance.
-HybridNitroHttpImpl* emitter() {
-  static HybridNitroHttpImpl* instance = new HybridNitroHttpImpl("engine");
-  return instance;
+/// The instance every stream is emitted through.
+///
+/// `emit_*` posts only to the ports registered against the emitting object:
+/// the generated registry stores `add(instance, port)` and filters with
+/// `snapshot(this)`. So this has to be the very object Dart subscribed on —
+/// a second instance built for the purpose would look identical and deliver
+/// nothing, which is how a wrong one fails: silently, with every stream simply
+/// never producing.
+///
+/// Dart subscribes on `NitroHttpNative.engine`, the `engine`-keyed instance, so
+/// the factory below hands it over as it creates it. Held as a `shared_ptr` so
+/// the pointer stays valid even if Dart disposes its side, and replaced rather
+/// than added to, so a hot restart emits through the new instance instead of
+/// the abandoned one.
+std::mutex g_emitterMtx;
+std::shared_ptr<HybridNitroHttpImpl> g_emitter;
+
+std::shared_ptr<HybridNitroHttpImpl> emitter() {
+  std::lock_guard<std::mutex> lock(g_emitterMtx);
+  return g_emitter;
 }
 
 void installSink() {
   StreamSink sink;
-  sink.chunk = [](RawChunk item) { emitter()->emit_chunks(item); };
-  sink.event = [](NitroCppBuffer item) { emitter()->emit_events(item); };
-  sink.wsFrame = [](RawWsFrame item) { emitter()->emit_wsFrames(item); };
+  // Nothing has subscribed before Dart builds the engine instance, so dropping
+  // an emit that arrives first loses nothing.
+  sink.chunk = [](RawChunk item) {
+    if (auto e = emitter()) e->emit_chunks(item);
+  };
+  sink.event = [](NitroCppBuffer item) {
+    if (auto e = emitter()) e->emit_events(item);
+  };
+  sink.wsFrame = [](RawWsFrame item) {
+    if (auto e = emitter()) e->emit_wsFrames(item);
+  };
   installStreamSink(std::move(sink));
 }
 
 std::shared_ptr<HybridNitroHttpNative> createInstance(const std::string& key) {
-  return std::make_shared<HybridNitroHttpImpl>(key);
+  auto instance = std::make_shared<HybridNitroHttpImpl>(key);
+  if (key == "engine") {
+    std::lock_guard<std::mutex> lock(g_emitterMtx);
+    g_emitter = instance;
+  }
+  return instance;
 }
 
 void registerEverything() {

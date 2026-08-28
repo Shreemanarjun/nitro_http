@@ -1,3 +1,42 @@
+## 0.0.5
+
+### Fixed
+
+* **Streams delivered nothing on `nitro` 0.7.4** ([#2]). 0.7.4 partitions stream
+  ports by the emitting instance — the generated registry stores
+  `add(instance, port)` and filters with `snapshot(this)` — while the engine
+  emitted through a separately constructed instance kept purely as a receiver.
+  Dart subscribed on one object, the engine emitted from another, and every
+  chunk, WebSocket frame and progress event was silently dropped. The factory
+  now hands the `engine`-keyed instance to the sink as it creates it. Buffered
+  requests were never affected.
+
+### Changed
+
+* **Upgraded to `nitro` 0.7.4** from 0.7.0.
+
+* **The `dio` adapter ships inside `nitro_http`.** It was a separate
+  `nitro_http_dio` package that was never published, so the README pointed at
+  something nobody could depend on ([#1]). It now lives behind its own
+  entrypoint:
+
+  ```dart
+  import 'package:nitro_http/dio.dart';
+
+  final dio = Dio()..useNitroHttp();
+  ```
+
+  `package:nitro_http/nitro_http.dart` never imports `dio`, so an app that does
+  not use the adapter tree-shakes it away. `dio` is a dependency of this package
+  either way, which is the cost of not shipping a second one.
+
+  Migrating from the unpublished package: swap
+  `package:nitro_http_dio/nitro_http_dio.dart` for `package:nitro_http/dio.dart`
+  and drop the `nitro_http_dio` dependency. The API is unchanged.
+
+[#1]: https://github.com/Shreemanarjun/nitro_http/issues/1
+[#2]: https://github.com/Shreemanarjun/nitro_http/issues/2
+
 ## 0.0.4
 
 ### Fixed

@@ -52,7 +52,6 @@ jobs:
         run: |
           flutter pub get
           (cd example && flutter pub get)
-          (cd nitro_http_dio && flutter pub get)
 
       # The conformance suite, the native smoke test and the compression probe
       # all run only when the engine library exists — and together they carry
@@ -69,13 +68,9 @@ jobs:
         run: |
           dart analyze --fatal-infos
           (cd example && flutter analyze lib integration_test)
-          (cd nitro_http_dio && flutter analyze lib test)
 
       - name: Unit tests + 92 % coverage floor
         run: bash tool/coverage.sh
-
-      - name: nitro_http_dio tests
-        run: cd nitro_http_dio && flutter test
 
   # ── Regeneration must be a no-op ───────────────────────────────────────────
   # Two halves. `nitrogen generate` re-emits every *.g.* file from the spec —
@@ -102,7 +97,7 @@ jobs:
 
       - name: Install the nitrogen CLI
         run: |
-          dart pub global activate nitrogen_cli 0.7.0
+          dart pub global activate nitrogen_cli 0.7.4
           echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
 
       # nitrogen unconditionally runs `pod install` for the example's Apple

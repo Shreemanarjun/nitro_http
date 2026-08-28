@@ -16,12 +16,12 @@ import 'package:nitro_http/nitro_http.dart'
     hide CancelToken, ProgressCallback, RequestOptions;
 // ignore: implementation_imports — the parent's documented test seam.
 import 'package:nitro_http/src/nitro_http.native.dart';
-import 'package:nitro_http_dio/nitro_http_dio.dart';
+import 'package:nitro_http/dio.dart';
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:test/test.dart';
 
-import 'support/fakes.dart';
+import 'fakes.dart';
 
 /// An adapter wired to the fake transport, plus the fakes themselves.
 class Harness {

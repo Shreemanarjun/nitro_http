@@ -1,7 +1,0 @@
-# Libraries should not commit a lockfile, per
-# https://dart.dev/guides/libraries/private-files#pubspeclock
-pubspec.lock
-
-.dart_tool/
-build/
-doc/api/

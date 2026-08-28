@@ -3,23 +3,23 @@
 ///
 /// ```dart
 /// import 'package:dio/dio.dart';
-/// import 'package:nitro_http_dio/nitro_http_dio.dart';
+/// import 'package:nitro_http/dio.dart';
 ///
 /// final dio = Dio()..useNitroHttp();
 /// final res = await dio.get<Map<String, dynamic>>('https://example.com/api');
 /// ```
 ///
-/// This lives in its own package because `dio` is a heavy dependency that many
-/// `nitro_http` users do not want in their graph. The `package:http` adapter,
-/// whose dependency is tiny and pure Dart, ships inside `nitro_http` itself.
+/// Import this library rather than `package:nitro_http/nitro_http.dart` — the
+/// main barrel stays free of `dio`, so an app that never imports this file
+/// tree-shakes the adapter away.
 library;
 
 import 'package:dio/dio.dart';
-import 'package:nitro_http/nitro_http.dart' show ClientSettings;
+import 'src/api/settings.dart' show ClientSettings;
 
-import 'src/adapter.dart';
+import 'src/compat/dio_compat.dart';
 
-export 'src/adapter.dart'
+export 'src/compat/dio_compat.dart'
     show NitroHttpDioAdapter, dioExceptionTypeOf, nitroHttpCacheModeKey;
 
 /// Installs a [NitroHttpDioAdapter] on a [Dio] instance.

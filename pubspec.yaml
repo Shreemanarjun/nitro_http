@@ -21,6 +21,11 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Required because the plugin declares a `web` platform: Flutter generates a
+  # web plugin registrant that imports it, even though this package registers
+  # nothing there.
+  flutter_web_plugins:
+    sdk: flutter
   # Only reached from `package:nitro_http/dio.dart`; the main barrel never
   # imports it, so an app that does not use the adapter tree-shakes it away.
   dio: ^5.7.0
@@ -86,3 +91,9 @@ flutter:
         ffiPlugin: true
       linux:
         ffiPlugin: true
+      # Web has no native code to build: `executor_web.dart` is selected by a
+      # conditional import and needs no registrant, so there is no plugin class
+      # for Flutter to call.
+      web:
+        pluginClass: NitroHttpWeb
+        fileName: nitro_http_web.dart

@@ -49,6 +49,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.9"
+  dio:
+    dependency: transitive
+    description:
+      name: dio
+      sha256: "0df44ebba85e503958eb75d07eedd3c86275a58c1d3eda2f2ce8f0a2c3abbb3c"
+      url: "https://pub.dev"
+    source: hosted
+    version: "5.11.0"
+  dio_web_adapter:
+    dependency: transitive
+    description:
+      name: dio_web_adapter
+      sha256: "0786d0b7295a373de356fc0af4f6f1d0ab2844ed31b19dfc5e7556b70e24212c"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.2.1"
   fake_async:
     dependency: transitive
     description:
@@ -80,6 +96,11 @@ packages:
     version: "6.0.0"
   flutter_test:
     dependency: "direct dev"
+    description: flutter
+    source: sdk
+    version: "0.0.0"
+  flutter_web_plugins:
+    dependency: transitive
     description: flutter
     source: sdk
     version: "0.0.0"
@@ -155,29 +176,37 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.18.0"
+  mime:
+    dependency: transitive
+    description:
+      name: mime
+      sha256: "41a20518f0cb1256669420fdba0cd90d21561e560ac240f26ef8322e45bb7ed6"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.0"
   nitro:
     dependency: transitive
     description:
       name: nitro
-      sha256: fd8d8b996bb26705273823bff670725048e4a0ed6add3525a15dc4011a3060a2
+      sha256: e7cf4c07049ab8e37f94572325af2bd6c56c8b34d1b8cdd911db82509d8a836e
       url: "https://pub.dev"
     source: hosted
-    version: "0.6.1"
+    version: "0.7.4"
   nitro_annotations:
     dependency: transitive
     description:
       name: nitro_annotations
-      sha256: "2fd6494c81dbc94fa09523fe741194d84718c8311ab9510ef96199bd040d609d"
+      sha256: a3b886096f2a544743b5f3f118e44d08ba8f3d31dc0eaa3c38763b1313fdf77c
       url: "https://pub.dev"
     source: hosted
-    version: "0.6.1"
+    version: "0.7.4"
   nitro_http:
     dependency: "direct main"
     description:
       path: ".."
       relative: true
     source: path
-    version: "0.0.4"
+    version: "0.0.5"
   path:
     dependency: transitive
     description:

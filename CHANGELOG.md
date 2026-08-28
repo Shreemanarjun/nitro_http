@@ -18,7 +18,10 @@
 
   Internally the native executor moved to `executor_native.dart` so that
   `dart:ffi` is behind a conditional import: a library that imports it at all
-  cannot be compiled for the browser.
+  cannot be compiled for the browser. `web` is declared in the plugin block, so
+  pub.dev lists it and `flutter build web` accepts the plugin; the registrant
+  Flutter requires for that is empty, because the executor is chosen by
+  conditional import and has nothing to register.
 
 ### Fixed
 

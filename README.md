@@ -9,8 +9,8 @@
        src="https://zmozkivkhopoeutpnnum.supabase.co/storage/v1/object/public/nitro_http/logo.png">
 </p>
 <p align="center">
-  A fast HTTP client for Flutter. One C++ engine, five platforms, and the same
-  behaviour on all of them.
+  A fast HTTP client for Flutter. One C++ engine, five platforms, the same
+  behaviour on all of them — and the same API on web.
 </p>
 
 <p align="center">
@@ -64,8 +64,9 @@ identically on all five. There is no "works differently on Android".
   in production.
 - **Drop-in adapters.** Already on `package:http` or `dio`? Change one line and
   keep every call site.
-- **Honest about limits.** No web, HTTP/1.1-only WebSockets, ~3–4.8 MB per ABI.
-  All of it in [Limitations](#limitations), not buried.
+- **Honest about limits.** HTTP/1.1-only WebSockets, ~3–4.8 MB per ABI, and a
+  web build that runs on `fetch` rather than the engine. All of it in
+  [Limitations](#limitations), not buried.
 
 ## How fast is it
 
@@ -106,8 +107,9 @@ flutter pub add nitro_http
 Requires Dart `^3.12.2` and Flutter `>=3.3.0`. There is no manual step: the
 native engine is fetched as a checksum-pinned prebuilt the first time you build.
 
-**What the first build does.** It downloads the slice for each ABI you are
-building — about 12 MB for a three-ABI Android APK — and compiles the engine,
+**What the first build does.** On web there is nothing to fetch or compile —
+the engine is not used there. On the native platforms it downloads the slice for
+each ABI you are building — about 12 MB for a three-ABI Android APK — and compiles the engine,
 which adds roughly 11 seconds over a plain Flutter app. Everything lands in a
 per-machine cache (`~/.cache/nitro_http`, `%LOCALAPPDATA%` on Windows) keyed by
 the dependency release, so later projects and package upgrades reuse it and
@@ -122,7 +124,7 @@ the dependency release, so later projects and package upgrades reuse it and
 | macOS | 10.15+ | **Yes — one entitlement, below** |
 | Windows | x64 | No |
 | Linux | x64, arm64 | No |
-| Web | — | Not supported, and never will be |
+| Web | any browser Flutter supports | No — but it runs on `fetch`, [not the engine](#web) |
 
 ### macOS: the one required step
 
@@ -162,7 +164,15 @@ final res = await client.get('https://api.example.com/users');
 ```
 
 **What still works:** every verb, headers, request and response bodies, streamed
-responses, redirects, cancellation, status handling, interceptors and retry.
+responses, redirects, cancellation, status handling, interceptors and retry —
+plus timeouts, download progress, per-request `CacheMode`, and per-phase
+`HttpTimings` read from the browser's Resource Timing entries.
+
+`HttpTimings` means the same thing on every platform: each figure is time **from
+the start of the request**, matching `CURLINFO_*_TIME_T` natively. A reused
+connection reports zero DNS and connect on both. Cross-origin responses are
+zeroed by the browser unless the server sends `Timing-Allow-Origin`, leaving
+only the total real.
 
 **What does not, and why:**
 
@@ -171,10 +181,11 @@ responses, redirects, cancellation, status handling, interceptors and retry.
 | TLS settings — pinning, mTLS, custom roots, `insecure()` | the browser owns TLS; a page cannot see or override it |
 | proxies, DNS overrides, DoH | not exposed to a page |
 | HTTP version selection | the browser negotiates; you get what it picks |
-| connection pool, per-phase timings | not observable from a page |
+| connection pool | not observable from a page |
 | the cookie jar | the browser manages cookies; `credentials` is the only lever |
 | the disk cache | the browser's HTTP cache applies instead |
 | streamed *uploads* | `fetch` needs the whole body before it is called |
+| WebSocket headers, `pingInterval`, TLS | the browser performs the upgrade and owns them |
 
 These **throw `NitroHttpConfigurationException` rather than being ignored** — a
 pin that silently stops being checked is worse than a build that stops working.
@@ -926,6 +937,11 @@ print(NitroHttp.supportsBrotli);
 print(NitroHttp.supportsZstd);
 ```
 
+These answer for whatever is actually serving the request, which is the point of
+asking. On web that is `fetch`, so `engineVersion` reads `fetch (browser)` and
+`supportsHttp3` is `false` — a page can neither ask for HTTP/3 nor find out
+whether it got it, and this flag exists to decide whether to try.
+
 Hot restart leaves the native engine threads running while the Dart isolate is
 replaced. You do not have to do anything about it: the first time the reloaded
 app touches the engine, it joins those threads, aborts the stragglers, flushes
@@ -977,7 +993,12 @@ TLS, proxies and DNS-over-HTTPS have more to them than fits here — see
 
 ## Limitations
 
-- **No web support**, permanently. Use `BrowserClient` behind `kIsWeb`.
+- **Web runs on `fetch`, not the engine.** A browser gives native code no
+  socket, so the transport-level settings — TLS pinning, mTLS, custom roots,
+  proxies, DNS, HTTP version, the pool, per-phase timings, the cookie jar, the
+  disk cache and streamed uploads — are unavailable there and throw rather than
+  being ignored. WebSockets work, on the browser's own `WebSocket`. See
+  [Web](#web).
 - **HTTP/3 depends on the build you link.** A system libcurl usually has no QUIC
   backend. Check `NitroHttp.supportsHttp3` at runtime.
 - **WebSockets are HTTP/1.1 Upgrade only.** No RFC 8441 over HTTP/2 — libcurl

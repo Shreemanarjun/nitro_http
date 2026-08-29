@@ -27,6 +27,9 @@
 //     --driver=test_driver/integration_test.dart \
 //     --target=integration_test/burst_attribution_test.dart
 
+@Tags(['benchmark'])
+library;
+
 import 'dart:convert';
 import 'dart:io';
 

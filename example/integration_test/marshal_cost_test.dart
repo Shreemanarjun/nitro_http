@@ -15,6 +15,9 @@
 //     --driver=test_driver/integration_test.dart \
 //     --target=integration_test/marshal_cost_test.dart
 
+@Tags(['benchmark'])
+library;
+
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';

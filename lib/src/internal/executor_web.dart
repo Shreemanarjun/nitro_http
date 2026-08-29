@@ -6,14 +6,19 @@
 /// has tests.
 library;
 
-import 'package:http/browser_client.dart';
-
 import 'executor_fetch.dart';
+import 'fetch_client_web.dart';
 import 'request_runner.dart';
 
 /// The executor a client gets in the browser.
-RequestExecutor defaultExecutor(int clientId) =>
-    FetchRequestExecutor(BrowserClient());
+RequestExecutor defaultExecutor(int clientId) {
+  final client = NitroFetchClient();
+  return FetchRequestExecutor(
+    client,
+    setCredentials: (enabled) => client.withCredentials = enabled,
+    timings: resourceTimingFor,
+  );
+}
 
 /// The demux a client gets in the browser.
 StreamDemux get defaultDemux => FetchStreamDemux.instance;

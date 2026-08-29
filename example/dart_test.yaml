@@ -1,0 +1,17 @@
+# The benchmark and profiling harnesses in integration_test/ run for tens of
+# minutes each, so `flutter test integration_test` — the obvious command — used
+# to look like a hang. They are excluded by default; opt in with
+# `--tags benchmark`, and expect one to take a while.
+#
+# Note that running the whole directory in one invocation still fails after the
+# first file on macOS: the tool loses its log reader on the second app launch
+# ("The log reader stopped unexpectedly") and every later suite fails to load.
+# That is a Flutter tooling limitation, not this package — run one file per
+# invocation, as .github/workflows/ci.yml does:
+#
+#   for t in http streaming cache cookies websocket cancellation; do
+#     flutter test -d macos "integration_test/${t}_test.dart"
+#   done
+tags:
+  benchmark:
+    skip: "benchmark harness — run with --tags benchmark"

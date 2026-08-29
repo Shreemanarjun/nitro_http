@@ -27,6 +27,9 @@
 //     --driver=test_driver/integration_test.dart \
 //     --target=integration_test/handoff_cost_test.dart
 
+@Tags(['benchmark'])
+library;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:nitro_http/nitro_http.dart';

@@ -2,66 +2,39 @@
 
 ### Added
 
-* **Web support.** The package now compiles and runs under `flutter build web`
-  (dart2js and `--wasm`). A browser hands native code no socket, so the engine
-  cannot serve it — libcurl in wasm would need a WebSocket relay you operate and
-  would still lose HTTP/2 and HTTP/3 — so web is served by `fetch` through
-  `package:http`'s `BrowserClient` instead. The API is unchanged: verbs,
-  headers, bodies, streamed responses, redirects, cancellation, interceptors and
-  retry all work.
-
-  The settings that describe how the engine talks to the network — TLS pinning,
-  mTLS, custom roots, proxies, DNS, HTTP version, the pool, per-phase timings,
-  the cookie jar, the disk cache and streamed uploads — have no browser
-  equivalent and throw `NitroHttpConfigurationException` rather than being
-  quietly ignored. See the [web section](README.md#web).
-
-  The static capability API — `NitroHttp.engineVersion`, `supportsHttp3` and
-  friends — answers for `fetch` on web instead of asking a native module that
-  was never loaded. It reports `supportsHttp3: false` and
-  `supportsWebSockets: false` because a page cannot ask for either, and the disk
-  cache throws rather than pretending.
-
-  Internally the native executor moved to `executor_native.dart` so that
-  `dart:ffi` is behind a conditional import: a library that imports it at all
-  cannot be compiled for the browser. `web` is declared in the plugin block, so
-  pub.dev lists it and `flutter build web` accepts the plugin; the registrant
-  Flutter requires for that is empty, because the executor is chosen by
-  conditional import and has nothing to register.
+* **Web support** — compiles and runs under `flutter build web` (dart2js and
+  `--wasm`), served by `fetch` rather than the engine, because a browser gives
+  native code no socket. See the [web section](README.md#web).
+* WebSockets work on web, on the browser's own `WebSocket` — `NitroWebSocket`
+  already implements `package:web_socket`'s interface, so the API is unchanged.
+  Request headers, `pingInterval` and TLS settings throw there: the browser
+  performs the upgrade and owns them.
+* Per-phase `HttpTimings` on web, read from Resource Timing and reported the way
+  the engine reports them — time from the start of the request, so the type
+  means one thing on every platform.
+* Per-request `CacheMode` on web: `fetch`'s cache modes line up with it almost
+  exactly, and the browser runs the cache.
+* Timeouts, download progress, cancellation and cookies now work on web; they
+  were previously ignored there.
+* Web answers its own capability queries: `engineVersion` reads
+  `fetch (browser)`, `supportsHttp3` is `false` and `supportsWebSockets` is `true`.
 
 ### Fixed
 
-* **Streams delivered nothing on `nitro` 0.7.4** ([#2]). 0.7.4 partitions stream
-  ports by the emitting instance — the generated registry stores
-  `add(instance, port)` and filters with `snapshot(this)` — while the engine
-  emitted through a separately constructed instance kept purely as a receiver.
-  Dart subscribed on one object, the engine emitted from another, and every
-  chunk, WebSocket frame and progress event was silently dropped. The factory
-  now hands the `engine`-keyed instance to the sink as it creates it. Buffered
-  requests were never affected.
+* **Streams delivered nothing on `nitro` 0.7.4** ([#2]) — 0.7.4 partitions
+  stream ports by emitting instance, and the sink emitted through a different
+  instance from the one Dart subscribed on.
 
 ### Changed
 
-* **Upgraded to `nitro` 0.7.4** from 0.7.0.
-
-* **The `dio` adapter ships inside `nitro_http`.** It was a separate
-  `nitro_http_dio` package that was never published, so the README pointed at
-  something nobody could depend on ([#1]). It now lives behind its own
-  entrypoint:
-
-  ```dart
-  import 'package:nitro_http/dio.dart';
-
-  final dio = Dio()..useNitroHttp();
-  ```
-
-  `package:nitro_http/nitro_http.dart` never imports `dio`, so an app that does
-  not use the adapter tree-shakes it away. `dio` is a dependency of this package
-  either way, which is the cost of not shipping a second one.
-
-  Migrating from the unpublished package: swap
-  `package:nitro_http_dio/nitro_http_dio.dart` for `package:nitro_http/dio.dart`
-  and drop the `nitro_http_dio` dependency. The API is unchanged.
+* **The `dio` adapter ships inside `nitro_http`** ([#1]) — import
+  `package:nitro_http/dio.dart` instead of the never-published `nitro_http_dio`
+  package; the API is unchanged and `dio` is now a dependency of this package.
+* Engine settings a browser cannot honour — TLS pinning, mTLS, custom roots,
+  proxies, DNS, HTTP version, the pool, timings, the cookie jar, the disk cache
+  and streamed uploads — throw `NitroHttpConfigurationException` on web rather
+  than being ignored.
+* Upgraded to `nitro` 0.7.4 from 0.7.0.
 
 [#1]: https://github.com/Shreemanarjun/nitro_http/issues/1
 [#2]: https://github.com/Shreemanarjun/nitro_http/issues/2

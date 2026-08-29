@@ -26,6 +26,9 @@
 //     --driver=test_driver/integration_test.dart \
 //     --target=integration_test/concurrency_scaling_test.dart
 
+@Tags(['benchmark'])
+library;
+
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';

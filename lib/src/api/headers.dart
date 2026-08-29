@@ -64,6 +64,7 @@ class HttpHeaders {
   /// The field keeps the position of the first existing occurrence, so
   /// overwriting a header does not shuffle it to the end of the list.
   void set(String name, String value) {
+    _rejectControlCharacters(name, value);
     final lower = name.toLowerCase();
     if (!_index.containsKey(lower)) {
       add(name, value);
@@ -89,8 +90,34 @@ class HttpHeaders {
 
   /// Appends [value] under [name], keeping any values already present.
   void add(String name, String value) {
+    _rejectControlCharacters(name, value);
     _entries.add((name, value));
     (_index[name.toLowerCase()] ??= <String>[]).add(value);
+  }
+
+  /// Rejects the characters that would end the header line early.
+  ///
+  /// A CR or LF inside a value splits the request on the wire: everything after
+  /// it is read by the server as another header, or as the start of the body.
+  /// Applications put user-supplied data in headers all the time — a token, a
+  /// filename, a trace id — so this has to fail at the call site rather than
+  /// travel to the socket and become a request-smuggling primitive.
+  ///
+  /// Throws [ArgumentError], because a header with a newline in it is a bug in
+  /// the caller and not a transport failure.
+  static void _rejectControlCharacters(String name, String value) {
+    for (final (label, text) in [('name', name), ('value', value)]) {
+      for (var i = 0; i < text.length; i++) {
+        final unit = text.codeUnitAt(i);
+        if (unit == 0x0D || unit == 0x0A || unit == 0x00) {
+          throw ArgumentError.value(
+            text,
+            'header $label',
+            'must not contain CR, LF or NUL — it would split the request',
+          );
+        }
+      }
+    }
   }
 
   /// Removes every value for [name]. Does nothing when it is absent.

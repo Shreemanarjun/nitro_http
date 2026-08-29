@@ -1413,7 +1413,12 @@ void RequestTask::completeWithError(const EngineError& err) {
     // failure has to travel down the chunk stream instead.
     emitTerminalChunk(err);
   } else {
-    deliverBuffered(wire::encodeResponse(wire::errorResponse(id(), err)));
+    RawResponse response = wire::errorResponse(id(), err);
+    // The hop count is real information the caller acts on — "too many
+    // redirects" is only actionable if you know how many. It is zero in the
+    // envelope by construction, so fill it in from what the task counted.
+    response.redirectCount = redirectCount_;
+    deliverBuffered(wire::encodeResponse(response));
   }
 }
 

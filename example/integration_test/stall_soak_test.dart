@@ -29,6 +29,9 @@
 //     --target=integration_test/stall_soak_test.dart \
 //     --dart-define=SOAK_ITERATIONS=20000
 
+@Tags(['benchmark'])
+library;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:nitro_http/nitro_http.dart';

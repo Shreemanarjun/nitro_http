@@ -26,6 +26,9 @@
 // bytes as they stream, so a 1 GiB row costs 1 GiB of transfer and no allocation
 // on either side.
 
+@Tags(['benchmark'])
+library;
+
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';

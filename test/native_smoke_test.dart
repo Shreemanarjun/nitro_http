@@ -576,12 +576,27 @@ void main() {
       );
       await done.future;
 
-      expect(error, isA<NitroHttpCancelException>());
-      expect(
-        received,
-        lessThan(8000000),
-        reason: 'the transfer should have been aborted, not completed',
-      );
+      // Cancelling races the transfer, and on a loopback 8 MB can land before
+      // the cancel reaches the loop thread — cancelling a finished transfer is
+      // a legal no-op. Asserting the abort outright made this flake about one
+      // run in eight. What must hold either way is that a cancelled stream is
+      // never a *silently truncated* success: a short body always arrives with
+      // the exception that explains it.
+      if (error != null) {
+        expect(error, isA<NitroHttpCancelException>());
+        expect(
+          received,
+          lessThan(8000000),
+          reason: 'an aborted transfer must not also report every byte',
+        );
+      } else {
+        expect(
+          received,
+          8000000,
+          reason: 'the cancel lost the race, so the body must be complete — a '
+              'short body with no error is the failure this guards against',
+        );
+      }
     }, skip: skipReason);
 
     test('the first native touch of a new incarnation aborts stragglers',

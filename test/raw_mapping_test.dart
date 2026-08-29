@@ -694,12 +694,15 @@ void main() {
             .having((x) => x.isPinMismatch, 'isPinMismatch', false)
             .having((x) => x.isClientAuthFailure, 'isClientAuthFailure', true),
       ),
+      // `redirectCount` is the hops actually followed, which this table does
+      // not supply — it used to be filled with the engine error code, so a
+      // caller reading it got a CURLcode dressed up as a hop count.
       RawErrorKind.tooManyRedirects: (e) => expect(
         e,
         isA<NitroHttpRedirectException>().having(
           (x) => x.redirectCount,
           'redirectCount',
-          7,
+          0,
         ),
       ),
       RawErrorKind.protocolError: (e) =>

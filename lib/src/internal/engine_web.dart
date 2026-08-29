@@ -26,9 +26,9 @@ final class WebEngineExecutor implements EngineExecutor {
   @override
   bool get supportsHttp3 => false;
 
-  /// `NitroWebSocket` needs the engine, which is not here.
+  /// The browser's own `WebSocket`, which `ws_browser.dart` drives.
   @override
-  bool get supportsWebSockets => false;
+  bool get supportsWebSockets => true;
 
   /// Content decoding is the browser's, and every target browser does brotli.
   @override

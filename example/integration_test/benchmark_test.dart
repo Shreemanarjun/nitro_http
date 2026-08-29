@@ -31,6 +31,9 @@
 // JIT warm-up and assertion overhead in the Dart layer of every client equally,
 // but it still is not what ships.
 
+@Tags(['benchmark'])
+library;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:nitro_http/nitro_http.dart';

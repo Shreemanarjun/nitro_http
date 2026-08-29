@@ -283,6 +283,7 @@ class RequestRunner {
         kind: response.errorKind,
         message: response.errorMessage,
         engineErrorCode: response.engineErrorCode,
+        redirectCount: response.redirectCount,
         request: request,
       );
     }
@@ -388,6 +389,7 @@ class RequestRunner {
         kind: head.errorKind,
         message: head.errorMessage,
         engineErrorCode: head.engineErrorCode,
+        redirectCount: head.redirectCount,
         request: request,
       );
     }

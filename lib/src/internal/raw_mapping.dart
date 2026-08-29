@@ -464,6 +464,9 @@ NitroHttpException mapError({
   required String message,
   required int engineErrorCode,
   HttpRequest? request,
+  /// Hops actually followed, for [RawErrorKind.tooManyRedirects]. Defaults to
+  /// zero for the callers that have no response to read it from.
+  int redirectCount = 0,
 }) {
   return switch (kind) {
     RawErrorKind.none => throw StateError(
@@ -573,7 +576,7 @@ NitroHttpException mapError({
       engineErrorCode: engineErrorCode,
     ),
     RawErrorKind.tooManyRedirects => NitroHttpRedirectException(
-      redirectCount: engineErrorCode,
+      redirectCount: redirectCount,
       request: request,
       engineMessage: message,
       engineErrorCode: engineErrorCode,

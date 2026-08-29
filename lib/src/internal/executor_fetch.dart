@@ -24,6 +24,68 @@ import '../api/exceptions.dart';
 import '../nitro_http.native.dart';
 import 'request_runner.dart';
 
+/// The header the browser client reads the fetch cache mode from.
+///
+/// `package:http` gives a request no room for transport options, so the mode
+/// travels as a header that `fetch_client_web.dart` consumes and strips. It
+/// never reaches the network.
+const String kCacheModeHeader = 'x-nitro-fetch-cache';
+
+/// Maps a [RawCacheMode] onto the `fetch` cache mode that means the same thing.
+///
+/// The two vocabularies line up almost exactly, which is why the disk-cache
+/// settings can be refused on web while the per-request mode still works: the
+/// browser runs the cache, and this says how to use it.
+String fetchCacheModeOf(RawCacheMode mode) => switch (mode) {
+  RawCacheMode.normal => 'default',
+  RawCacheMode.noStore => 'no-store',
+  // "Ignore what is stored and go to the network", which is `reload` — not
+  // `no-cache`, which would still revalidate against the entry.
+  RawCacheMode.bypass => 'reload',
+  RawCacheMode.onlyIfCached => 'only-if-cached',
+  RawCacheMode.refresh => 'no-cache',
+};
+
+/// Per-phase timings a page can see, or null when the browser has none.
+typedef TimingsLookup = RawTimings? Function(String url);
+
+/// Turns Resource Timing milestones into the timings the engine reports.
+///
+/// Every figure is milliseconds **from the start of the request**, not the
+/// length of that phase, because that is what `CURLINFO_*_TIME_T` means on the
+/// native side and `HttpTimings` has to mean one thing everywhere.
+///
+/// A reused connection legitimately reports zero for DNS and connect: the
+/// browser records those milestones as equal to the start. Cross-origin entries
+/// are zeroed altogether unless the server sends `Timing-Allow-Origin`, which
+/// leaves only the total real — the same shape the wall-clock fallback has.
+RawTimings timingsFromMilestones({
+  required double start,
+  required double domainLookupEnd,
+  required double connectEnd,
+  required double secureConnectionStart,
+  required double responseStart,
+  required double redirectEnd,
+  required double duration,
+}) {
+  double since(double milestone) {
+    final value = milestone - start;
+    return value > 0 ? value : 0;
+  }
+
+  return RawTimings(
+    // A page has no queue: `fetch` starts when it is called.
+    queueMs: 0,
+    dnsMs: since(domainLookupEnd),
+    connectMs: since(connectEnd),
+    // TLS finishes when the connection does; zero when the scheme is plain.
+    tlsMs: secureConnectionStart > 0 ? since(connectEnd) : 0,
+    firstByteMs: since(responseStart),
+    redirectMs: since(redirectEnd),
+    totalMs: duration,
+  );
+}
+
 /// Routes requests through an [http.Client] — `BrowserClient`, and so `fetch`,
 /// in a real web build.
 ///
@@ -32,11 +94,34 @@ import 'request_runner.dart';
 /// `executor_web.dart` supplies the real one.
 final class FetchRequestExecutor implements RequestExecutor {
   /// Creates an executor over [client].
-  FetchRequestExecutor(http.Client client) : _client = client;
+  ///
+  /// [setCredentials] is how the browser-only wiring exposes
+  /// `BrowserClient.withCredentials` without this library importing it — that
+  /// import is what would make the file uncompilable, and untestable, off web.
+  FetchRequestExecutor(
+    http.Client client, {
+    void Function(bool)? setCredentials,
+    TimingsLookup? timings,
+  }) : _client = client,
+       // ignore: prefer_initializing_formals
+       _setCredentials = setCredentials,
+       // ignore: prefer_initializing_formals
+       _timings = timings;
 
   final http.Client _client;
+  final void Function(bool)? _setCredentials;
+  final TimingsLookup? _timings;
   final _aborts = <int, StreamSubscription<List<int>>>{};
   final _tokens = <int, Set<int>>{};
+  /// In-flight requests that can still be given up on, by request id.
+  final _pending = <int, Completer<RawResponse>>{};
+  /// The request behind each in-flight id, so a cancellation can name it.
+  final _cancelledRequests = <int, RawRequest>{};
+  /// Tokens cancelled already. A caller can cancel before the request is even
+  /// registered — the engine handles that by refusing the token in `startTask`
+  /// before opening a socket, and this is the same refusal.
+  final _cancelledTokens = <int>{};
+  RawClientConfig? _config;
   var _disposed = false;
 
   @override
@@ -44,6 +129,46 @@ final class FetchRequestExecutor implements RequestExecutor {
     // Only the settings a page can actually honour are accepted. The rest would
     // otherwise look configured and do nothing.
     _rejectUnsupported(config);
+    _config = config;
+    // The browser owns the jar, but it will only attach it cross-origin when
+    // credentials are requested. `cookies.enabled` is the closest thing the
+    // caller already says, so honour it rather than inventing a web-only knob.
+    _setCredentials?.call(config.cookies.enabled);
+  }
+
+  /// The deadline for [request], or null when neither it nor the client set one.
+  ///
+  /// `fetch` cannot separate connecting from transferring, so `connectTimeout`
+  /// and `timeout` both bound the whole call and the shorter one wins. That is
+  /// stricter than the engine, never looser, so a request that would have timed
+  /// out natively still does.
+  Duration? _deadlineFor(RawRequest request) {
+    final candidates = <int>[
+      request.options.requestTimeoutMs,
+      request.options.connectTimeoutMs,
+      _config?.requestTimeoutMs ?? -1,
+      _config?.connectTimeoutMs ?? -1,
+    ].where((ms) => ms > 0);
+    if (candidates.isEmpty) return null;
+    return Duration(milliseconds: candidates.reduce((a, b) => a < b ? a : b));
+  }
+
+  /// Registers [requestId] so `cancel` and `cancelToken` can reach it.
+  void _track(RawRequest request, Completer<RawResponse> pending) {
+    _pending[request.requestId] = pending;
+    _cancelledRequests[request.requestId] = request;
+    final tokenId = request.options.cancelTokenId;
+    if (tokenId > 0) {
+      (_tokens[tokenId] ??= <int>{}).add(request.requestId);
+    }
+  }
+
+  void _untrack(int requestId) {
+    _pending.remove(requestId);
+    _cancelledRequests.remove(requestId);
+    for (final ids in _tokens.values) {
+      ids.remove(requestId);
+    }
   }
 
   void _rejectUnsupported(RawClientConfig config) {
@@ -68,12 +193,65 @@ final class FetchRequestExecutor implements RequestExecutor {
   Future<RawResponse> sendBuffered(RawRequest request, Uint8List body) async {
     _checkAlive();
     final started = DateTime.now();
-    try {
+    if (_isAlreadyCancelled(request)) {
+      return _failed(
+        request,
+        RawErrorKind.cancelled,
+        'the request was cancelled',
+        started,
+      );
+    }
+    // Given up on either by `cancel` or by the deadline below. `fetch` itself
+    // keeps running — `package:http` exposes no per-request abort — so this
+    // stops the caller waiting rather than stopping the bytes. Documented on
+    // `cancel`, because the difference is observable as traffic.
+    final pending = Completer<RawResponse>();
+    _track(request, pending);
+
+    Future<RawResponse> transfer() async {
       final response = await _send(request, body);
-      final bytes = await response.stream.toBytes();
-      return _responseOf(request, response, bytes, started);
+      // Read through a subscription rather than `toBytes()`: BrowserClient
+      // wires an AbortController to this stream, so cancelling the subscription
+      // aborts the fetch itself instead of merely abandoning the future.
+      final collected = BytesBuilder(copy: false);
+      final finished = Completer<void>();
+      final total = response.contentLength ?? -1;
+      final sub = response.stream.listen(
+        (chunk) {
+          collected.add(chunk);
+          _reportProgress(request.requestId, collected.length, total);
+        },
+        onError: finished.completeError,
+        onDone: finished.complete,
+        cancelOnError: true,
+      );
+      _aborts[request.requestId] = sub;
+      try {
+        await finished.future;
+      } finally {
+        _aborts.remove(request.requestId);
+      }
+      return _responseOf(request, response, collected.takeBytes(), started);
+    }
+
+    try {
+      var race = Future.any<RawResponse>([transfer(), pending.future]);
+      final deadline = _deadlineFor(request);
+      if (deadline != null) {
+        race = race.timeout(deadline);
+      }
+      return await race;
+    } on TimeoutException {
+      return _failed(
+        request,
+        RawErrorKind.timeoutRequest,
+        'the request exceeded its deadline',
+        started,
+      );
     } on http.ClientException catch (error) {
       return _errorResponse(request, error);
+    } finally {
+      _untrack(request.requestId);
     }
   }
 
@@ -84,20 +262,40 @@ final class FetchRequestExecutor implements RequestExecutor {
   ) async {
     _checkAlive();
     final started = DateTime.now();
+    if (_isAlreadyCancelled(request)) {
+      final demux = FetchStreamDemux.instance;
+      scheduleMicrotask(
+        () => demux.pushChunk(
+          ChunkEvent(
+            requestId: request.requestId,
+            kind: 2,
+            aux: RawErrorKind.cancelled.index,
+            bytes: Uint8List.fromList('the request was cancelled'.codeUnits),
+          ),
+        ),
+      );
+      return _headOfCancelled(request);
+    }
     final response = await _send(request, body);
     final demux = FetchStreamDemux.instance;
+    final total = response.contentLength ?? -1;
+    var received = 0;
 
     // The body is pumped into the demux exactly as the native path posts chunks
     // onto the module-global stream, so the runner above is unchanged.
     _aborts[request.requestId] = response.stream.listen(
-      (chunk) => demux.pushChunk(
-        ChunkEvent(
-          requestId: request.requestId,
-          kind: 0,
-          aux: 0,
-          bytes: chunk is Uint8List ? chunk : Uint8List.fromList(chunk),
-        ),
-      ),
+      (chunk) {
+        received += chunk.length;
+        demux.pushChunk(
+          ChunkEvent(
+            requestId: request.requestId,
+            kind: 0,
+            aux: 0,
+            bytes: chunk is Uint8List ? chunk : Uint8List.fromList(chunk),
+          ),
+        );
+        _reportProgress(request.requestId, received, total);
+      },
       onError: (Object error) => demux.pushChunk(
         ChunkEvent(
           requestId: request.requestId,
@@ -132,6 +330,7 @@ final class FetchRequestExecutor implements RequestExecutor {
       out.headers[header.name] = header.value;
     }
     if (body.isNotEmpty) out.bodyBytes = body;
+    out.headers[kCacheModeHeader] = fetchCacheModeOf(request.options.cacheMode);
     // `-1` is the inherit sentinel; anything non-zero means follow.
     out.followRedirects = request.options.followRedirects != 0;
     if (request.options.maxRedirects > 0) {
@@ -167,7 +366,10 @@ final class FetchRequestExecutor implements RequestExecutor {
     contentLength: response.contentLength ?? -1,
     primaryIp: '',
     primaryPort: 0,
-    timings: _timingsSince(started),
+    timings: _timingsFor(
+      response.request?.url.toString() ?? request.url,
+      started,
+    ),
   );
 
   RawResponse _responseOf(
@@ -198,13 +400,26 @@ final class FetchRequestExecutor implements RequestExecutor {
   }
 
   RawResponse _errorResponse(RawRequest request, http.ClientException error) =>
-      RawResponse(
-        requestId: request.requestId,
+      _failed(
+        request,
         // `fetch` reports every network failure as one opaque TypeError, on
         // purpose: distinguishing DNS from refused from CORS would be a
         // cross-origin information leak. So this cannot be classified further.
-        errorKind: RawErrorKind.io,
-        errorMessage: error.message,
+        RawErrorKind.io,
+        error.message,
+        DateTime.now(),
+      );
+
+  RawResponse _failed(
+    RawRequest request,
+    RawErrorKind kind,
+    String message,
+    DateTime started,
+  ) =>
+      RawResponse(
+        requestId: request.requestId,
+        errorKind: kind,
+        errorMessage: message,
         engineErrorCode: 0,
         statusCode: 0,
         reasonPhrase: '',
@@ -217,12 +432,81 @@ final class FetchRequestExecutor implements RequestExecutor {
         revalidated: false,
         primaryIp: '',
         primaryPort: 0,
-        timings: _timingsSince(DateTime.now()),
+        timings: _timingsSince(started),
       );
 
+  /// Publishes a download-progress event, the same shape the engine posts.
+  ///
+  /// Upload progress has no counterpart: `fetch` takes the whole body at once
+  /// and reports nothing about sending it, so `onSendProgress` stays silent on
+  /// web rather than being faked from the byte count.
+  void _reportProgress(int requestId, int received, int total) {
+    FetchStreamDemux.instance.pushEvent(
+      RawEvent(
+        requestId: requestId,
+        kind: RawEventKind.downloadProgress,
+        a: received,
+        b: total,
+        message: '',
+      ),
+    );
+  }
+
+  /// True when the request's token was cancelled before it could be sent.
+  bool _isAlreadyCancelled(RawRequest request) {
+    final tokenId = request.options.cancelTokenId;
+    return tokenId > 0 && _cancelledTokens.contains(tokenId);
+  }
+
+  RawResponseHead _headOfCancelled(RawRequest request) => RawResponseHead(
+    requestId: request.requestId,
+    errorKind: RawErrorKind.cancelled,
+    errorMessage: 'the request was cancelled',
+    engineErrorCode: 0,
+    statusCode: 0,
+    reasonPhrase: '',
+    version: RawHttpVersion.http11,
+    finalUrl: request.url,
+    redirectCount: 0,
+    headers: const [],
+    fromCache: false,
+    contentLength: -1,
+    primaryIp: '',
+    primaryPort: 0,
+    timings: _timingsSince(DateTime.now()),
+  );
+
+  /// A stand-in for a request that has already been forgotten.
+  RawRequest _placeholder(int requestId) => RawRequest(
+    requestId: requestId,
+    method: RawMethod.get,
+    customMethod: '',
+    url: '',
+    headers: const [],
+    bodyKind: RawBodyKind.none,
+    bodyFilePath: '',
+    options: const RawRequestOptions(
+      connectTimeoutMs: -1,
+      requestTimeoutMs: -1,
+      followRedirects: 1,
+      maxRedirects: -1,
+      cacheMode: RawCacheMode.normal,
+      reportProgress: false,
+      wantTimings: false,
+      uploadContentLength: -1,
+      pinnedSpkiOverride: '',
+      cancelTokenId: 0,
+    ),
+  );
+
+  /// Real per-phase timings when the browser has them, else the wall clock.
+  RawTimings _timingsFor(String url, DateTime started) =>
+      _timings?.call(url) ?? _timingsSince(started);
+
   RawTimings _timingsSince(DateTime started) {
-    // A page cannot see DNS, connect or TLS separately; only the total is real,
-    // and the rest stay zero rather than being invented.
+    // Only the total is real. A page can read per-phase figures from the
+    // Resource Timing API in principle, but nothing here has been shown to do
+    // it reliably, so the phases stay zero rather than being invented.
     final total = DateTime.now().difference(started).inMicroseconds / 1000.0;
     return RawTimings(
       queueMs: 0,
@@ -241,7 +525,22 @@ final class FetchRequestExecutor implements RequestExecutor {
 
   @override
   void cancel(int requestId) {
+    // Cancelling the subscription aborts the fetch itself, because the client
+    // ties an AbortController to the response stream.
     unawaited(_aborts.remove(requestId)?.cancel());
+    // A buffered request is also waiting on this, and without it the caller
+    // would sit there until the transfer finished on its own.
+    final pending = _pending.remove(requestId);
+    if (pending != null && !pending.isCompleted) {
+      pending.complete(
+        _failed(
+          _cancelledRequests[requestId] ?? _placeholder(requestId),
+          RawErrorKind.cancelled,
+          'the request was cancelled',
+          DateTime.now(),
+        ),
+      );
+    }
     FetchStreamDemux.instance.release(requestId);
   }
 
@@ -254,13 +553,20 @@ final class FetchRequestExecutor implements RequestExecutor {
 
   @override
   void cancelToken(int tokenId, String reason) {
+    // Remembered as well as applied: a caller can cancel before the request is
+    // registered, and the next send on this token must then refuse rather than
+    // go out on the wire.
+    _cancelledTokens.add(tokenId);
     for (final id in _tokens[tokenId]?.toList() ?? const <int>[]) {
       cancel(id);
     }
   }
 
   @override
-  void releaseCancelToken(int tokenId) => _tokens.remove(tokenId);
+  void releaseCancelToken(int tokenId) {
+    _tokens.remove(tokenId);
+    _cancelledTokens.remove(tokenId);
+  }
 
   // `fetch` applies its own backpressure through the reader, so there is no
   // credit window to grant.
@@ -327,6 +633,15 @@ final class FetchStreamDemux implements StreamDemux {
 
   @override
   Stream<ChunkEvent> chunks(int requestId) => _chunkController(requestId).stream;
+
+  /// Hands one progress event to whoever is reading [RawEvent.requestId].
+  void pushEvent(RawEvent event) {
+    final controller = _events.putIfAbsent(
+      event.requestId,
+      StreamController<RawEvent>.new,
+    );
+    if (!controller.isClosed) controller.add(event);
+  }
 
   @override
   Stream<RawEvent> events(int requestId) => _events

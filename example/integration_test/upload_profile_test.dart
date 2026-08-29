@@ -22,6 +22,9 @@
 //     --driver=test_driver/integration_test.dart \
 //     --target=integration_test/upload_profile_test.dart
 
+@Tags(['benchmark'])
+library;
+
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';

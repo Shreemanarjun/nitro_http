@@ -26,6 +26,9 @@
 //     --driver=test_driver/integration_test.dart \
 //     --target=integration_test/port_cost_test.dart
 
+@Tags(['benchmark'])
+library;
+
 import 'dart:async';
 import 'dart:isolate';
 

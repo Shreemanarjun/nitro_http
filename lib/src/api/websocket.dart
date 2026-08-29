@@ -18,6 +18,7 @@ import 'dart:typed_data';
 import 'package:web_socket/web_socket.dart';
 
 import '../internal/instance_keys.dart';
+import '../internal/ws_default.dart';
 import '../internal/ws_runner.dart';
 import '../nitro_http.native.dart';
 import '../internal/raw_mapping.dart';
@@ -90,8 +91,8 @@ final class NitroWebSocket implements WebSocket {
     }
 
     final socketId = Ids.nextSocket();
-    final exec = executor ?? NativeWsExecutor(socketId);
-    final dmx = demux ?? NativeWsFrameDemux.instance;
+    final exec = executor ?? defaultWsExecutor(socketId);
+    final dmx = demux ?? defaultWsDemux;
 
     // Subscribe before connecting: a chatty server can push a frame in the same
     // turn the handshake completes.

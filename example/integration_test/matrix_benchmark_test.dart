@@ -24,6 +24,9 @@
 //   # narrower, for a quick check
 //   --dart-define=MATRIX_MAX_KIB=64 --dart-define=MATRIX_SAMPLES=20
 
+@Tags(['benchmark'])
+library;
+
 import 'dart:io';
 import 'dart:typed_data';
 

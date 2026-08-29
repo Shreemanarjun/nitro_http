@@ -118,8 +118,10 @@ final class _NitroHttpNativeWebImpl extends NitroHttpNative {
     NitroRuntime.retainLib(_libName);
     NitroRuntime.checkAbiVersion(
       _libName,
-      () => (_m.call('nitro_http_nitro_abi_version', const []) as JSNumber)
-          .toDartInt,
+      () => (_m.call(
+        'nitro_http_nitro_abi_version',
+        const [],
+      ) as JSNumber).toDartInt,
     );
     NitroRuntime.checkLinkChecksum(
       _libName,

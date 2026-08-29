@@ -658,8 +658,12 @@ void main() {
       // buffer overshoots and emits one fewer, larger chunk. The threshold is
       // what this test is about, so allow the alignment slack.
       expect(batched, inInclusiveRange(14, 18));
-      expect(always, batched,
-          reason: 'a zero threshold must batch exactly as 512 KiB does');
+      // The same alignment slack, applied independently: these are two separate
+      // transfers, so demanding an exact match between them re-introduces the
+      // precision the range above exists to avoid. What matters is that zero
+      // batches at all — read as "unset" it would land near `unbatched`.
+      expect(always, inInclusiveRange(14, 18),
+          reason: 'a zero threshold must batch, as 512 KiB does');
       expect(unbatched, greaterThan(batched),
           reason: 'a body under the threshold should stream as it arrives');
     }, skip: skipReason);

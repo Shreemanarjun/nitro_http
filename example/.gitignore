@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Kotlin compiler session state, written by the Gradle build.
+android/.kotlin/

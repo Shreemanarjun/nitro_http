@@ -100,7 +100,9 @@
 * Sentinel fields on the generated `Raw*` records now default instead of being
   required, so constructing one takes the fields that matter rather than every
   field. The wire format is unchanged.
-* Upgraded to `nitro` 0.7.4 from 0.7.0.
+* Upgraded to `nitro` 0.7.5 from 0.7.0. 0.7.5 stamps each generated file with
+  the spec's `spec-sha256` and pins the formatter, so regenerating is
+  reproducible across Flutter SDKs rather than depending on which one ran it.
 
 [#1]: https://github.com/Shreemanarjun/nitro_http/issues/1
 [#2]: https://github.com/Shreemanarjun/nitro_http/issues/2

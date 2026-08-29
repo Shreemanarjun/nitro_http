@@ -2,107 +2,72 @@
 
 ### Added
 
-* **Web support** — compiles and runs under `flutter build web` (dart2js and
-  `--wasm`), served by `fetch` rather than the engine, because a browser gives
-  native code no socket. See the [web section](README.md#web).
-* WebSockets work on web, on the browser's own `WebSocket` — `NitroWebSocket`
-  already implements `package:web_socket`'s interface, so the API is unchanged.
-  Request headers, `pingInterval` and TLS settings throw there: the browser
-  performs the upgrade and owns them.
-* Per-phase `HttpTimings` on web, read from Resource Timing and reported the way
-  the engine reports them — time from the start of the request, so the type
-  means one thing on every platform.
-* Per-request `CacheMode` on web: `fetch`'s cache modes line up with it almost
-  exactly, and the browser runs the cache.
-* Timeouts, download progress, cancellation and cookies now work on web; they
-  were previously ignored there.
-* Web answers its own capability queries: `engineVersion` reads
-  `fetch (browser)`, `supportsHttp3` is `false` and `supportsWebSockets` is `true`.
-
-### Added
-
-* **`ClientSettings.unsupportedSettings`.** Web cannot honour TLS pinning, mTLS,
-  custom roots, `insecure()`, proxies or DoH — the browser owns them — and has
-  always thrown. Set it to `UnsupportedSettingPolicy.ignore` to share one
-  configuration across native and web without a `kIsWeb` branch at every call
-  site. It stays opt-in: silently not checking a certificate pin is a worse
-  default than a build that stops working.
-
-* **`ClientSettings.maxResponseBytes`.** Refuses a response body over the given
-  size. The decompression ceiling only bounded what a *compressed* body inflates
-  to, so an uncompressed response had no limit at all. A declared
-  `Content-Length` fails before a byte is read; a chunked or under-declared one
-  fails partway, counted after decoding. `HEAD` is exempt — its declared length
-  describes a body that is never sent. Enforced on web too, by counting.
-
-* **`NitroHttpClient.downloadToFile(url, path)`.** The engine writes the body
-  straight to disk, so a download is bounded by disk rather than memory and the
-  response comes back with an empty `bodyBytes`. A 4xx or 5xx is never written:
-  the file is removed and the error body is returned normally, so a failed
-  download leaves no error page under the name you chose. Throws on web, which
-  has no path to write to.
-
-* **`ClientSettings.hstsCachePath`.** Remembers which hosts sent
-  `Strict-Transport-Security` across launches, so the first `http://` request to
-  a known-HTTPS host after each launch is upgraded rather than sent in the clear.
-
-* **`ClientSettings.unixSocketPath` and `networkInterface`.** Send over a unix
-  domain socket, or bind outgoing connections to an interface or address — for
-  a local daemon, or for pinning traffic to a VPN.
-
-* **`ClientSettings.keepAlive` and `referrerPolicy`.** Web only: a keepalive
-  request outlives the page that started it, which is the only way an
-  unload-time call reliably arrives.
-
-* **`CURLOPT_PIPEWAIT`.** Concurrent requests now wait to discover whether an
-  existing connection can multiplex instead of opening a second one. Measured
-  over 73 transfers to an h2 origin, 12 concurrent per round on a cold pool:
-  **37 new connections before, 7 after**. Batch latency did not move (82 ms vs
-  80 ms median) — an extra handshake is cheap on a fast link — so this is five
-  times fewer TLS handshakes and sockets rather than a speed-up, worth most
-  where a handshake costs an RTT. HTTP/1.1 was checked for the regression that
-  waiting could cause and shows none: 40 ms median either way.
+* **Web support** — runs under `flutter build web` (dart2js and `--wasm`), served
+  by `fetch`. See the [web section](README.md#web).
+* WebSockets on web, on the browser's own `WebSocket`; `NitroWebSocket`'s API is
+  unchanged. Request headers, `pingInterval` and TLS settings throw there.
+* Per-phase `HttpTimings` on web from Resource Timing, reported as time from the
+  start of the request, as on native.
+* Per-request `CacheMode` on web, mapped onto `fetch`'s cache modes.
+* Timeouts, download progress, cancellation and cookies now work on web.
+* Web capability queries: `engineVersion` is `fetch (browser)`, `supportsHttp3`
+  is `false`, `supportsWebSockets` is `true`.
+* **`ClientSettings.maxResponseBytes`** — refuses a response body over this size,
+  counted after decoding. A declared `Content-Length` fails before a byte is
+  read; `HEAD` is exempt. Enforced on web by counting.
+* **`NitroHttpClient.downloadToFile(url, path)`** — the engine writes the body to
+  disk; the response carries status, headers and timings with an empty
+  `bodyBytes`. A 4xx or 5xx is not written and the file is removed. Throws on web.
+* **`ClientSettings.hstsCachePath`** — persists `Strict-Transport-Security`
+  across launches, so a known-HTTPS host is not reached over plaintext first.
+* **`ClientSettings.unixSocketPath`, `networkInterface`** — send over a unix
+  domain socket, or bind outgoing connections to an interface or address. Native.
+* **`ClientSettings.keepAlive`, `referrerPolicy`** — web only; a keepalive request
+  outlives the page that started it.
+* **`ClientSettings.unsupportedSettings`** — `ignore` accepts settings a browser
+  cannot honour instead of throwing, for one configuration across native and web.
+  Defaults to `reject`.
+* **`CURLOPT_PIPEWAIT`** — concurrent requests wait to discover multiplexing
+  rather than opening a second connection. Over 73 transfers to an h2 origin, 12
+  concurrent per round on a cold pool: 37 new connections before, 7 after, with
+  latency unchanged (82 ms vs 80 ms median). HTTP/1.1 is unaffected (40 ms either
+  way).
 
 ### Fixed
 
-* **`TlsSettings.sniHostname` is applied.** It round-tripped through the
-  configuration and did nothing; it now rewrites the URL host to the SNI name
-  and pins the connection to the real endpoint with `CURLOPT_CONNECT_TO`, which
-  is the only way libcurl can separate the name it presents from the address it
-  dials. A name the certificate does not carry is rejected, so this redirects
-  verification rather than skipping it.
-
-* **Streamed uploads work on web.** They used to throw. Where the browser can
-  put a `ReadableStream` in a request body (Chrome) the body goes up as it
-  arrives; elsewhere it is buffered and the same bytes are sent.
-
-* **The Alt-Svc cache file was never written.** `altSvcCachePath` accepted a
-  path, and nothing was ever saved to it — so HTTP/3 discovery could not survive
-  a launch. Easy handles were pooled and recycled with `curl_easy_reset`, which
-  drops what the handle learned, and curl writes both the Alt-Svc and HSTS files
-  from `curl_easy_cleanup` only. A handle carrying either cache is no longer
-  pooled; connection reuse is unaffected, since connections live in the multi
-  handle.
-
-* **Streams delivered nothing on `nitro` 0.7.4** ([#2]) — 0.7.4 partitions
-  stream ports by emitting instance, and the sink emitted through a different
-  instance from the one Dart subscribed on.
+* **CR, LF or NUL in a header name or value is rejected.** User input in a header
+  could previously split the request and inject another one; verified on a raw
+  socket. `HttpHeaders.add`/`set` now throw `ArgumentError`.
+* **`TlsSettings.sniHostname` is applied.** It round-tripped and did nothing. It
+  now rewrites the URL host and pins the connection to the real endpoint with
+  `CURLOPT_CONNECT_TO`; a name the certificate does not carry is rejected.
+* **The Alt-Svc cache file was never written**, so HTTP/3 discovery could not
+  survive a launch. curl saves the Alt-Svc and HSTS files only from
+  `curl_easy_cleanup`, and pooled handles were recycled with `curl_easy_reset`.
+  A handle carrying either cache is no longer pooled; connection reuse is
+  unaffected.
+* **`NitroHttpRedirectException.redirectCount` carried the CURLcode** (always 47)
+  instead of the hops followed.
+* **Streamed uploads work on web.** Streamed where the browser accepts a
+  `ReadableStream` body, buffered elsewhere.
+* **Streams delivered nothing on `nitro` 0.7.4** ([#2]) — 0.7.4 partitions stream
+  ports by emitting instance, and the sink used a different instance from the one
+  Dart subscribed on.
 
 ### Changed
 
 * **The `dio` adapter ships inside `nitro_http`** ([#1]) — import
   `package:nitro_http/dio.dart` instead of the never-published `nitro_http_dio`
-  package; the API is unchanged and `dio` is now a dependency of this package.
+  package. The API is unchanged; `dio` is now a dependency.
 * Engine settings a browser cannot honour — TLS pinning, mTLS, custom roots,
-  proxies, DNS, HTTP version, the pool, timings, the cookie jar, the disk cache
-  and streamed uploads — throw `NitroHttpConfigurationException` on web rather
-  than being ignored.
+  proxies, DNS, HTTP version, the pool, timings, the cookie jar and the disk
+  cache — throw `NitroHttpConfigurationException` on web rather than being
+  ignored.
 * Sentinel fields on the generated `Raw*` records now default instead of being
-  required, so constructing one takes the fields that matter rather than every
-  field. The wire format is unchanged.
-* Upgraded to `nitro` 0.7.5 from 0.7.0. 0.7.5 stamps each generated file with
-  the spec's `spec-sha256` and pins the formatter, so regenerating is
-  reproducible across Flutter SDKs rather than depending on which one ran it.
+  required. The wire format is unchanged.
+* Upgraded to `nitro` 0.7.5 from 0.7.0. Generated files carry a `spec-sha256`
+  stamp and a pinned formatter, so regenerating is reproducible across Flutter
+  SDKs.
 
 [#1]: https://github.com/Shreemanarjun/nitro_http/issues/1
 [#2]: https://github.com/Shreemanarjun/nitro_http/issues/2

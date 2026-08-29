@@ -419,3 +419,161 @@ TEST_F(WsSessionTest, ADataFrameSentAfterCloseNeverReachesThePeer) {
   }
   session.shutdown();
 }
+
+// ── Handshake failures ───────────────────────────────────────────────────────
+//
+// The upgrade is hand-written, so each way it can fail is its own code path and
+// its own error kind. A caller acts on those: a timeout is worth retrying, an
+// unsupported scheme never is.
+
+TEST_F(WsSessionTest, AnUnsupportedSchemeIsRejectedBeforeAnySocket) {
+  WsSession session(30);
+  RawWsConfig cfg = wsConfig(30, "ftp://example.com/socket");
+  session.connect(cfg, /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+
+  const std::vector<RawWsHandshake> handshakes =
+      Captures::instance().handshakes();
+  ASSERT_EQ(handshakes.size(), 1u);
+  EXPECT_EQ(handshakes[0].errorKind,
+            RawErrorKind::RAWERRORKIND_UNSUPPORTED_SCHEME);
+  session.shutdown();
+}
+
+TEST_F(WsSessionTest, ConnectingTwiceOnOneSocketIsRefused) {
+  WsTestServer server;
+  WsSession session(31);
+  session.connect(wsConfig(31, server.url("/echo")), /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+
+  // The second call must answer rather than replace the live session, or the
+  // first caller's Future would never complete.
+  session.connect(wsConfig(31, server.url("/echo")), /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(2));
+
+  const std::vector<RawWsHandshake> handshakes =
+      Captures::instance().handshakes();
+  ASSERT_EQ(handshakes.size(), 2u);
+  EXPECT_EQ(handshakes[0].errorKind, RawErrorKind::RAWERRORKIND_NONE);
+  EXPECT_EQ(handshakes[1].errorKind, RawErrorKind::RAWERRORKIND_BAD_REQUEST);
+  session.shutdown();
+}
+
+TEST_F(WsSessionTest, APeerThatHangsUpMidUpgradeReportsTheDisconnect) {
+  WsTestServer::Options options;
+  options.dropDuringUpgrade = true;
+  WsTestServer server(options);
+  WsSession session(32);
+  session.connect(wsConfig(32, server.url("/echo")), /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+
+  const std::vector<RawWsHandshake> handshakes =
+      Captures::instance().handshakes();
+  ASSERT_EQ(handshakes.size(), 1u);
+  EXPECT_NE(handshakes[0].errorKind, RawErrorKind::RAWERRORKIND_NONE)
+      << "a connection that dies mid-upgrade is not a successful handshake";
+  session.shutdown();
+}
+
+TEST_F(WsSessionTest, ASilentPeerEndsOnTheConnectDeadline) {
+  WsTestServer::Options options;
+  options.neverRespond = true;
+  WsTestServer server(options);
+  WsSession session(33);
+
+  RawWsConfig cfg = wsConfig(33, server.url("/echo"));
+  cfg.connectTimeoutMs = 300;  // short: the deadline is what is under test
+  session.connect(cfg, /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+
+  const std::vector<RawWsHandshake> handshakes =
+      Captures::instance().handshakes();
+  ASSERT_EQ(handshakes.size(), 1u);
+  EXPECT_EQ(handshakes[0].errorKind,
+            RawErrorKind::RAWERRORKIND_TIMEOUT_CONNECT);
+  session.shutdown();
+}
+
+TEST_F(WsSessionTest, AnOversizedUpgradeResponseIsAProtocolError) {
+  WsTestServer::Options options;
+  // Past the 64 KiB ceiling the handshake reader will accept.
+  options.headerPadding = 80 * 1024;
+  WsTestServer server(options);
+  WsSession session(34);
+  session.connect(wsConfig(34, server.url("/echo")), /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+
+  const std::vector<RawWsHandshake> handshakes =
+      Captures::instance().handshakes();
+  ASSERT_EQ(handshakes.size(), 1u);
+  EXPECT_NE(handshakes[0].errorKind, RawErrorKind::RAWERRORKIND_NONE)
+      << "an unbounded header block must not be accepted";
+  session.shutdown();
+}
+
+// ── Upgrade request contents ─────────────────────────────────────────────────
+
+TEST_F(WsSessionTest, CallerHeadersRideAlongButHandshakeOnesCannotBeForged) {
+  WsTestServer server;
+  WsSession session(35);
+
+  RawWsConfig cfg = wsConfig(35, server.url("/echo"));
+  cfg.headers.push_back(RawHeader{"X-Trace", "abc"});
+  // Every one of these belongs to the handshake; letting a caller set them
+  // would corrupt an upgrade that the session has to get exactly right.
+  cfg.headers.push_back(RawHeader{"Upgrade", "nonsense"});
+  cfg.headers.push_back(RawHeader{"Connection", "close"});
+  cfg.headers.push_back(RawHeader{"Sec-WebSocket-Key", "forged"});
+  cfg.headers.push_back(RawHeader{"Sec-WebSocket-Version", "1"});
+  session.connect(cfg, /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+  ASSERT_TRUE(server.waitForHandshake());
+
+  const std::string head = server.requestHead();
+  EXPECT_NE(head.find("X-Trace: abc"), std::string::npos)
+      << "an ordinary header should reach the server: " << head;
+  EXPECT_EQ(head.find("forged"), std::string::npos)
+      << "a forged Sec-WebSocket-Key reached the wire: " << head;
+  EXPECT_EQ(head.find("Upgrade: nonsense"), std::string::npos);
+  EXPECT_EQ(head.find("Connection: close"), std::string::npos);
+  session.shutdown();
+}
+
+TEST_F(WsSessionTest, SeveralSubprotocolsAreOfferedAsOneCommaSeparatedList) {
+  WsTestServer::Options options;
+  options.subprotocol = "chat.v2";
+  WsTestServer server(options);
+  WsSession session(36);
+
+  RawWsConfig cfg = wsConfig(36, server.url("/echo"));
+  cfg.protocols.push_back("chat.v1");
+  cfg.protocols.push_back("chat.v2");
+  session.connect(cfg, /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+  ASSERT_TRUE(server.waitForHandshake());
+
+  EXPECT_NE(server.requestHead().find("chat.v1, chat.v2"), std::string::npos)
+      << "RFC 6455 offers the list in one header: " << server.requestHead();
+
+  const std::vector<RawWsHandshake> handshakes =
+      Captures::instance().handshakes();
+  ASSERT_EQ(handshakes.size(), 1u);
+  EXPECT_EQ(handshakes[0].negotiatedProtocol, "chat.v2")
+      << "the server's choice must come back, not the offer";
+  session.shutdown();
+}
+
+TEST_F(WsSessionTest, AUrlWithNoPathStillRequestsARootTarget) {
+  WsTestServer server;
+  WsSession session(37);
+  // No trailing slash: the request line still has to name a target.
+  session.connect(
+      wsConfig(37, "ws://127.0.0.1:" + std::to_string(server.port())),
+      /*dartPort=*/99);
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+  ASSERT_TRUE(server.waitForHandshake());
+
+  EXPECT_EQ(server.requestHead().rfind("GET / HTTP/1.1", 0), 0u)
+      << "expected a root target: " << server.requestHead();
+  session.shutdown();
+}

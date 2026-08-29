@@ -21,15 +21,19 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../api/exceptions.dart';
+import '../api/settings.dart';
 import '../nitro_http.native.dart';
 import 'request_runner.dart';
 
-/// The header the browser client reads the fetch cache mode from.
+/// The fetch cache mode chosen for a request, keyed by the request itself.
 ///
-/// `package:http` gives a request no room for transport options, so the mode
-/// travels as a header that `fetch_client_web.dart` consumes and strips. It
-/// never reaches the network.
-const String kCacheModeHeader = 'x-nitro-fetch-cache';
+/// `package:http` gives a request no room for transport options. Carrying the
+/// mode as a header would work, but the client would then have to strip a
+/// header out of the caller's own map — and would silently eat it if a caller
+/// ever set that name themselves. An [Expando] keeps it off the request
+/// entirely: nothing to strip, nothing to collide with, and it disappears with
+/// the request it belongs to.
+final Expando<String> fetchCacheMode = Expando<String>('fetchCacheMode');
 
 /// Maps a [RawCacheMode] onto the `fetch` cache mode that means the same thing.
 ///
@@ -102,6 +106,7 @@ final class FetchRequestExecutor implements RequestExecutor {
     http.Client client, {
     void Function(bool)? setCredentials,
     TimingsLookup? timings,
+    this.unsupported = UnsupportedSettingPolicy.reject,
   }) : _client = client,
        // ignore: prefer_initializing_formals
        _setCredentials = setCredentials,
@@ -111,12 +116,19 @@ final class FetchRequestExecutor implements RequestExecutor {
   final http.Client _client;
   final void Function(bool)? _setCredentials;
   final TimingsLookup? _timings;
+  /// What to do with a setting a browser cannot honour.
+  final UnsupportedSettingPolicy unsupported;
   final _aborts = <int, StreamSubscription<List<int>>>{};
   final _tokens = <int, Set<int>>{};
   /// In-flight requests that can still be given up on, by request id.
   final _pending = <int, Completer<RawResponse>>{};
   /// The request behind each in-flight id, so a cancellation can name it.
   final _cancelledRequests = <int, RawRequest>{};
+  /// Sinks for streamed request bodies, by request id. A streamed upload is
+  /// fed chunk by chunk by the runner long after `send` was called, so the body
+  /// has to be a stream the client pulls from rather than bytes.
+  final _uploads = <int, StreamController<List<int>>>{};
+
   /// Tokens cancelled already. A caller can cancel before the request is even
   /// registered — the engine handles that by refusing the token in `startTask`
   /// before opening a socket, and this is the same refusal.
@@ -182,6 +194,10 @@ final class FetchRequestExecutor implements RequestExecutor {
       if (config.enableCache) 'cacheSettings',
     ];
     if (unsupported.isEmpty) return;
+    // The caller has said they know these do nothing here — usually so one
+    // `ClientSettings` can serve native and web without a `kIsWeb` branch at
+    // every call site.
+    if (this.unsupported == UnsupportedSettingPolicy.ignore) return;
     throw NitroHttpConfigurationException(
       engineMessage:
           'not available in the browser: ${unsupported.join(', ')}. The page '
@@ -322,6 +338,9 @@ final class FetchRequestExecutor implements RequestExecutor {
   }
 
   Future<http.StreamedResponse> _send(RawRequest request, Uint8List body) {
+    if (request.bodyKind == RawBodyKind.streamed) {
+      return _sendStreamed(request);
+    }
     final out = http.Request(
       _methodOf(request),
       Uri.parse(request.url),
@@ -330,12 +349,44 @@ final class FetchRequestExecutor implements RequestExecutor {
       out.headers[header.name] = header.value;
     }
     if (body.isNotEmpty) out.bodyBytes = body;
-    out.headers[kCacheModeHeader] = fetchCacheModeOf(request.options.cacheMode);
+    fetchCacheMode[out] = fetchCacheModeOf(request.options.cacheMode);
     // `-1` is the inherit sentinel; anything non-zero means follow.
     out.followRedirects = request.options.followRedirects != 0;
     if (request.options.maxRedirects > 0) {
       out.maxRedirects = request.options.maxRedirects;
     }
+    return _client.send(out);
+  }
+
+  /// Sends a request whose body arrives after the call, via [feedUploadChunk].
+  ///
+  /// Whether this reaches the network as a real streamed upload depends on the
+  /// browser: only some can put a `ReadableStream` in a request body. The rest
+  /// buffer it in the client, which costs memory but sends the same bytes —
+  /// better than refusing an upload outright, which is what this used to do.
+  Future<http.StreamedResponse> _sendStreamed(RawRequest request) {
+    final controller = StreamController<List<int>>();
+    _uploads[request.requestId] = controller;
+
+    final out = http.StreamedRequest(
+      _methodOf(request),
+      Uri.parse(request.url),
+    );
+    for (final header in request.headers) {
+      out.headers[header.name] = header.value;
+    }
+    if (request.options.uploadContentLength >= 0) {
+      out.contentLength = request.options.uploadContentLength;
+    }
+    fetchCacheMode[out] = fetchCacheModeOf(request.options.cacheMode);
+    out.followRedirects = request.options.followRedirects != 0;
+
+    controller.stream.listen(
+      out.sink.add,
+      onError: out.sink.addError,
+      onDone: out.sink.close,
+      cancelOnError: true,
+    );
     return _client.send(out);
   }
 
@@ -574,18 +625,28 @@ final class FetchRequestExecutor implements RequestExecutor {
   void grantCredit(int requestId, int chunkCount, int ackedChunks) {}
 
   @override
-  int feedUploadChunk(int requestId, Uint8List chunk) =>
-      throw NitroHttpConfigurationException(
-        engineMessage:
-            'streamed uploads are not available in the browser: a request body '
-            'must be complete before fetch is called. Send the body as bytes.',
-      );
+  int feedUploadChunk(int requestId, Uint8List chunk) {
+    final controller = _uploads[requestId];
+    if (controller == null || controller.isClosed) return 0;
+    controller.add(chunk);
+    // The runner pauses its source on this figure. A browser gives no view of
+    // what has actually left the machine, so report what is waiting to be read.
+    return controller.hasListener ? chunk.length : 0;
+  }
 
   @override
-  void finishUpload(int requestId) {}
+  void finishUpload(int requestId) {
+    unawaited(_uploads.remove(requestId)?.close());
+  }
 
   @override
-  void failUpload(int requestId, String message) {}
+  void failUpload(int requestId, String message) {
+    final controller = _uploads.remove(requestId);
+    if (controller == null) return;
+    // An errored sink aborts the request rather than sending a short body.
+    controller.addError(NitroHttpConfigurationException(engineMessage: message));
+    unawaited(controller.close());
+  }
 
   @override
   List<RawCookie> getCookies(String url) => const [];
@@ -604,6 +665,10 @@ final class FetchRequestExecutor implements RequestExecutor {
     if (_disposed) return;
     _disposed = true;
     cancelAll();
+    for (final controller in _uploads.values.toList()) {
+      unawaited(controller.close());
+    }
+    _uploads.clear();
     _client.close();
   }
 }

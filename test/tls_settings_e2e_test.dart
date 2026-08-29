@@ -357,13 +357,33 @@ void main() {
       }, skip: skipReason);
     });
 
-    // ── sniHostname: accepted, not applied ───────────────────────────────────
-    test('setting sniHostname does not break the request', () async {
-      // Active coverage of the ignored path. The engine deliberately refuses to
-      // fake an SNI override (it needs CURLOPT_CONNECT_TO, which changes URL
-      // and Host semantics), and emits a notice instead — but "ignored" must
-      // still mean the request behaves normally rather than failing or
-      // corrupting the handshake.
+    // ── sniHostname ──────────────────────────────────────────────────────────
+    test('sniHostname validates against a name while connecting to an address',
+        () async {
+      // The documented purpose: reach a host by address and still check its
+      // certificate against a name. `sni-only.invalid` is in the certificate
+      // and resolves nowhere, so a 200 here can only mean the name was used for
+      // SNI and verification while the connection went to 127.0.0.1.
+      client = NitroHttpClient(
+        settings: ClientSettings(
+          timeout: const Duration(seconds: 20),
+          throwOnStatusCode: false,
+          tlsSettings: TlsSettings(
+            rootCaSource: RootCaSource.custom,
+            trustedRootsPem: fixture.caPem,
+            sniHostname: 'sni-only.invalid',
+          ),
+        ),
+      );
+
+      final res = await client!.get('https://127.0.0.1:${server.port}/sni');
+      expect(res.statusCode, 200);
+    }, skip: skipReason);
+
+    test('a name the certificate does not carry is rejected', () async {
+      // The override moves what the certificate is matched against, so a name
+      // outside the SAN must fail — otherwise it would be a way to skip
+      // verification rather than redirect it.
       client = NitroHttpClient(
         settings: ClientSettings(
           timeout: const Duration(seconds: 20),
@@ -375,20 +395,47 @@ void main() {
           ),
         ),
       );
-      final res = await client!.get(server.url('/sni-ignored'));
-      expect(res.statusCode, 200,
-          reason: 'an unapplied sniHostname must not affect the handshake');
+
+      await expectLater(
+        client!.get('https://127.0.0.1:${server.port}/sni'),
+        throwsA(isA<NitroHttpCertificateException>()),
+      );
     }, skip: skipReason);
 
-    // ── Known defect, recorded as a test ─────────────────────────────────────
-    test('sniHostname overrides the SNI sent', () async {
-      // Deliberately skipped, not omitted. The changelog records that this
-      // setting "round-trips through the configuration; the engine does not yet
-      // override SNI from it" — a documented instance of exactly what this file
-      // exists to catch. Leaving a named skip here means the day it is
-      // implemented, this turns into a passing test instead of being forgotten.
-      final res = await trusting().get(server.url('/sni'));
+    test('without the override the same request is rejected', () async {
+      // The control for the test above: the certificate carries no IP, so
+      // reaching 127.0.0.1 without a name to validate against must fail. If
+      // this ever passes, the override test above proves nothing.
+      client = NitroHttpClient(
+        settings: ClientSettings(
+          timeout: const Duration(seconds: 20),
+          throwOnStatusCode: false,
+          tlsSettings: TlsSettings(
+            rootCaSource: RootCaSource.custom,
+            trustedRootsPem: fixture.caPem,
+          ),
+        ),
+      );
+
+      await expectLater(
+        client!.get('https://127.0.0.1:${server.port}/sni'),
+        throwsA(isA<NitroHttpCertificateException>()),
+      );
+    }, skip: skipReason);
+
+    test('no sniHostname leaves the URL host doing both jobs', () async {
+      client = NitroHttpClient(
+        settings: ClientSettings(
+          timeout: const Duration(seconds: 20),
+          throwOnStatusCode: false,
+          tlsSettings: TlsSettings(
+            rootCaSource: RootCaSource.custom,
+            trustedRootsPem: fixture.caPem,
+          ),
+        ),
+      );
+      final res = await client!.get(server.url('/sni'));
       expect(res.statusCode, 200);
-    }, skip: 'TlsSettings.sniHostname is accepted but not applied by the engine');
+    }, skip: skipReason);
   });
 }

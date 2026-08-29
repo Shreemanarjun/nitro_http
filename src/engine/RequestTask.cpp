@@ -16,7 +16,6 @@
 #include "RequestTask.h"
 
 #include <algorithm>
-#include <cstdio>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -300,6 +299,64 @@ RequestTask::RequestTask(CurlEngine& engine, PendingRequest pending)
   token_ = CancelRegistry::instance().obtain(pending_.req.options.cancelTokenId);
 }
 
+/// Points the request at its URL, honouring an SNI override.
+///
+/// `TlsSettings.sniHostname` exists to reach a host by address while still
+/// validating its certificate against a name. libcurl derives both the SNI name
+/// and the name it matches the certificate against from the URL host, so the
+/// only way to separate them is to put the *name* in the URL and tell curl
+/// where to actually connect — which is what `CURLOPT_CONNECT_TO` is for.
+///
+/// Doing it the other way round (URL keeps the address, override the SNI) is
+/// not expressible: there is no option that changes SNI alone, and faking it
+/// would leave the certificate matched against the address.
+void RequestTask::applyUrl(const RawRequest& req, const ClientConfig& config) {
+  const std::string& sni = config.raw().tls.sniHostname;
+  if (sni.empty()) {
+    curl_easy_setopt(easy_, CURLOPT_URL, req.url.c_str());
+    return;
+  }
+
+  CURLU* url = curl_url();
+  if (url == nullptr) {
+    curl_easy_setopt(easy_, CURLOPT_URL, req.url.c_str());
+    return;
+  }
+
+  char* host = nullptr;
+  char* port = nullptr;
+  char* rewritten = nullptr;
+  bool applied = false;
+
+  if (curl_url_set(url, CURLUPART_URL, req.url.c_str(), 0) == CURLUE_OK &&
+      curl_url_get(url, CURLUPART_HOST, &host, 0) == CURLUE_OK &&
+      curl_url_get(url, CURLUPART_PORT, &port, CURLU_DEFAULT_PORT) ==
+          CURLUE_OK &&
+      host != nullptr && port != nullptr && sni != host) {
+    // `SNI-name:port:real-host:port` — curl resolves and connects to the right
+    // side while using the left for SNI and certificate matching.
+    const std::string entry =
+        sni + ":" + port + ":" + std::string(host) + ":" + port;
+    if (curl_url_set(url, CURLUPART_HOST, sni.c_str(), 0) == CURLUE_OK &&
+        curl_url_get(url, CURLUPART_URL, &rewritten, 0) == CURLUE_OK &&
+        rewritten != nullptr) {
+      connectToList_ = curl_slist_append(connectToList_, entry.c_str());
+      if (connectToList_ != nullptr) {
+        curl_easy_setopt(easy_, CURLOPT_CONNECT_TO, connectToList_);
+        curl_easy_setopt(easy_, CURLOPT_URL, rewritten);
+        applied = true;
+      }
+    }
+  }
+
+  if (!applied) curl_easy_setopt(easy_, CURLOPT_URL, req.url.c_str());
+
+  curl_free(host);
+  curl_free(port);
+  curl_free(rewritten);
+  curl_url_cleanup(url);
+}
+
 RequestTask::~RequestTask() {
   // Last line of defence for exactly-once completion. Reaching here uncompleted
   // is an engine bug, but a hung Dart Future is worse than a wrong error kind.
@@ -315,6 +372,10 @@ RequestTask::~RequestTask() {
   if (headerList_ != nullptr) {
     curl_slist_free_all(headerList_);
     headerList_ = nullptr;
+  }
+  if (connectToList_ != nullptr) {
+    curl_slist_free_all(connectToList_);
+    connectToList_ = nullptr;
   }
   if (uploadFile_ != nullptr) {
     fclose(uploadFile_);
@@ -393,7 +454,7 @@ EngineError RequestTask::prepare(const ClientConfig& config,
   curl_easy_setopt(easy_, CURLOPT_MAXREDIRS,
                    static_cast<long>(maxRedirects >= 0 ? maxRedirects : -1));
 
-  curl_easy_setopt(easy_, CURLOPT_URL, req.url.c_str());
+  applyUrl(req, config);
 
   const BodyStrategy strategy = chooseBodyStrategy(req);
   if (token != impliedVerb(strategy, req)) {

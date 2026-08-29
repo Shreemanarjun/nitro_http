@@ -169,6 +169,9 @@ class RequestTask {
   /// consumer that stopped granting credit is not a peer that went quiet.
   double idleBudgetRemainingMs(double now) const;
 
+  /// Applies `CURLOPT_URL`, rewriting the host when an SNI override is set.
+  void applyUrl(const RawRequest& req, const ClientConfig& config);
+
   /// Milliseconds until a part-full `coalesceBuf_` must be emitted anyway, `0`
   /// when it is already due, or `-1` when nothing is held back.
   ///
@@ -248,6 +251,9 @@ class RequestTask {
   PendingRequest pending_;
   CURL* easy_ = nullptr;
   struct curl_slist* headerList_ = nullptr;
+  /// Owned `CURLOPT_CONNECT_TO` entry for an SNI override. curl does not copy
+  /// the list, so it has to outlive the transfer.
+  struct curl_slist* connectToList_ = nullptr;
   FILE* uploadFile_ = nullptr;
 
   bool attached_ = false;

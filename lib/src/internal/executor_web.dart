@@ -6,17 +6,19 @@
 /// has tests.
 library;
 
+import '../api/settings.dart';
 import 'executor_fetch.dart';
 import 'fetch_client_web.dart';
 import 'request_runner.dart';
 
 /// The executor a client gets in the browser.
-RequestExecutor defaultExecutor(int clientId) {
+RequestExecutor defaultExecutor(int clientId, ClientSettings settings) {
   final client = NitroFetchClient();
   return FetchRequestExecutor(
     client,
     setCredentials: (enabled) => client.withCredentials = enabled,
     timings: resourceTimingFor,
+    unsupported: settings.unsupportedSettings,
   );
 }
 

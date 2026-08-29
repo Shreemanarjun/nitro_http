@@ -671,6 +671,25 @@ final class NoRedirects extends RedirectSettings {
 
 // ── Pool ─────────────────────────────────────────────────────────────────────
 
+/// What a platform does with a setting it cannot honour.
+///
+/// Only web has any: the browser owns TLS, proxying, DNS and its own cache, so
+/// pinning, mTLS, custom roots, `insecure()`, proxies and DoH have nowhere to
+/// go there. Native honours everything and ignores this.
+enum UnsupportedSettingPolicy {
+  /// Throw [NitroHttpConfigurationException] naming the settings. The default,
+  /// because a certificate pin that stops being checked without saying so is a
+  /// worse outcome than a build that stops working.
+  reject,
+
+  /// Drop them and carry on.
+  ///
+  /// For sharing one [ClientSettings] across native and web without a `kIsWeb`
+  /// branch at every call site. Choosing this is choosing to accept that on web
+  /// those settings do nothing — including the security ones.
+  ignore,
+}
+
 /// Connection-pool limits shared by every request on a client.
 final class PoolSettings {
   /// Creates pool settings with the engine defaults documented on each field.
@@ -900,6 +919,7 @@ final class ClientSettings {
     this.cacheSettings = const CacheSettings(),
     this.altSvcCachePath,
     this.streamChunks = const StreamChunkSettings.adaptive(),
+    this.unsupportedSettings = UnsupportedSettingPolicy.reject,
   });
 
   /// Prefix that relative request paths resolve against, e.g.
@@ -981,6 +1001,14 @@ final class ClientSettings {
   /// response and needs no tuning. Override it only for a workload the size
   /// heuristic reads wrongly — see that class for when that happens.
   final StreamChunkSettings streamChunks;
+
+  /// What to do with settings this platform cannot honour. Web only; native
+  /// honours everything and ignores this.
+  ///
+  /// Defaults to [UnsupportedSettingPolicy.reject]. Set
+  /// [UnsupportedSettingPolicy.ignore] to share one configuration across native
+  /// and web, accepting that the transport settings do nothing in a browser.
+  final UnsupportedSettingPolicy unsupportedSettings;
 
   /// Resolves [pathOrUrl] against [baseUrl] and applies [query].
   ///

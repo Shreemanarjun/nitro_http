@@ -98,9 +98,15 @@ class TlsTestServer {
       '-keyout', '$p/ca.key', '-out', '$p/ca.crt', '-days', '2',
       '-subj', '/CN=nitro_http test CA']);
 
-    // Server leaf, SAN localhost — hostname verification must be able to match.
+    // Names only, deliberately no `IP:127.0.0.1`. Connecting by address then
+    // fails verification unless something supplies a name, which is what makes
+    // the `sniHostname` tests discriminate: with the override a request to
+    // 127.0.0.1 succeeds, without it the same request is rejected.
+    //
+    // `sni-only.invalid` resolves nowhere, so validating against it proves the
+    // name and the address came from different places.
     File('$p/server.ext').writeAsStringSync(
-        'subjectAltName=DNS:localhost,IP:127.0.0.1\n');
+        'subjectAltName=DNS:localhost,DNS:sni-only.invalid\n');
     _run('openssl', ['req', '-newkey', 'rsa:2048', '-nodes',
       '-keyout', '$p/server.key', '-out', '$p/server.csr',
       '-subj', '/CN=localhost']);

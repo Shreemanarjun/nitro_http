@@ -54,7 +54,7 @@ class NitroHttpClient {
        _interceptors = InterceptorChain(interceptors),
        _retryPolicy = _findRetryPolicy(interceptors) {
     _runner = RequestRunner(
-      executor: executor ?? defaultExecutor(_clientId),
+      executor: executor ?? defaultExecutor(_clientId, settings),
       demux: demux ?? defaultDemux,
       settings: settings,
     );

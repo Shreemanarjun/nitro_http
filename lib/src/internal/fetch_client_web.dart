@@ -9,12 +9,14 @@ library;
 
 import 'dart:async';
 import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:web/web.dart' as web;
 
 import '../nitro_http.native.dart';
-import 'executor_fetch.dart' show kCacheModeHeader, timingsFromMilestones;
+import 'executor_fetch.dart' show fetchCacheMode, timingsFromMilestones;
 
 /// Sends requests with `fetch`, honouring the cache mode the executor sets.
 class NitroFetchClient extends http.BaseClient {
@@ -41,11 +43,10 @@ class NitroFetchClient extends http.BaseClient {
     }
 
     final headers = <String, String>{...request.headers};
-    // Set by the executor, consumed here: it is a transport option, never a
-    // header, and must not reach the network.
-    final cache = headers.remove(kCacheModeHeader) ?? 'default';
+    // A transport option, not a header: the executor attaches it to the request
+    // object, so the caller's own headers are passed through untouched.
+    final cache = fetchCacheMode[request] ?? 'default';
 
-    final body = await request.finalize().toBytes();
     final controller = web.AbortController();
     _aborters.add(controller);
 
@@ -57,7 +58,19 @@ class NitroFetchClient extends http.BaseClient {
       signal: controller.signal,
       cache: cache,
     );
-    if (body.isNotEmpty) init.body = body.toJS;
+
+    if (request is http.StreamedRequest && supportsStreamingUpload()) {
+      // The body goes up as it arrives. `duplex: 'half'` is mandatory for a
+      // stream body and means "finish sending before reading the response",
+      // which is the only mode any browser implements.
+      init.body = _readableStreamOf(request.finalize());
+      init.duplex = 'half';
+    } else {
+      // Either a plain body, or a streamed one on a browser that cannot send a
+      // stream — buffer it and send the same bytes.
+      final body = await request.finalize().toBytes();
+      if (body.isNotEmpty) init.body = body.toJS;
+    }
 
     final web.Response response;
     try {
@@ -186,6 +199,62 @@ RawTimings? resourceTimingFor(String url) {
     redirectEnd: entry.redirectEnd,
     duration: entry.duration,
   );
+}
+
+/// Whether this browser can put a `ReadableStream` in a request body.
+///
+/// Probed by construction rather than by user agent: building a `Request` with
+/// a stream body throws where it is unsupported, and that throw *is* the
+/// answer. Chrome supports it; Firefox and Safari do not, and buffer instead.
+bool supportsStreamingUpload() {
+  final cached = _supportsStreamingUpload;
+  if (cached != null) return cached;
+  var supported = false;
+  try {
+    web.Request(
+      'data:,'.toJS,
+      web.RequestInit(
+        method: 'POST',
+        body: web.ReadableStream(),
+        // Mandatory for a stream body, and the reason the construction throws
+        // where streaming uploads are not implemented.
+        duplex: 'half',
+      ),
+    );
+    supported = true;
+  } catch (_) {
+    supported = false;
+  }
+  return _supportsStreamingUpload = supported;
+}
+
+bool? _supportsStreamingUpload;
+
+/// Wraps a Dart byte stream as the `ReadableStream` `fetch` wants.
+web.ReadableStream _readableStreamOf(Stream<List<int>> source) {
+  StreamSubscription<List<int>>? sub;
+  final underlying = JSObject();
+
+  underlying.setProperty(
+    'start'.toJS,
+    ((web.ReadableStreamDefaultController controller) {
+      sub = source.listen(
+        (chunk) => controller.enqueue(
+          (chunk is Uint8List ? chunk : Uint8List.fromList(chunk)).toJS,
+        ),
+        onError: (Object error) => controller.error('$error'.toJS),
+        onDone: () => controller.close(),
+      );
+    }).toJS,
+  );
+  // The consumer walked away — stop pulling from the source rather than reading
+  // a body nobody is going to send.
+  underlying.setProperty(
+    'cancel'.toJS,
+    ((JSAny? reason) => unawaited(sub?.cancel() ?? Future<void>.value())).toJS,
+  );
+
+  return web.ReadableStream(underlying);
 }
 
 /// The most recent Resource Timing entry recorded for [url], read straight from

@@ -15,6 +15,7 @@ import '../api/exceptions.dart';
 import '../nitro_http.native.dart';
 import 'instance_keys.dart';
 import 'native_attach.dart';
+import '../api/settings.dart';
 import 'request_runner.dart';
 
 // ── Native implementations ───────────────────────────────────────────────────
@@ -283,7 +284,8 @@ final class NativeStreamDemux implements StreamDemux {
 
 
 /// The executor a client gets on a platform with `dart:ffi`.
-RequestExecutor defaultExecutor(int clientId) => NativeRequestExecutor(clientId);
+RequestExecutor defaultExecutor(int clientId, ClientSettings settings) =>
+    NativeRequestExecutor(clientId);
 
 /// The demux a client gets on a platform with `dart:ffi`.
 StreamDemux get defaultDemux => NativeStreamDemux.instance;

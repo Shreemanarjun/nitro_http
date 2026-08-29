@@ -43,6 +43,14 @@ class WsTestServer {
     /// Send one data frame of this many bytes right after the upgrade. Used to
     /// drive a client past `maxFrameBytes`.
     size_t oversizeBytes = 0;
+    /// Read the upgrade request, then close without answering.
+    bool dropDuringUpgrade = false;
+    /// Accept the connection and never answer at all, so the client's own
+    /// connect deadline is what ends the wait.
+    bool neverRespond = false;
+    /// Pad the upgrade response with this many bytes of header, to push a
+    /// client past its header ceiling.
+    size_t headerPadding = 0;
   };
 
   /// A well-behaved echo server. `Options` picks the misbehaviour.
@@ -68,6 +76,8 @@ class WsTestServer {
   int lastCloseCode() const;
   /// Text and binary payloads received, in order.
   std::vector<std::string> messages() const;
+  /// The raw upgrade request head, for asserting what the client sent.
+  std::string requestHead() const;
 
   /// Blocks until the upgrade has been answered, or the deadline passes.
   bool waitForHandshake(int timeoutMs = 5000) const;
@@ -87,6 +97,8 @@ class WsTestServer {
   std::atomic<bool> handshaked_{false};
   std::atomic<int> closeFrames_{0};
   std::atomic<int> pongFrames_{0};
+  mutable std::mutex headMtx_;
+  std::string requestHead_;
   std::atomic<int> lastCloseCode_{-1};
 
   mutable std::mutex messageMtx_;

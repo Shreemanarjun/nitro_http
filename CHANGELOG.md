@@ -19,7 +19,36 @@
 * Web answers its own capability queries: `engineVersion` reads
   `fetch (browser)`, `supportsHttp3` is `false` and `supportsWebSockets` is `true`.
 
+### Added
+
+* **`ClientSettings.unsupportedSettings`.** Web cannot honour TLS pinning, mTLS,
+  custom roots, `insecure()`, proxies or DoH — the browser owns them — and has
+  always thrown. Set it to `UnsupportedSettingPolicy.ignore` to share one
+  configuration across native and web without a `kIsWeb` branch at every call
+  site. It stays opt-in: silently not checking a certificate pin is a worse
+  default than a build that stops working.
+
+* **`CURLOPT_PIPEWAIT`.** Concurrent requests now wait to discover whether an
+  existing connection can multiplex instead of opening a second one. Measured
+  over 73 transfers to an h2 origin, 12 concurrent per round on a cold pool:
+  **37 new connections before, 7 after**. Batch latency did not move (82 ms vs
+  80 ms median) — an extra handshake is cheap on a fast link — so this is five
+  times fewer TLS handshakes and sockets rather than a speed-up, worth most
+  where a handshake costs an RTT. HTTP/1.1 was checked for the regression that
+  waiting could cause and shows none: 40 ms median either way.
+
 ### Fixed
+
+* **`TlsSettings.sniHostname` is applied.** It round-tripped through the
+  configuration and did nothing; it now rewrites the URL host to the SNI name
+  and pins the connection to the real endpoint with `CURLOPT_CONNECT_TO`, which
+  is the only way libcurl can separate the name it presents from the address it
+  dials. A name the certificate does not carry is rejected, so this redirects
+  verification rather than skipping it.
+
+* **Streamed uploads work on web.** They used to throw. Where the browser can
+  put a `ReadableStream` in a request body (Chrome) the body goes up as it
+  arrives; elsewhere it is buffered and the same bytes are sent.
 
 * **Streams delivered nothing on `nitro` 0.7.4** ([#2]) — 0.7.4 partitions
   stream ports by emitting instance, and the sink emitted through a different

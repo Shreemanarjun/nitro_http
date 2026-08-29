@@ -310,6 +310,24 @@ EngineError ClientConfig::applyTo(CURL* easy) const {
   // crossings buy nothing because the cost here is per byte, not per chunk (a
   // 32 MiB body costs 2.3 ms of Dart-side copying in total). Left at curl's
   // default; see `kInitialCredits` for the other half of this measurement.
+  // Wait for an existing connection to reveal whether it can multiplex, rather
+  // than opening a second one the moment a request arrives.
+  //
+  // `CURLMOPT_PIPELINING` alone only permits multiplexing; without this, curl
+  // still fans concurrent requests out to new connections because it does not
+  // yet know the first will negotiate h2. Measured over 73 transfers to an h2
+  // origin, 12 concurrent per round on a cold pool:
+  //
+  //   off: 37 new connections     on: 7 new connections
+  //
+  // Batch latency did not move (82 ms vs 80 ms median) — on a fast link with
+  // session resumption an extra handshake is cheap — so this is a resource win,
+  // not a speed one: five times fewer TLS handshakes, sockets and server-side
+  // connections, which is worth most where a handshake costs an RTT and CPU.
+  // HTTP/1.1 was checked for the obvious regression (waiting cannot help where
+  // nothing multiplexes) and does not pay for it: 40 ms median either way.
+  curl_easy_setopt(easy, CURLOPT_PIPEWAIT, 1L);
+
   curl_easy_setopt(easy, CURLOPT_TCP_KEEPALIVE, 1L);
   if (raw_.pool.keepAlivePingMs > 0) {
     const long seconds = msToSecondsAtLeastOne(raw_.pool.keepAlivePingMs);

@@ -224,7 +224,6 @@ std::once_flag g_warnAppleKeychainUnavailable;
 #if NITRO_HTTP_SCANS_TRUST_FILES
 std::once_flag g_warnNoPlatformRoots;
 #endif
-std::once_flag g_warnSniOverride;
 std::once_flag g_warnNoTls;
 
 }  // namespace
@@ -626,22 +625,11 @@ EngineError CertStore::apply(CURL* easy, const RawTlsConfig& tls,
   }
 
   // ── SNI override ───────────────────────────────────────────────────────────
-
-  if (!tls.sniHostname.empty()) {
-    // Not applied, and deliberately not faked. libcurl derives the SNI name
-    // from the connect host, so overriding it means connecting to the URL's
-    // host while presenting a different name — which is exactly
-    // CURLOPT_CONNECT_TO / CURLOPT_RESOLVE territory (rewrite the URL host to
-    // the SNI name and pin the connection to the real address). That has to be
-    // decided where the URL and the DNS overrides are built, not here, and
-    // silently ignoring it would leave callers believing they had domain
-    // fronting when they did not.
-    warnOnce(g_warnSniOverride,
-             "nitro_http: sniHostname is not applied. A per-request SNI "
-             "override requires CURLOPT_CONNECT_TO — set the URL host to the "
-             "SNI name and add a connect-to/resolve entry for the real "
-             "endpoint instead.");
-  }
+  //
+  // Applied in `RequestTask::applyUrl`, not here: libcurl derives the SNI name
+  // from the URL host, so the override is a URL rewrite plus a
+  // `CURLOPT_CONNECT_TO` entry, which needs the URL — this function only has
+  // the TLS block.
 
   return EngineError::none();
 }

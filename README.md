@@ -184,12 +184,25 @@ only the total real.
 | connection pool | not observable from a page |
 | the cookie jar | the browser manages cookies; `credentials` is the only lever |
 | the disk cache | the browser's HTTP cache applies instead |
-| streamed *uploads* | `fetch` needs the whole body before it is called |
+| streamed *uploads* | streamed where the browser allows a `ReadableStream` body (Chrome), buffered elsewhere |
 | WebSocket headers, `pingInterval`, TLS | the browser performs the upgrade and owns them |
 
 These **throw `NitroHttpConfigurationException` rather than being ignored** — a
 pin that silently stops being checked is worse than a build that stops working.
-Guard them with `kIsWeb`, or keep a separate `ClientSettings` per platform.
+
+To share one configuration across native and web, opt out instead of branching
+on `kIsWeb` at every call site:
+
+```dart
+const ClientSettings(
+  tlsSettings: TlsSettings(pinnedSpkiSha256: ['sha256//...']),
+  unsupportedSettings: UnsupportedSettingPolicy.ignore,
+);
+```
+
+The pin then applies natively and is dropped in the browser. It is opt-in
+because choosing it means accepting that those settings — the security ones
+included — do nothing on web.
 
 ### Check the install
 

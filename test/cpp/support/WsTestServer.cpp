@@ -188,6 +188,11 @@ std::string WsTestServer::url(const std::string& path) const {
 bool WsTestServer::handshakeCompleted() const { return handshaked_.load(); }
 int WsTestServer::closeFramesReceived() const { return closeFrames_.load(); }
 int WsTestServer::pongCount() const { return pongFrames_.load(); }
+
+std::string WsTestServer::requestHead() const {
+  std::lock_guard<std::mutex> lock(headMtx_);
+  return requestHead_;
+}
 int WsTestServer::lastCloseCode() const { return lastCloseCode_.load(); }
 
 std::vector<std::string> WsTestServer::messages() const {
@@ -241,6 +246,24 @@ void WsTestServer::serve(int client) {
     head.push_back(byte);
   }
 
+  {
+    std::lock_guard<std::mutex> lock(headMtx_);
+    requestHead_ = head;
+  }
+
+  if (options_.neverRespond) {
+    // Hold the socket open and silent: the client's connect deadline is the
+    // only thing that can end this.
+    while (!stopping_.load()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return;
+  }
+  if (options_.dropDuringUpgrade) {
+    ::close(client);
+    return;
+  }
+
   const std::string key = headerValueOf(head, "Sec-WebSocket-Key");
   if (key.empty()) return;
 
@@ -257,6 +280,9 @@ void WsTestServer::serve(int client) {
       base64Encode(digest, sizeof(digest)) + "\r\n";
   if (!options_.subprotocol.empty()) {
     response += "Sec-WebSocket-Protocol: " + options_.subprotocol + "\r\n";
+  }
+  if (options_.headerPadding > 0) {
+    response += "X-Pad: " + std::string(options_.headerPadding, 'p') + "\r\n";
   }
   response += "\r\n";
   if (!sendAll(client, response.data(), response.size())) return;

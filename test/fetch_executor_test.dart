@@ -26,23 +26,26 @@ void main() {
     int followRedirects = 1,
     int requestTimeoutMs = -1,
     int connectTimeoutMs = -1,
+    RawCacheMode cacheMode = RawCacheMode.normal,
+    RawBodyKind bodyKind = RawBodyKind.none,
+    int uploadContentLength = -1,
   }) => RawRequest(
     requestId: 1,
     method: method,
     customMethod: customMethod,
     url: url,
     headers: headers,
-    bodyKind: RawBodyKind.none,
+    bodyKind: bodyKind,
     bodyFilePath: '',
     options: RawRequestOptions(
       connectTimeoutMs: connectTimeoutMs,
       requestTimeoutMs: requestTimeoutMs,
       followRedirects: followRedirects,
       maxRedirects: -1,
-      cacheMode: RawCacheMode.normal,
+      cacheMode: cacheMode,
       reportProgress: false,
       wantTimings: true,
-      uploadContentLength: -1,
+      uploadContentLength: uploadContentLength,
       pinnedSpkiOverride: '',
       cancelTokenId: 0,
     ),
@@ -239,15 +242,13 @@ void main() {
       expect(() => executor.configureClient(config()), returnsNormally);
     });
 
-    test('a streamed upload is refused with a reason', () async {
-      // fetch needs the whole body before it is called.
+    test('feeding a request that is not streaming is inert', () async {
+      // No sink exists for a buffered request, so a stray feed reports nothing
+      // buffered rather than throwing at the runner.
       final executor = FetchRequestExecutor(
         MockClient((r) async => http.Response('', 200)),
       );
-      expect(
-        () => executor.feedUploadChunk(1, Uint8List(4)),
-        throwsA(isA<NitroHttpConfigurationException>()),
-      );
+      expect(executor.feedUploadChunk(999, Uint8List(4)), 0);
     });
   });
 
@@ -344,6 +345,56 @@ void main() {
       );
 
       expect(seen, [true, false]);
+    });
+  });
+
+  group('cache mode', () {
+    test('every mode maps to the fetch mode that means the same thing', () {
+      expect(fetchCacheModeOf(RawCacheMode.normal), 'default');
+      expect(fetchCacheModeOf(RawCacheMode.noStore), 'no-store');
+      // "Ignore what is stored and go to the network" is `reload`, not
+      // `no-cache`, which would still revalidate against the entry.
+      expect(fetchCacheModeOf(RawCacheMode.bypass), 'reload');
+      expect(fetchCacheModeOf(RawCacheMode.onlyIfCached), 'only-if-cached');
+      expect(fetchCacheModeOf(RawCacheMode.refresh), 'no-cache');
+    });
+
+    test('it rides on the request, not in the headers', () async {
+      // It used to travel as `x-nitro-fetch-cache`, which meant the client had
+      // to strip a header out of the caller's map — and would have eaten a
+      // header of that name had a caller ever set one. Read through
+      // `BaseClient.send`, which is the interface the real browser client
+      // implements and where the tag has to survive.
+      final client = _CapturingClient();
+      final executor = FetchRequestExecutor(client);
+
+      await executor.sendBuffered(
+        request(cacheMode: RawCacheMode.noStore),
+        Uint8List(0),
+      );
+
+      expect(fetchCacheMode[client.seen!], 'no-store');
+      expect(
+        client.seen!.headers.keys.any((k) => k.toLowerCase().contains('nitro')),
+        isFalse,
+        reason: 'no private header should reach the request',
+      );
+    });
+
+    test('a caller header of the old name is left alone', () async {
+      final client = _CapturingClient();
+      final executor = FetchRequestExecutor(client);
+
+      await executor.sendBuffered(
+        request(
+          headers: const [
+            RawHeader(name: 'x-nitro-fetch-cache', value: 'mine'),
+          ],
+        ),
+        Uint8List(0),
+      );
+
+      expect(client.seen!.headers['x-nitro-fetch-cache'], 'mine');
     });
   });
 
@@ -466,6 +517,91 @@ void main() {
     });
   });
 
+  group('streamed uploads', () {
+    test('chunks fed after the call reach the request body', () async {
+      // The body does not exist when `send` is called: the runner feeds it
+      // afterwards. This used to throw outright on web.
+      final client = _CapturingClient();
+      final executor = FetchRequestExecutor(client);
+
+      final sent = executor.startStreamed(
+        request(bodyKind: RawBodyKind.streamed),
+        Uint8List(0),
+      );
+      await pumpEventQueue();
+
+      executor
+        ..feedUploadChunk(1, Uint8List.fromList(utf8.encode('one')))
+        ..feedUploadChunk(1, Uint8List.fromList(utf8.encode('two')))
+        ..finishUpload(1);
+      await sent;
+
+      final body = await client.seen!.finalize().toBytes();
+      expect(utf8.decode(body), 'onetwo');
+      FetchStreamDemux.instance.release(1);
+    });
+
+    test('a declared length is passed through', () async {
+      final client = _CapturingClient();
+      final executor = FetchRequestExecutor(client);
+
+      final sent = executor.startStreamed(
+        request(bodyKind: RawBodyKind.streamed, uploadContentLength: 6),
+        Uint8List(0),
+      );
+      await pumpEventQueue();
+      executor
+        ..feedUploadChunk(1, Uint8List.fromList(utf8.encode('abcdef')))
+        ..finishUpload(1);
+      await sent;
+
+      expect(client.seen!.contentLength, 6);
+      FetchStreamDemux.instance.release(1);
+    });
+
+    test('a failing source aborts rather than sending a short body', () async {
+      // Truncating the upload would let the server accept half a document as if
+      // it were whole.
+      final client = _CapturingClient();
+      final executor = FetchRequestExecutor(client);
+
+      final sent = executor.startStreamed(
+        request(bodyKind: RawBodyKind.streamed),
+        Uint8List(0),
+      );
+      await pumpEventQueue();
+
+      executor
+        ..feedUploadChunk(1, Uint8List.fromList(utf8.encode('partial')))
+        ..failUpload(1, 'source blew up');
+      await sent;
+
+      await expectLater(
+        client.seen!.finalize().toBytes(),
+        throwsA(isA<NitroHttpConfigurationException>()),
+      );
+      FetchStreamDemux.instance.release(1);
+    });
+
+    test('feeding after finish is dropped, not an error', () async {
+      final client = _CapturingClient();
+      final executor = FetchRequestExecutor(client);
+
+      final sent = executor.startStreamed(
+        request(bodyKind: RawBodyKind.streamed),
+        Uint8List(0),
+      );
+      await pumpEventQueue();
+      executor
+        ..feedUploadChunk(1, Uint8List.fromList(utf8.encode('done')))
+        ..finishUpload(1);
+      await sent;
+
+      expect(executor.feedUploadChunk(1, Uint8List(2)), 0);
+      FetchStreamDemux.instance.release(1);
+    });
+  });
+
   group('lifecycle', () {
     test('a disposed executor refuses further work', () async {
       final executor = FetchRequestExecutor(
@@ -494,4 +630,19 @@ void main() {
       expect(controller.hasListener, isFalse);
     });
   });
+}
+
+/// Captures the exact request object, the way the real browser client sees it.
+///
+/// `MockClient` hands its handler a rebuilt `Request`, so an [Expando] set on
+/// the original would not be visible there — a fine harness for headers and
+/// bodies, useless for anything attached to the instance.
+class _CapturingClient extends http.BaseClient {
+  http.BaseRequest? seen;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    seen = request;
+    return http.StreamedResponse(const Stream<List<int>>.empty(), 200);
+  }
 }

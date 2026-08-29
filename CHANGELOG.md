@@ -28,6 +28,32 @@
   site. It stays opt-in: silently not checking a certificate pin is a worse
   default than a build that stops working.
 
+* **`ClientSettings.maxResponseBytes`.** Refuses a response body over the given
+  size. The decompression ceiling only bounded what a *compressed* body inflates
+  to, so an uncompressed response had no limit at all. A declared
+  `Content-Length` fails before a byte is read; a chunked or under-declared one
+  fails partway, counted after decoding. `HEAD` is exempt — its declared length
+  describes a body that is never sent. Enforced on web too, by counting.
+
+* **`NitroHttpClient.downloadToFile(url, path)`.** The engine writes the body
+  straight to disk, so a download is bounded by disk rather than memory and the
+  response comes back with an empty `bodyBytes`. A 4xx or 5xx is never written:
+  the file is removed and the error body is returned normally, so a failed
+  download leaves no error page under the name you chose. Throws on web, which
+  has no path to write to.
+
+* **`ClientSettings.hstsCachePath`.** Remembers which hosts sent
+  `Strict-Transport-Security` across launches, so the first `http://` request to
+  a known-HTTPS host after each launch is upgraded rather than sent in the clear.
+
+* **`ClientSettings.unixSocketPath` and `networkInterface`.** Send over a unix
+  domain socket, or bind outgoing connections to an interface or address — for
+  a local daemon, or for pinning traffic to a VPN.
+
+* **`ClientSettings.keepAlive` and `referrerPolicy`.** Web only: a keepalive
+  request outlives the page that started it, which is the only way an
+  unload-time call reliably arrives.
+
 * **`CURLOPT_PIPEWAIT`.** Concurrent requests now wait to discover whether an
   existing connection can multiplex instead of opening a second one. Measured
   over 73 transfers to an h2 origin, 12 concurrent per round on a cold pool:
@@ -50,6 +76,14 @@
   put a `ReadableStream` in a request body (Chrome) the body goes up as it
   arrives; elsewhere it is buffered and the same bytes are sent.
 
+* **The Alt-Svc cache file was never written.** `altSvcCachePath` accepted a
+  path, and nothing was ever saved to it — so HTTP/3 discovery could not survive
+  a launch. Easy handles were pooled and recycled with `curl_easy_reset`, which
+  drops what the handle learned, and curl writes both the Alt-Svc and HSTS files
+  from `curl_easy_cleanup` only. A handle carrying either cache is no longer
+  pooled; connection reuse is unaffected, since connections live in the multi
+  handle.
+
 * **Streams delivered nothing on `nitro` 0.7.4** ([#2]) — 0.7.4 partitions
   stream ports by emitting instance, and the sink emitted through a different
   instance from the one Dart subscribed on.
@@ -63,6 +97,9 @@
   proxies, DNS, HTTP version, the pool, timings, the cookie jar, the disk cache
   and streamed uploads — throw `NitroHttpConfigurationException` on web rather
   than being ignored.
+* Sentinel fields on the generated `Raw*` records now default instead of being
+  required, so constructing one takes the fields that matter rather than every
+  field. The wire format is unchanged.
 * Upgraded to `nitro` 0.7.4 from 0.7.0.
 
 [#1]: https://github.com/Shreemanarjun/nitro_http/issues/1

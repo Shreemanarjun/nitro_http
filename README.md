@@ -273,6 +273,8 @@ change breaks that test before it can break a reader.
 - [Reading a response](#reading-a-response)
 - [Errors](#errors)
 - [Streaming](#streaming)
+- [Downloading to a file](#downloading-to-a-file)
+- [Limiting response size](#limiting-response-size)
 - [Progress and timings](#progress-and-timings)
 - [Cancelling](#cancelling)
 - [Timeouts](#timeouts)
@@ -506,6 +508,54 @@ reading — a 2 GB upload costs a few KB of Dart memory:
 ```dart
 await client.put('/backups/nightly.zip', body: HttpBody.file('/var/tmp/nightly.zip'));
 ```
+
+### Downloading to a file
+
+The mirror of `HttpBody.file`: the engine writes the body to disk as it arrives,
+so the bytes never enter the Dart heap and the download is bounded by disk
+rather than by memory.
+
+```dart
+final response = await client.downloadToFile(
+  '/backups/nightly.zip',
+  '/var/tmp/nightly.zip',
+  onReceiveProgress: (received, total) => print('$received / $total'),
+);
+```
+
+The response carries the status, headers and timings as usual; `bodyBytes` is
+empty, because nothing came back through the bridge. A 4xx or 5xx is never
+written — the file is removed and the error body is returned normally, so a
+failed download does not leave an error page under the name you chose.
+
+There is no resume policy here. `Range` requests work like any other header, but
+deciding when to resume, and remembering how far you got, belongs in your code —
+see [Retries](#retries) for the backoff half.
+
+Web has no path to write to, so this throws there.
+
+### Limiting response size
+
+`enableCompression` already caps how far a compressed body may inflate, which
+stops a gzip bomb. An *uncompressed* response has no limit of its own: a server
+that keeps sending is read until it stops.
+
+```dart
+final client = NitroHttpClient(
+  settings: const ClientSettings(maxResponseBytes: 8 * 1024 * 1024),
+);
+```
+
+A declared `Content-Length` over the limit fails before a byte is read. A
+chunked one, or a server that under-declares, fails partway. Either way you get
+`NitroHttpResponseTooLargeException`, which is never retried — the body is the
+same size on the next attempt. It is counted after decoding, so a small
+compressed response that inflates past the limit is caught too.
+
+`HEAD` is exempt: its `Content-Length` describes a body that is never sent, and
+asking how big something is before fetching it is what `HEAD` is for.
+
+Web enforces the same limit by counting.
 
 ### Progress and timings
 
@@ -990,6 +1040,12 @@ The settings you are most likely to touch:
 | `cookieSettings` | on | Jar behaviour and persistence |
 | `cacheSettings` | off | Disk cache, after `NitroHttp.configureCache` |
 | `streamChunks` | tuned | How streamed chunks are batched |
+| `maxResponseBytes` | none | Refuse a response body over this size |
+| `hstsCachePath` | none | Remember `Strict-Transport-Security` across launches |
+| `unixSocketPath` | none | Send over a unix socket instead of TCP · native |
+| `networkInterface` | none | Bind outgoing connections to an interface · native |
+| `keepAlive` | `false` | Let requests outlive the page · web |
+| `referrerPolicy` | browser default | How much of the referring URL to send · web |
 
 Interceptors are **not** a setting — they are a `NitroHttpClient` argument, because
 they are behaviour rather than configuration:

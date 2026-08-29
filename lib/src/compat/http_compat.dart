@@ -136,6 +136,7 @@ class NitroHttpCompatClient extends http.BaseClient {
           NitroHttpConnectionException() ||
           NitroHttpProtocolException() ||
           NitroHttpDecodingException() ||
+          NitroHttpResponseTooLargeException() ||
           NitroHttpCacheMissException() ||
           NitroHttpDisposedException() ||
           NitroHttpUnknownException() => http.ClientException(

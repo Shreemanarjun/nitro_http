@@ -7,6 +7,10 @@ analyzer:
     # `(raw)` parameters, which strict-inference rejects.
     - lib/src/nitro_http.g.dart
     - lib/src/generated/native/**
+    # Re-scaffolded by every `nitrogen link` run and left untracked. It is the
+    # template for the WASM web build, which this package does not use — web
+    # runs on `fetch`, and its real test lives in test_web/.
+    - test/nitro_http_web_test.dart
     # Added by `nitrogen generate`. Committed so the codegen-is-a-no-op CI job
     # stays green: nitrogen appends these when they are missing, and a fresh
     # checkout would otherwise differ from the tree every run.

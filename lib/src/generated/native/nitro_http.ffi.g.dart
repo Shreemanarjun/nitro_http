@@ -553,7 +553,7 @@ class _NitroHttpNativeImpl extends NitroHttpNative {
     }
     NitroRuntime.checkLinkChecksum(
       'nitro_http',
-      '20f1884978e5e296',
+      '8f8ae94532877555',
       () => _dylib
           .lookupFunction<Pointer<Utf8> Function(), Pointer<Utf8> Function()>(
             'nitro_http_nitro_bridge_checksum',

@@ -346,6 +346,500 @@ void main() {
 
       expect(seen, [true, false]);
     });
+
+    test('the three native-only connection settings are refused', () async {
+      // Same class as proxying and DNS: a page does not choose its sockets, so
+      // accepting these would leave the caller believing traffic was pinned to
+      // an interface it never touched.
+      for (final settings in <ClientSettings>[
+        const ClientSettings(hstsCachePath: '/tmp/hsts.txt'),
+        const ClientSettings(unixSocketPath: '/tmp/app.sock'),
+        const ClientSettings(networkInterface: 'en0'),
+      ]) {
+        final executor = FetchRequestExecutor(
+          MockClient((r) async => http.Response('', 200)),
+        );
+        expect(
+          () => executor.configureClient(toRawClientConfig(settings)),
+          throwsA(isA<NitroHttpConfigurationException>()),
+          reason: '$settings was accepted',
+        );
+      }
+    });
+
+    test('the ignore policy lets them through', () async {
+      final executor = FetchRequestExecutor(
+        MockClient((r) async => http.Response('', 200)),
+        unsupported: UnsupportedSettingPolicy.ignore,
+      );
+      expect(
+        () => executor.configureClient(
+          toRawClientConfig(
+            const ClientSettings(
+              hstsCachePath: '/tmp/hsts.txt',
+              unixSocketPath: '/tmp/app.sock',
+              networkInterface: 'en0',
+              unsupportedSettings: UnsupportedSettingPolicy.ignore,
+            ),
+          ),
+        ),
+        returnsNormally,
+      );
+    });
+  });
+
+  group('response size ceiling', () {
+    FetchRequestExecutor withLimit(http.Client client, int limit) {
+      final executor = FetchRequestExecutor(client);
+      executor.configureClient(
+        toRawClientConfig(ClientSettings(maxResponseBytes: limit)),
+      );
+      return executor;
+    }
+
+    test('a declared Content-Length over the limit fails before the body',
+        () async {
+      // The body is never read: the mock would hand over 4096 bytes, and the
+      // executor refuses on the header alone — the browser-side equivalent of
+      // `CURLOPT_MAXFILESIZE_LARGE`.
+      var bodyRead = false;
+      final executor = withLimit(
+        MockClient.streaming((r, body) async {
+          bodyRead = true;
+          return http.StreamedResponse(
+            Stream.value(List<int>.filled(4096, 65)),
+            200,
+            contentLength: 4096,
+          );
+        }),
+        1024,
+      );
+
+      final response = await executor.sendBuffered(request(), Uint8List(0));
+      expect(response.errorKind, RawErrorKind.responseTooLarge);
+      expect(response.errorMessage, contains('1024'));
+      expect(bodyRead, isTrue, reason: 'the mock never ran');
+      expect(response.body, isEmpty);
+    });
+
+    test('a body that grows past the limit is cut off while it arrives',
+        () async {
+      // No declared length, so only the running count can catch this — and it
+      // has to stop reading rather than collect the whole body first.
+      final executor = withLimit(
+        MockClient.streaming(
+          (r, body) async => http.StreamedResponse(
+            Stream.fromIterable([
+              for (var i = 0; i < 8; i++) List<int>.filled(512, 65),
+            ]),
+            200,
+          ),
+        ),
+        1024,
+      );
+
+      final response = await executor.sendBuffered(request(), Uint8List(0));
+      expect(response.errorKind, RawErrorKind.responseTooLarge);
+      expect(response.body, isEmpty);
+    });
+
+    test('a body of exactly the limit is allowed through', () async {
+      final executor = withLimit(
+        MockClient.streaming(
+          (r, body) async => http.StreamedResponse(
+            Stream.value(List<int>.filled(1024, 65)),
+            200,
+            contentLength: 1024,
+          ),
+        ),
+        1024,
+      );
+
+      final response = await executor.sendBuffered(request(), Uint8List(0));
+      expect(response.errorKind, RawErrorKind.none);
+      expect(response.body, hasLength(1024));
+    });
+
+    test('no ceiling means no ceiling', () async {
+      final executor = FetchRequestExecutor(
+        MockClient((r) async => http.Response('A' * 65536, 200)),
+      );
+      executor.configureClient(toRawClientConfig(const ClientSettings()));
+
+      final response = await executor.sendBuffered(request(), Uint8List(0));
+      expect(response.errorKind, RawErrorKind.none);
+      expect(response.body, hasLength(65536));
+    });
+
+    test('a body under the limit with no declared length is untouched',
+        () async {
+      // The control: with nothing to check up front, the running count is the
+      // only thing deciding, and it must not fire early.
+      final executor = withLimit(
+        MockClient.streaming(
+          (r, body) async => http.StreamedResponse(
+            Stream.fromIterable([
+              for (var i = 0; i < 4; i++) List<int>.filled(200, 65),
+            ]),
+            200,
+          ),
+        ),
+        1024,
+      );
+
+      final response = await executor.sendBuffered(request(), Uint8List(0));
+      expect(response.errorKind, RawErrorKind.none);
+      expect(response.body, hasLength(800));
+    });
+
+    test('a body that lands exactly on the limit across chunks is allowed',
+        () async {
+      // The boundary again, but reached one chunk at a time — the running count
+      // has to compare after adding, not before, or the last chunk is lost.
+      final executor = withLimit(
+        MockClient.streaming(
+          (r, body) async => http.StreamedResponse(
+            Stream.fromIterable([
+              for (var i = 0; i < 4; i++) List<int>.filled(256, 65),
+            ]),
+            200,
+          ),
+        ),
+        1024,
+      );
+
+      final response = await executor.sendBuffered(request(), Uint8List(0));
+      expect(response.errorKind, RawErrorKind.none);
+      expect(response.body, hasLength(1024));
+    });
+
+    test('one byte past the limit is refused, not rounded down', () async {
+      final executor = withLimit(
+        MockClient.streaming(
+          (r, body) async => http.StreamedResponse(
+            Stream.value(List<int>.filled(1025, 65)),
+            200,
+          ),
+        ),
+        1024,
+      );
+
+      final response = await executor.sendBuffered(request(), Uint8List(0));
+      expect(response.errorKind, RawErrorKind.responseTooLarge);
+    });
+
+    test('a declared length exactly at the limit is not refused up front',
+        () async {
+      final executor = withLimit(
+        MockClient.streaming(
+          (r, body) async => http.StreamedResponse(
+            Stream.value(List<int>.filled(1024, 65)),
+            200,
+            contentLength: 1024,
+          ),
+        ),
+        1024,
+      );
+
+      final response = await executor.sendBuffered(request(), Uint8List(0));
+      expect(response.errorKind, RawErrorKind.none);
+    });
+
+    test('a streamed response under the limit still finishes normally',
+        () async {
+      // Proves the ceiling does not simply break streaming: the done chunk has
+      // to arrive, or the runner waits forever.
+      final executor = withLimit(
+        MockClient.streaming(
+          (r, body) async => http.StreamedResponse(
+            Stream.fromIterable([
+              for (var i = 0; i < 2; i++) List<int>.filled(100, 65),
+            ]),
+            200,
+          ),
+        ),
+        1024,
+      );
+
+      final chunks = <ChunkEvent>[];
+      FetchStreamDemux.instance.chunks(1).listen(chunks.add);
+      addTearDown(() => FetchStreamDemux.instance.release(1));
+
+      await executor.startStreamed(request(), Uint8List(0));
+      await pumpEventQueue();
+
+      expect(chunks.where((c) => c.kind == 2), isEmpty, reason: 'reported a failure');
+      expect(chunks.last.kind, 1, reason: 'never reported done');
+    });
+
+    test('a declared length over the limit fails a streamed request too',
+        () async {
+      final executor = withLimit(
+        MockClient.streaming(
+          (r, body) async => http.StreamedResponse(
+            Stream.value(List<int>.filled(4096, 65)),
+            200,
+            contentLength: 4096,
+          ),
+        ),
+        1024,
+      );
+
+      final chunks = <ChunkEvent>[];
+      FetchStreamDemux.instance.chunks(1).listen(chunks.add);
+      addTearDown(() => FetchStreamDemux.instance.release(1));
+
+      await executor.startStreamed(request(), Uint8List(0));
+      await pumpEventQueue();
+
+      expect(chunks.single.aux, RawErrorKind.responseTooLarge.index);
+    });
+
+    test('a streamed response reports the ceiling down the chunk stream',
+        () async {
+      final executor = withLimit(
+        MockClient.streaming(
+          (r, body) async => http.StreamedResponse(
+            Stream.fromIterable([
+              for (var i = 0; i < 8; i++) List<int>.filled(512, 65),
+            ]),
+            200,
+          ),
+        ),
+        1024,
+      );
+
+      final chunks = <ChunkEvent>[];
+      FetchStreamDemux.instance.chunks(1).listen(chunks.add);
+      addTearDown(() => FetchStreamDemux.instance.release(1));
+
+      await executor.startStreamed(request(), Uint8List(0));
+      await pumpEventQueue();
+
+      final failure = chunks.lastWhere((c) => c.kind == 2);
+      expect(failure.aux, RawErrorKind.responseTooLarge.index);
+      expect(String.fromCharCodes(failure.bytes), contains('1024'));
+    });
+  });
+
+  group('cancellation', () {
+    /// A response whose body never ends, so the request stays in flight until
+    /// something cancels it.
+    http.Client hanging() => MockClient.streaming(
+      (r, body) async => http.StreamedResponse(
+        StreamController<List<int>>().stream,
+        200,
+      ),
+    );
+
+    test('cancelling an in-flight request completes it as cancelled', () async {
+      final executor = FetchRequestExecutor(hanging());
+      final pending = executor.sendBuffered(request(), Uint8List(0));
+      await pumpEventQueue();
+
+      executor.cancel(1);
+      final response = await pending;
+      expect(response.errorKind, RawErrorKind.cancelled);
+    });
+
+    test('cancelAll reaches every request in flight', () async {
+      final executor = FetchRequestExecutor(hanging());
+      final first = executor.sendBuffered(request(), Uint8List(0));
+      final second = executor.sendBuffered(
+        RawRequest(requestId: 2, url: 'https://example.com/other'),
+        Uint8List(0),
+      );
+      await pumpEventQueue();
+
+      executor.cancelAll();
+      expect((await first).errorKind, RawErrorKind.cancelled);
+      expect((await second).errorKind, RawErrorKind.cancelled);
+    });
+
+    test('a token cancelled before the send refuses without a request',
+        () async {
+      // The engine refuses a cancelled token in `startTask` before opening a
+      // socket; this is the same refusal, and the client must never be reached.
+      var reached = false;
+      final executor = FetchRequestExecutor(
+        MockClient((r) async {
+          reached = true;
+          return http.Response('', 200);
+        }),
+      );
+      executor.cancelToken(7, 'too late');
+
+      final response = await executor.sendBuffered(
+        RawRequest(
+          requestId: 1,
+          url: 'https://example.com/thing',
+          options: const RawRequestOptions(cancelTokenId: 7),
+        ),
+        Uint8List(0),
+      );
+
+      expect(response.errorKind, RawErrorKind.cancelled);
+      expect(reached, isFalse, reason: 'the request went out anyway');
+    });
+
+    test('a token cancelled mid-flight takes its requests with it', () async {
+      final executor = FetchRequestExecutor(hanging());
+      final pending = executor.sendBuffered(
+        RawRequest(
+          requestId: 1,
+          url: 'https://example.com/thing',
+          options: const RawRequestOptions(cancelTokenId: 9),
+        ),
+        Uint8List(0),
+      );
+      await pumpEventQueue();
+
+      executor.cancelToken(9, 'abandoned');
+      expect((await pending).errorKind, RawErrorKind.cancelled);
+    });
+
+    test('releasing a token forgets that it was cancelled', () async {
+      // Tokens are reused by id, so a released one must not keep refusing —
+      // otherwise a recycled id would silently cancel unrelated requests.
+      var reached = false;
+      final executor = FetchRequestExecutor(
+        MockClient((r) async {
+          reached = true;
+          return http.Response('ok', 200);
+        }),
+      );
+      executor
+        ..cancelToken(3, 'done')
+        ..releaseCancelToken(3);
+
+      final response = await executor.sendBuffered(
+        RawRequest(
+          requestId: 1,
+          url: 'https://example.com/thing',
+          options: const RawRequestOptions(cancelTokenId: 3),
+        ),
+        Uint8List(0),
+      );
+
+      expect(reached, isTrue);
+      expect(response.errorKind, RawErrorKind.none);
+    });
+
+    test('a streamed request on a cancelled token reports it both ways',
+        () async {
+      final executor = FetchRequestExecutor(
+        MockClient((r) async => http.Response('', 200)),
+      );
+      executor.cancelToken(4, 'no longer wanted');
+
+      final chunks = <ChunkEvent>[];
+      FetchStreamDemux.instance.chunks(1).listen(chunks.add);
+      addTearDown(() => FetchStreamDemux.instance.release(1));
+
+      final head = await executor.startStreamed(
+        RawRequest(
+          requestId: 1,
+          url: 'https://example.com/thing',
+          options: const RawRequestOptions(cancelTokenId: 4),
+        ),
+        Uint8List(0),
+      );
+      await pumpEventQueue();
+
+      // The head carries it for the caller awaiting the response, and the chunk
+      // stream carries it for whoever is already reading the body.
+      expect(head.errorKind, RawErrorKind.cancelled);
+      expect(chunks.single.aux, RawErrorKind.cancelled.index);
+    });
+  });
+
+  group('streaming an upload body', () {
+    test('a streamed body goes up as a stream where the browser allows it', () {
+      expect(
+        streamsUploadBody(
+          isStreamed: true,
+          keepAlive: false,
+          browserSupportsStreaming: true,
+        ),
+        isTrue,
+      );
+    });
+
+    test('a browser that cannot stream buffers instead', () {
+      // Firefox and Safari. The bytes still go, just not as they arrive.
+      expect(
+        streamsUploadBody(
+          isStreamed: true,
+          keepAlive: false,
+          browserSupportsStreaming: false,
+        ),
+        isFalse,
+      );
+    });
+
+    test('keepalive forbids a stream body even where it is supported', () {
+      // The Fetch specification rejects the combination outright, so a keepalive
+      // client that tried to stream would fail rather than degrade.
+      expect(
+        streamsUploadBody(
+          isStreamed: true,
+          keepAlive: true,
+          browserSupportsStreaming: true,
+        ),
+        isFalse,
+      );
+    });
+
+    test('a body that is not streamed is never streamed', () {
+      expect(
+        streamsUploadBody(
+          isStreamed: false,
+          keepAlive: false,
+          browserSupportsStreaming: true,
+        ),
+        isFalse,
+      );
+    });
+  });
+
+  group('downloading to a file', () {
+    test('a save path is refused, since a page cannot write one', () async {
+      final executor = FetchRequestExecutor(
+        MockClient((r) async => http.Response('', 200)),
+      );
+      await expectLater(
+        executor.sendBuffered(
+          RawRequest(
+            requestId: 1,
+            url: 'https://example.com/big.zip',
+            responseFilePath: '/tmp/big.zip',
+          ),
+          Uint8List(0),
+        ),
+        throwsA(isA<NitroHttpConfigurationException>()),
+      );
+    });
+
+    test('the ignore policy does not silence it', () async {
+      // Unlike a transport setting, ignoring a destination would return a
+      // successful response and no file, with nothing saying the download went
+      // nowhere.
+      final executor = FetchRequestExecutor(
+        MockClient((r) async => http.Response('', 200)),
+        unsupported: UnsupportedSettingPolicy.ignore,
+      );
+      await expectLater(
+        executor.startStreamed(
+          RawRequest(
+            requestId: 1,
+            url: 'https://example.com/big.zip',
+            responseFilePath: '/tmp/big.zip',
+          ),
+          Uint8List(0),
+        ),
+        throwsA(isA<NitroHttpConfigurationException>()),
+      );
+    });
   });
 
   group('cache mode', () {

@@ -88,6 +88,7 @@ enum RawErrorKind {
   sendFailure,
   receiveFailure,
   decompressionFailure,
+  responseTooLarge,
   io,
   cacheMiss,
   engineError,
@@ -153,16 +154,16 @@ class RawTlsConfig {
   final String sniHostname;
 
   const RawTlsConfig({
-    required this.verifyCertificates,
-    required this.rootCaSource,
-    required this.trustedRootsPem,
-    required this.clientCertPem,
-    required this.clientKeyPem,
-    required this.clientKeyPassword,
-    required this.pinnedSpkiSha256,
-    required this.minTlsVersion,
-    required this.maxTlsVersion,
-    required this.sniHostname,
+    this.verifyCertificates = true,
+    this.rootCaSource = 0,
+    this.trustedRootsPem = '',
+    this.clientCertPem = '',
+    this.clientKeyPem = '',
+    this.clientKeyPassword = '',
+    this.pinnedSpkiSha256 = const <String>[],
+    this.minTlsVersion = 0,
+    this.maxTlsVersion = 0,
+    this.sniHostname = '',
   });
 }
 
@@ -179,11 +180,11 @@ class RawProxyConfig {
   final String noProxyHosts;
 
   const RawProxyConfig({
-    required this.mode,
-    required this.url,
-    required this.username,
-    required this.password,
-    required this.noProxyHosts,
+    this.mode = RawProxyMode.system,
+    this.url = '',
+    this.username = '',
+    this.password = '',
+    this.noProxyHosts = '',
   });
 }
 
@@ -195,7 +196,10 @@ class RawDnsConfig {
   /// DNS-over-HTTPS endpoint. `''` = system resolver.
   final String dohUrl;
 
-  const RawDnsConfig({required this.staticOverrides, required this.dohUrl});
+  const RawDnsConfig({
+    this.staticOverrides = const <String>[],
+    this.dohUrl = '',
+  });
 }
 
 @HybridRecord()
@@ -205,7 +209,7 @@ class RawCookieConfig {
   /// Netscape jar path. `''` = in-memory only.
   final String persistPath;
 
-  const RawCookieConfig({required this.enabled, required this.persistPath});
+  const RawCookieConfig({this.enabled = true, this.persistPath = ''});
 }
 
 @HybridRecord()
@@ -219,11 +223,11 @@ class RawPoolConfig {
   final int keepAlivePingMs;
 
   const RawPoolConfig({
-    required this.maxConnections,
-    required this.maxConnectionsPerHost,
-    required this.idleTimeoutMs,
-    required this.maxLifetimeMs,
-    required this.keepAlivePingMs,
+    this.maxConnections = 0,
+    this.maxConnectionsPerHost = 0,
+    this.idleTimeoutMs = 0,
+    this.maxLifetimeMs = 0,
+    this.keepAlivePingMs = 0,
   });
 }
 
@@ -293,6 +297,32 @@ class RawClientConfig {
   /// batching can never convert a throughput win into a latency regression.
   final int streamChunkMaxHoldMs;
 
+  /// Refuse a response body larger than this, in bytes. `0` = no ceiling.
+  ///
+  /// The content-decoding ceiling only bounds what a *compressed* body inflates
+  /// to; an uncompressed one has no limit at all without this. A caller that
+  /// knows its API never returns more than a few MiB can say so and have a
+  /// runaway response fail instead of filling memory.
+  final int maxResponseBytes;
+
+  /// HSTS cache file. `''` = disabled.
+  ///
+  /// Same shape as [altSvcCachePath]: a file the engine reads at start and
+  /// writes back, so a host that said "HTTPS only" is still remembered next
+  /// launch and an `http://` URL for it never leaves the device in the clear.
+  final String hstsCachePath;
+
+  /// Unix domain socket to send every request over. `''` = ordinary TCP.
+  ///
+  /// The URL still carries the host, which becomes the `Host` header — the
+  /// socket replaces only the transport, which is how a local daemon expects
+  /// to be addressed.
+  final String unixSocketPath;
+
+  /// Local network interface, IP or host name to bind outgoing connections to.
+  /// `''` = let the OS choose.
+  final String networkInterface;
+
   final List<RawHeader> defaultHeaders;
   final RawTlsConfig tls;
   final RawProxyConfig proxy;
@@ -309,17 +339,21 @@ class RawClientConfig {
     required this.maxRedirects,
     required this.enableCompression,
     required this.enableCache,
-    required this.userAgent,
-    required this.altSvcCachePath,
+    this.userAgent = '',
+    this.altSvcCachePath = '',
     required this.streamChunkBytes,
     required this.streamChunkMinContentLength,
     required this.streamChunkMaxHoldMs,
-    required this.defaultHeaders,
-    required this.tls,
-    required this.proxy,
-    required this.dns,
-    required this.cookies,
-    required this.pool,
+    this.maxResponseBytes = 0,
+    this.hstsCachePath = '',
+    this.unixSocketPath = '',
+    this.networkInterface = '',
+    this.defaultHeaders = const <RawHeader>[],
+    this.tls = const RawTlsConfig(),
+    this.proxy = const RawProxyConfig(),
+    this.dns = const RawDnsConfig(),
+    this.cookies = const RawCookieConfig(),
+    this.pool = const RawPoolConfig(),
   });
 }
 
@@ -356,16 +390,16 @@ class RawRequestOptions {
   final int cancelTokenId;
 
   const RawRequestOptions({
-    required this.connectTimeoutMs,
-    required this.requestTimeoutMs,
-    required this.followRedirects,
-    required this.maxRedirects,
-    required this.cacheMode,
-    required this.reportProgress,
-    required this.wantTimings,
-    required this.uploadContentLength,
-    required this.pinnedSpkiOverride,
-    required this.cancelTokenId,
+    this.connectTimeoutMs = -1,
+    this.requestTimeoutMs = -1,
+    this.followRedirects = -1,
+    this.maxRedirects = -1,
+    this.cacheMode = RawCacheMode.normal,
+    this.reportProgress = false,
+    this.wantTimings = false,
+    this.uploadContentLength = -1,
+    this.pinnedSpkiOverride = '',
+    this.cancelTokenId = 0,
   });
 }
 
@@ -389,17 +423,25 @@ class RawRequest {
   /// a 500 MB upload never allocates a Dart buffer.
   final String bodyFilePath;
 
+  /// Write the response body to this path instead of delivering it. `''` =
+  /// deliver it as bytes or chunks.
+  ///
+  /// The point is that the bytes never enter the Dart heap: a multi-gigabyte
+  /// download costs the engine a `FILE*` and the caller a path.
+  final String responseFilePath;
+
   final RawRequestOptions options;
 
   const RawRequest({
     required this.requestId,
-    required this.method,
-    required this.customMethod,
+    this.method = RawMethod.get,
+    this.customMethod = '',
     required this.url,
-    required this.headers,
-    required this.bodyKind,
-    required this.bodyFilePath,
-    required this.options,
+    this.headers = const <RawHeader>[],
+    this.bodyKind = RawBodyKind.none,
+    this.bodyFilePath = '',
+    this.responseFilePath = '',
+    this.options = const RawRequestOptions(),
   });
 }
 
@@ -414,13 +456,13 @@ class RawTimings {
   final double totalMs;
 
   const RawTimings({
-    required this.queueMs,
-    required this.dnsMs,
-    required this.connectMs,
-    required this.tlsMs,
-    required this.firstByteMs,
-    required this.redirectMs,
-    required this.totalMs,
+    this.queueMs = 0,
+    this.dnsMs = 0,
+    this.connectMs = 0,
+    this.tlsMs = 0,
+    this.firstByteMs = 0,
+    this.redirectMs = 0,
+    this.totalMs = 0,
   });
 }
 
@@ -459,21 +501,21 @@ class RawResponse {
 
   const RawResponse({
     required this.requestId,
-    required this.errorKind,
-    required this.errorMessage,
-    required this.engineErrorCode,
-    required this.statusCode,
-    required this.reasonPhrase,
-    required this.version,
-    required this.finalUrl,
-    required this.redirectCount,
-    required this.headers,
+    this.errorKind = RawErrorKind.none,
+    this.errorMessage = '',
+    this.engineErrorCode = 0,
+    this.statusCode = 0,
+    this.reasonPhrase = '',
+    this.version = RawHttpVersion.unknown,
+    this.finalUrl = '',
+    this.redirectCount = 0,
+    this.headers = const <RawHeader>[],
     required this.body,
-    required this.fromCache,
-    required this.revalidated,
-    required this.primaryIp,
-    required this.primaryPort,
-    required this.timings,
+    this.fromCache = false,
+    this.revalidated = false,
+    this.primaryIp = '',
+    this.primaryPort = 0,
+    this.timings = const RawTimings(),
   });
 }
 
@@ -501,20 +543,20 @@ class RawResponseHead {
 
   const RawResponseHead({
     required this.requestId,
-    required this.errorKind,
-    required this.errorMessage,
-    required this.engineErrorCode,
-    required this.statusCode,
-    required this.reasonPhrase,
-    required this.version,
-    required this.finalUrl,
-    required this.redirectCount,
-    required this.headers,
-    required this.fromCache,
-    required this.contentLength,
-    required this.primaryIp,
-    required this.primaryPort,
-    required this.timings,
+    this.errorKind = RawErrorKind.none,
+    this.errorMessage = '',
+    this.engineErrorCode = 0,
+    this.statusCode = 0,
+    this.reasonPhrase = '',
+    this.version = RawHttpVersion.unknown,
+    this.finalUrl = '',
+    this.redirectCount = 0,
+    this.headers = const <RawHeader>[],
+    this.fromCache = false,
+    this.contentLength = -1,
+    this.primaryIp = '',
+    this.primaryPort = 0,
+    this.timings = const RawTimings(),
   });
 }
 
@@ -559,11 +601,11 @@ class RawCookie {
   const RawCookie({
     required this.name,
     required this.value,
-    required this.domain,
-    required this.path,
-    required this.expiresEpochMs,
-    required this.secure,
-    required this.httpOnly,
+    this.domain = '',
+    this.path = '',
+    this.expiresEpochMs = 0,
+    this.secure = false,
+    this.httpOnly = false,
   });
 }
 
@@ -575,10 +617,10 @@ class RawCacheConfig {
   final int maxEntryBytes;
 
   const RawCacheConfig({
-    required this.enabled,
+    this.enabled = true,
     required this.directory,
-    required this.maxSizeBytes,
-    required this.maxEntryBytes,
+    this.maxSizeBytes = 0,
+    this.maxEntryBytes = 0,
   });
 }
 
@@ -592,12 +634,12 @@ class RawCacheStats {
   final int evictionCount;
 
   const RawCacheStats({
-    required this.entryCount,
-    required this.sizeBytes,
-    required this.hitCount,
-    required this.missCount,
-    required this.revalidationCount,
-    required this.evictionCount,
+    this.entryCount = 0,
+    this.sizeBytes = 0,
+    this.hitCount = 0,
+    this.missCount = 0,
+    this.revalidationCount = 0,
+    this.evictionCount = 0,
   });
 }
 
@@ -626,12 +668,12 @@ class RawWsConfig {
   const RawWsConfig({
     required this.socketId,
     required this.url,
-    required this.protocols,
-    required this.headers,
-    required this.pingIntervalMs,
-    required this.maxFrameBytes,
-    required this.connectTimeoutMs,
-    required this.tls,
+    this.protocols = const <String>[],
+    this.headers = const <RawHeader>[],
+    this.pingIntervalMs = 0,
+    this.maxFrameBytes = 0,
+    this.connectTimeoutMs = 0,
+    this.tls = const RawTlsConfig(),
   });
 }
 
@@ -647,12 +689,12 @@ class RawWsHandshake {
 
   const RawWsHandshake({
     required this.socketId,
-    required this.errorKind,
-    required this.errorMessage,
-    required this.engineErrorCode,
-    required this.statusCode,
-    required this.negotiatedProtocol,
-    required this.responseHeaders,
+    this.errorKind = RawErrorKind.none,
+    this.errorMessage = '',
+    this.engineErrorCode = 0,
+    this.statusCode = 0,
+    this.negotiatedProtocol = '',
+    this.responseHeaders = const <RawHeader>[],
   });
 }
 

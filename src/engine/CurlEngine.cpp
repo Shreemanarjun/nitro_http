@@ -732,7 +732,19 @@ void CurlEngine::recycleEasy(CURL* easy) {
   NITRO_HTTP_ASSERT_THREAD(loopGuard_);
   if (easy == nullptr) return;
 
-  if (easyPool_.size() >= kMaxPooledEasyHandles) {
+  // A handle carrying an on-disk cache is never pooled. curl writes both the
+  // HSTS and the Alt-Svc file from `curl_easy_cleanup` only, and the
+  // `curl_easy_reset` below drops what the handle learned without saving it —
+  // so a recycled handle forgets every `Strict-Transport-Security` and
+  // `Alt-Svc` header it saw, and neither file is ever written. Verified: with
+  // pooling, an origin advertising `alt-svc: h3=":443"` left no file at all.
+  //
+  // The cost is one `curl_easy_init` per request for clients that use either
+  // cache. Connection reuse is untouched — connections live in the multi
+  // handle, not in the easy one.
+  if (easyPool_.size() >= kMaxPooledEasyHandles ||
+      !config_.raw().hstsCachePath.empty() ||
+      !config_.raw().altSvcCachePath.empty()) {
     curl_easy_cleanup(easy);
     return;
   }

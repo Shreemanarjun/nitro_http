@@ -96,6 +96,25 @@ RawTimings timingsFromMilestones({
 /// The client is injected rather than constructed here so this library imports
 /// nothing browser-only and can therefore be tested on the VM against a fake.
 /// `executor_web.dart` supplies the real one.
+/// Whether a request body goes up as a `ReadableStream` rather than buffered.
+///
+/// Lives here rather than beside the `fetch` call because it is a decision, and
+/// the interop file cannot be tested off web. Two things veto streaming: a
+/// browser that cannot do it at all, and `keepalive`, which the Fetch
+/// specification forbids from carrying a stream body — a keepalive request has
+/// to be buffered, which its 64 KiB budget makes reasonable anyway.
+bool streamsUploadBody({
+  required bool isStreamed,
+  required bool keepAlive,
+  required bool browserSupportsStreaming,
+}) => isStreamed && !keepAlive && browserSupportsStreaming;
+
+/// Internal signal that the ceiling was passed mid-body. Never escapes this
+/// file — `sendBuffered` turns it into a `responseTooLarge` response.
+final class _ResponseTooLarge implements Exception {
+  const _ResponseTooLarge();
+}
+
 final class FetchRequestExecutor implements RequestExecutor {
   /// Creates an executor over [client].
   ///
@@ -148,6 +167,17 @@ final class FetchRequestExecutor implements RequestExecutor {
     _setCredentials?.call(config.cookies.enabled);
   }
 
+  /// The response ceiling in bytes, or 0 when there is none.
+  ///
+  /// The native engine enforces this with `CURLOPT_MAXFILESIZE_LARGE` plus a
+  /// running count; here both halves are done by hand, which is the same
+  /// guarantee: a declared `Content-Length` over the limit fails before the body
+  /// is read, and a body that grows past it fails partway.
+  int get _maxResponseBytes => _config?.maxResponseBytes ?? 0;
+
+  String _tooLargeMessage(int limit) =>
+      'response body exceeds the configured limit of $limit bytes';
+
   /// The deadline for [request], or null when neither it nor the client set one.
   ///
   /// `fetch` cannot separate connecting from transferring, so `connectTimeout`
@@ -183,6 +213,21 @@ final class FetchRequestExecutor implements RequestExecutor {
     }
   }
 
+  /// A page has no filesystem to write to, so `saveToPath` cannot be honoured.
+  ///
+  /// Refused whatever [unsupported] says, unlike a transport setting: ignoring a
+  /// destination would hand the caller a successful response and no file, and
+  /// there would be nothing to tell them the download went nowhere.
+  void _rejectFileDestination(RawRequest request) {
+    if (request.responseFilePath.isEmpty) return;
+    throw NitroHttpConfigurationException(
+      engineMessage:
+          'downloadToFile is not available in the browser: a page cannot write '
+          'to a path. Read the body and hand it to the download the user asked '
+          'for instead.',
+    );
+  }
+
   void _rejectUnsupported(RawClientConfig config) {
     final unsupported = <String>[
       if (config.proxy.mode != RawProxyMode.system) 'proxySettings',
@@ -192,6 +237,9 @@ final class FetchRequestExecutor implements RequestExecutor {
       if (config.tls.trustedRootsPem.isNotEmpty) 'tlsSettings.trustedRootsPem',
       if (!config.tls.verifyCertificates) 'tlsSettings.insecure()',
       if (config.enableCache) 'cacheSettings',
+      if (config.hstsCachePath.isNotEmpty) 'hstsCachePath',
+      if (config.unixSocketPath.isNotEmpty) 'unixSocketPath',
+      if (config.networkInterface.isNotEmpty) 'networkInterface',
     ];
     if (unsupported.isEmpty) return;
     // The caller has said they know these do nothing here — usually so one
@@ -201,13 +249,15 @@ final class FetchRequestExecutor implements RequestExecutor {
     throw NitroHttpConfigurationException(
       engineMessage:
           'not available in the browser: ${unsupported.join(', ')}. The page '
-          'has no control over TLS, proxying or DNS — the browser owns them.',
+          'has no control over TLS, proxying, DNS or its own sockets — the '
+          'browser owns them.',
     );
   }
 
   @override
   Future<RawResponse> sendBuffered(RawRequest request, Uint8List body) async {
     _checkAlive();
+    _rejectFileDestination(request);
     final started = DateTime.now();
     if (_isAlreadyCancelled(request)) {
       return _failed(
@@ -224,17 +274,41 @@ final class FetchRequestExecutor implements RequestExecutor {
     final pending = Completer<RawResponse>();
     _track(request, pending);
 
+    final limit = _maxResponseBytes;
+
     Future<RawResponse> transfer() async {
       final response = await _send(request, body);
+      if (limit > 0 &&
+          (response.contentLength ?? -1) > limit) {
+        // Nothing has been read yet, so this is the cheap refusal — the same one
+        // `CURLOPT_MAXFILESIZE_LARGE` makes natively.
+        return _failed(
+          request,
+          RawErrorKind.responseTooLarge,
+          _tooLargeMessage(limit),
+          started,
+        );
+      }
       // Read through a subscription rather than `toBytes()`: BrowserClient
       // wires an AbortController to this stream, so cancelling the subscription
       // aborts the fetch itself instead of merely abandoning the future.
       final collected = BytesBuilder(copy: false);
       final finished = Completer<void>();
       final total = response.contentLength ?? -1;
-      final sub = response.stream.listen(
+      late final StreamSubscription<List<int>> sub;
+      sub = response.stream.listen(
         (chunk) {
           collected.add(chunk);
+          if (limit > 0 && collected.length > limit) {
+            // Cancelling the subscription aborts the fetch, so an oversized
+            // body stops arriving rather than being read and thrown away.
+            unawaited(sub.cancel());
+            _aborts.remove(request.requestId);
+            if (!finished.isCompleted) {
+              finished.completeError(const _ResponseTooLarge());
+            }
+            return;
+          }
           _reportProgress(request.requestId, collected.length, total);
         },
         onError: finished.completeError,
@@ -264,6 +338,13 @@ final class FetchRequestExecutor implements RequestExecutor {
         'the request exceeded its deadline',
         started,
       );
+    } on _ResponseTooLarge {
+      return _failed(
+        request,
+        RawErrorKind.responseTooLarge,
+        _tooLargeMessage(limit),
+        started,
+      );
     } on http.ClientException catch (error) {
       return _errorResponse(request, error);
     } finally {
@@ -277,6 +358,7 @@ final class FetchRequestExecutor implements RequestExecutor {
     Uint8List body,
   ) async {
     _checkAlive();
+    _rejectFileDestination(request);
     final started = DateTime.now();
     if (_isAlreadyCancelled(request)) {
       final demux = FetchStreamDemux.instance;
@@ -295,13 +377,40 @@ final class FetchRequestExecutor implements RequestExecutor {
     final response = await _send(request, body);
     final demux = FetchStreamDemux.instance;
     final total = response.contentLength ?? -1;
+    final limit = _maxResponseBytes;
     var received = 0;
+
+    if (limit > 0 && total > limit) {
+      scheduleMicrotask(
+        () => demux.pushChunk(
+          ChunkEvent(
+            requestId: request.requestId,
+            kind: 2,
+            aux: RawErrorKind.responseTooLarge.index,
+            bytes: Uint8List.fromList(_tooLargeMessage(limit).codeUnits),
+          ),
+        ),
+      );
+      return _headOf(request, response, started);
+    }
 
     // The body is pumped into the demux exactly as the native path posts chunks
     // onto the module-global stream, so the runner above is unchanged.
     _aborts[request.requestId] = response.stream.listen(
       (chunk) {
         received += chunk.length;
+        if (limit > 0 && received > limit) {
+          unawaited(_aborts.remove(request.requestId)?.cancel());
+          demux.pushChunk(
+            ChunkEvent(
+              requestId: request.requestId,
+              kind: 2,
+              aux: RawErrorKind.responseTooLarge.index,
+              bytes: Uint8List.fromList(_tooLargeMessage(limit).codeUnits),
+            ),
+          );
+          return;
+        }
         demux.pushChunk(
           ChunkEvent(
             requestId: request.requestId,

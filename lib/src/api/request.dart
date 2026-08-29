@@ -281,6 +281,7 @@ class HttpRequest {
     this.cancelToken,
     this.onSendProgress,
     this.onReceiveProgress,
+    this.saveToPath,
   }) : headers = headers ?? HttpHeaders();
 
   /// The method to use.
@@ -309,6 +310,18 @@ class HttpRequest {
 
   /// Called as request body bytes are handed to the engine.
   final ProgressCallback? onSendProgress;
+
+  /// Where to write the response body instead of returning it. `null` returns
+  /// it as usual.
+  ///
+  /// The bytes go from the engine to the file without passing through Dart, so
+  /// the size of the download stops mattering. The response still carries the
+  /// status, headers and timings, and its body is empty.
+  ///
+  /// A response with a 4xx or 5xx status is never written: the file is removed
+  /// and the error body is returned normally, so a failed download does not
+  /// leave an error page under the name you chose.
+  final String? saveToPath;
 
   /// Called as response body bytes arrive.
   final ProgressCallback? onReceiveProgress;

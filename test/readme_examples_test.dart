@@ -375,6 +375,7 @@ void main() {
             '$redirectCount hops',
           NitroHttpProtocolException() => 'protocol error',
           NitroHttpDecodingException() => 'undecodable body',
+          NitroHttpResponseTooLargeException() => 'body too large',
           NitroHttpCacheMissException() => 'nothing cached',
           NitroHttpDisposedException() => 'client disposed',
           NitroHttpUnknownException(:final engineErrorCode) =>
@@ -470,6 +471,41 @@ void main() {
       expect(
         executor.bufferedRequests.single.request.bodyFilePath,
         '/var/tmp/nightly.zip',
+      );
+    });
+
+    test('Downloading to a file', () async {
+      final client = makeClient(
+        settings: const ClientSettings(baseUrl: 'https://backups.example.com'),
+      );
+      executor.bufferedResponses.add(rawResponse());
+
+      final response = await client.downloadToFile(
+        '/backups/nightly.zip',
+        '/var/tmp/nightly.zip',
+        onReceiveProgress: (received, total) => '$received / $total',
+      );
+
+      // The destination travels with the request, and the response comes back
+      // with no body because the bytes went to disk.
+      expect(
+        executor.bufferedRequests.single.request.responseFilePath,
+        '/var/tmp/nightly.zip',
+      );
+      expect(response.bodyBytes, isEmpty);
+    });
+
+    test('Limiting response size', () async {
+      final client = makeClient(
+        settings: const ClientSettings(maxResponseBytes: 8 * 1024 * 1024),
+      );
+      executor.bufferedResponses.add(rawResponse());
+
+      await client.get('https://api.example.com/report');
+
+      expect(
+        executor.configs.last.maxResponseBytes,
+        8 * 1024 * 1024,
       );
     });
 

@@ -131,6 +131,10 @@ RawClientConfig toRawClientConfig(ClientSettings s) {
     streamChunkBytes: s.streamChunks.bytes,
     streamChunkMinContentLength: s.streamChunks.minContentLength,
     streamChunkMaxHoldMs: s.streamChunks.maxHold.inMilliseconds,
+    maxResponseBytes: s.maxResponseBytes ?? 0,
+    hstsCachePath: s.hstsCachePath ?? '',
+    unixSocketPath: s.unixSocketPath ?? '',
+    networkInterface: s.networkInterface ?? '',
     defaultHeaders: headers,
     tls: toRawTls(s.tlsSettings),
     proxy: toRawProxy(s.proxySettings),
@@ -371,6 +375,7 @@ RawRequest toRawRequest({
     ],
     bodyKind: body.kind,
     bodyFilePath: body.filePath,
+    responseFilePath: request.saveToPath ?? '',
     options: toRawOptions(
       request.options,
       reportProgress: reportProgress,
@@ -587,6 +592,11 @@ NitroHttpException mapError({
       engineErrorCode: engineErrorCode,
     ),
     RawErrorKind.decompressionFailure => NitroHttpDecodingException(
+      request: request,
+      engineMessage: message,
+      engineErrorCode: engineErrorCode,
+    ),
+    RawErrorKind.responseTooLarge => NitroHttpResponseTooLargeException(
       request: request,
       engineMessage: message,
       engineErrorCode: engineErrorCode,

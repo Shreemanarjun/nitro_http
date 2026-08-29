@@ -381,6 +381,10 @@ RequestTask::~RequestTask() {
     fclose(uploadFile_);
     uploadFile_ = nullptr;
   }
+  if (responseFile_ != nullptr) {
+    fclose(responseFile_);
+    responseFile_ = nullptr;
+  }
   if (easy_ != nullptr) {
     curl_easy_cleanup(easy_);
     easy_ = nullptr;
@@ -407,6 +411,20 @@ EngineError RequestTask::prepare(const ClientConfig& config,
   if (token.empty()) {
     return EngineError::make(RawErrorKind::RAWERRORKIND_BAD_REQUEST,
                              "custom method requested without a method token");
+  }
+  maxResponseBytes_ = config.raw().maxResponseBytes;
+  if (!req.responseFilePath.empty()) {
+    if (pending_.mode != RespMode::Buffered) {
+      return EngineError::make(
+          RawErrorKind::RAWERRORKIND_BAD_REQUEST,
+          "a response file path is only valid on a buffered request");
+    }
+    responseFile_ = fopen(req.responseFilePath.c_str(), "wb");
+    if (responseFile_ == nullptr) {
+      return EngineError::make(
+          RawErrorKind::RAWERRORKIND_IO,
+          "cannot open the response body file: " + req.responseFilePath);
+    }
   }
   if (req.bodyKind == RawBodyKind::RAWBODYKIND_FILE_PATH &&
       req.bodyFilePath.empty()) {
@@ -460,6 +478,17 @@ EngineError RequestTask::prepare(const ClientConfig& config,
   if (token != impliedVerb(strategy, req)) {
     curl_easy_setopt(easy_, CURLOPT_CUSTOMREQUEST, token.c_str());
   }
+  // A declared Content-Length over the ceiling fails before the body is read.
+  // Not applied to HEAD: the header describes a body that is never sent, and
+  // refusing on it would make HEAD useless for the one thing it is for — asking
+  // how big something is before deciding to fetch it. The running count in
+  // `handleWrite` still guards the bytes that actually arrive, which for a HEAD
+  // is none.
+  if (maxResponseBytes_ > 0 && req.method != RawMethod::RAWMETHOD_HEAD) {
+    curl_easy_setopt(easy_, CURLOPT_MAXFILESIZE_LARGE,
+                     (curl_off_t)maxResponseBytes_);
+  }
+
   if (req.method == RawMethod::RAWMETHOD_HEAD) {
     curl_easy_setopt(easy_, CURLOPT_NOBODY, 1L);
   }
@@ -820,6 +849,19 @@ size_t RequestTask::handleHeader(const char* data, size_t len) {
     headers_.clear();
     decoder_.reset();
     decodedBody_ = false;
+    // Only the last hop's body belongs to the caller. curl does not hand
+    // intermediate 3xx bodies to this callback, so nothing has been counted or
+    // written yet; the reset is what keeps that true if it ever starts.
+    bodyBytes_ = 0;
+    if (responseFile_ != nullptr && status >= 400) {
+      // An error page is not the download that was asked for, and leaving one
+      // under the caller's chosen name is how a 404 ends up mistaken for a
+      // file. Dropping the destination here sends the body to `bodyBuf_`
+      // instead, so the caller can still read what the server said.
+      fclose(responseFile_);
+      responseFile_ = nullptr;
+      remove(pending_.req.responseFilePath.c_str());
+    }
     statusCode_ = status;
     reasonPhrase_ = std::move(reason);
     return len;
@@ -860,6 +902,14 @@ void RequestTask::beginContentDecoding() {
   // and the entry stores decoded bytes.
   eraseHeaders(&headers_, "Content-Encoding");
   eraseHeaders(&headers_, "Content-Length");
+}
+
+void RequestTask::failResponseTooLarge(int64_t limit, int curlCode) {
+  completeWithError(EngineError::make(
+      RawErrorKind::RAWERRORKIND_RESPONSE_TOO_LARGE,
+      "response body exceeds the configured limit of " +
+          std::to_string(limit) + " bytes",
+      curlCode));
 }
 
 void RequestTask::failContentDecoding() {
@@ -1014,6 +1064,19 @@ size_t RequestTask::handleWrite(const char* data, size_t len) {
     count = decodeBuf_.size();
   }
 
+  // Checked after decoding, so the ceiling means what the caller receives.
+  // `CURLOPT_MAXFILESIZE_LARGE` already refused an oversized *declared*
+  // Content-Length; this catches a chunked body, a decoded one, and a server
+  // whose declaration was a lie.
+  const int64_t limit = maxResponseBytes_;
+  if (limit > 0) {
+    bodyBytes_ += static_cast<int64_t>(count);
+    if (bodyBytes_ > limit) {
+      failResponseTooLarge(limit);
+      return 0;
+    }
+  }
+
   if (cacheWriter_ && count > 0) {
     if (!cacheWriter_->write(bytes, count)) {
       cacheWriter_.reset();  // entry outgrew the cache; stop teeing
@@ -1044,6 +1107,16 @@ size_t RequestTask::handleWrite(const char* data, size_t len) {
       return len;
 
     case RespMode::Buffered:
+      if (responseFile_ != nullptr) {
+        if (count > 0 && fwrite(bytes, 1, count, responseFile_) != count) {
+          completeWithError(EngineError::make(
+              RawErrorKind::RAWERRORKIND_IO,
+              "cannot write the response body to " +
+                  pending_.req.responseFilePath));
+          return 0;
+        }
+        return len;
+      }
       bodyBuf_.insert(bodyBuf_.end(), bytes, bytes + count);
       return len;
 
@@ -1320,6 +1393,14 @@ void RequestTask::finish(int curlCode) {
     return;
   }
 
+  if (curlCode == CURLE_FILESIZE_EXCEEDED && maxResponseBytes_ > 0) {
+    // curl refused the transfer on the declared Content-Length. Its own message
+    // does not name the ceiling, and the ceiling is the one thing the caller
+    // needs to see, so this reports it the same way the running check does.
+    failResponseTooLarge(maxResponseBytes_, curlCode);
+    return;
+  }
+
   if (curlCode != CURLE_OK) {
     bool proxyInUse = false;
 #if NITRO_HTTP_HAS_PROXY_ERROR
@@ -1431,6 +1512,12 @@ void RequestTask::finish(int curlCode) {
   response.headers = std::move(headers_);
   // Prefetch never accumulates a body, so this move is empty by construction.
   response.body = std::move(bodyBuf_);
+  if (responseFile_ != nullptr) {
+    // Closed before the response is posted: Dart reads the file as soon as the
+    // future completes, and a buffered tail still in stdio would read short.
+    fclose(responseFile_);
+    responseFile_ = nullptr;
+  }
   response.fromCache = servedFromCache_;
   response.revalidated = false;
   response.primaryIp = primaryIp_;
@@ -1462,6 +1549,15 @@ void RequestTask::completeWithError(const EngineError& err) {
     // A partial body must never become a cache entry.
     cacheWriter_->discard();
     cacheWriter_.reset();
+  }
+
+  if (responseFile_ != nullptr) {
+    // Same reasoning as the cache entry: half a download left on disk under the
+    // name the caller chose is worse than no file, because nothing about it says
+    // it is incomplete.
+    fclose(responseFile_);
+    responseFile_ = nullptr;
+    remove(pending_.req.responseFilePath.c_str());
   }
 
   if (pending_.mode == RespMode::Streamed) {

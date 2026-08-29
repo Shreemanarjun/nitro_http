@@ -34,6 +34,8 @@ constexpr int64_t kMsPerSecond = 1000;
 #define NITRO_HTTP_HAS_H3ONLY_ENUM (LIBCURL_VERSION_NUM >= 0x075800)
 /// `CURLOPT_DOH_URL` — 7.62.0.
 #define NITRO_HTTP_HAS_DOH (LIBCURL_VERSION_NUM >= 0x073e00)
+/// `CURLOPT_HSTS` / `CURLOPT_HSTS_CTRL` — 7.74.0.
+#define NITRO_HTTP_HAS_HSTS (LIBCURL_VERSION_NUM >= 0x074a00)
 
 /// Whole seconds, rounded up, with a floor of one — curl's second-granularity
 /// options must never round a positive millisecond budget down to "disabled".
@@ -145,6 +147,13 @@ void ClientConfig::set(const RawClientConfig& cfg) {
     emitClientNotice(
         "an Alt-Svc cache path was configured but this libcurl predates "
         "CURLOPT_ALTSVC; HTTP/3 discovery is disabled");
+  }
+#endif
+#if !NITRO_HTTP_HAS_HSTS
+  if (!raw_.hstsCachePath.empty()) {
+    emitClientNotice(
+        "an HSTS cache path was configured but this libcurl predates "
+        "CURLOPT_HSTS; Strict-Transport-Security is not remembered");
   }
 #endif
 }
@@ -355,6 +364,30 @@ EngineError ClientConfig::applyTo(CURL* easy) const {
     }
   }
 #endif
+
+#if NITRO_HTTP_HAS_HSTS
+  if (!raw_.hstsCachePath.empty()) {
+    // Same optional-feature shape as alt-svc: a curl without HSTS support
+    // answers CURLE_NOT_BUILT_IN, and a client that simply does not remember
+    // Strict-Transport-Security is degraded, not broken.
+    if (curl_easy_setopt(easy, CURLOPT_HSTS, raw_.hstsCachePath.c_str()) ==
+        CURLE_OK) {
+      curl_easy_setopt(easy, CURLOPT_HSTS_CTRL, (long)CURLHSTS_ENABLE);
+    }
+  }
+#endif
+
+  // No version guard: `CURLOPT_UNIX_SOCKET_PATH` has existed since 7.40 (2015),
+  // and a build without the feature — Windows — answers CURLE_UNKNOWN_OPTION
+  // rather than failing to compile.
+  if (!raw_.unixSocketPath.empty()) {
+    curl_easy_setopt(easy, CURLOPT_UNIX_SOCKET_PATH,
+                     raw_.unixSocketPath.c_str());
+  }
+
+  if (!raw_.networkInterface.empty()) {
+    curl_easy_setopt(easy, CURLOPT_INTERFACE, raw_.networkInterface.c_str());
+  }
 
 #if NITRO_HTTP_HAS_MAXAGE_CONN
   if (raw_.pool.idleTimeoutMs > 0) {

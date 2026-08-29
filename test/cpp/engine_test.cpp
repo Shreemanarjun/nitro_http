@@ -2171,3 +2171,211 @@ TEST_F(EngineTest, CapabilityQueriesDescribeWhatTheEngineCanActuallyDo) {
   EXPECT_EQ(hasZstd(),
             acceptEncodingHeader().find("zstd") != std::string::npos);
 }
+
+// ─── Response size ceiling ───────────────────────────────────────────────────
+//
+// Two checks enforce one setting: `CURLOPT_MAXFILESIZE_LARGE` refuses a
+// declared `Content-Length` before the body is read, and the running count in
+// `handleWrite` catches everything curl cannot see — a chunked body, an
+// under-declared one, and anything the engine decodes itself.
+
+TEST_F(EngineTest, ADeclaredLengthOverTheCeilingIsRefused) {
+  CurlEngine engine(1);
+  RawClientConfig config = nitrohttp::test::defaultClientConfig();
+  config.maxResponseBytes = 1024;
+  engine.configure(config);
+
+  const RawResponse r = sendBuffered(engine, request(1, "/bytes/4096"));
+
+  EXPECT_EQ(r.errorKind, RAWERRORKIND_RESPONSE_TOO_LARGE);
+  EXPECT_TRUE(contains(r.errorMessage, "1024")) << r.errorMessage;
+  EXPECT_TRUE(r.body.empty());
+}
+
+TEST_F(EngineTest, ABodyExactlyAtTheCeilingIsAllowed) {
+  // "Larger than", not "at least" — a ceiling that rejected its own value would
+  // be unusable for an API with a known response size.
+  CurlEngine engine(1);
+  RawClientConfig config = nitrohttp::test::defaultClientConfig();
+  config.maxResponseBytes = 1024;
+  engine.configure(config);
+
+  const RawResponse r = sendBuffered(engine, request(1, "/bytes/1024"));
+
+  EXPECT_EQ(r.errorKind, RAWERRORKIND_NONE);
+  EXPECT_EQ(r.body.size(), 1024u);
+}
+
+TEST_F(EngineTest, AChunkedBodyOverTheCeilingIsCaughtAsItArrives) {
+  CurlEngine engine(1);
+  RawClientConfig config = nitrohttp::test::defaultClientConfig();
+  config.maxResponseBytes = 1024;
+  engine.configure(config);
+
+  // No `Content-Length` to refuse up front.
+  const RawResponse r = sendBuffered(engine, request(1, "/chunked/16/512"));
+
+  EXPECT_EQ(r.errorKind, RAWERRORKIND_RESPONSE_TOO_LARGE);
+}
+
+TEST_F(EngineTest, TheCeilingCountsDecodedBytesNotWireBytes) {
+  // The engine decodes, not curl, so curl's own check never sees a number over
+  // the limit. Counting wire bytes would let a compressed response walk past
+  // the ceiling — the same hole the decompression cap exists to close.
+  CurlEngine engine(1);
+  RawClientConfig config = nitrohttp::test::defaultClientConfig();
+  // Above the compressed size of `/gzip` (repeating text, a few hundred bytes)
+  // and below its 4096-byte decoded size, so only a counter that measures after
+  // decoding can refuse it.
+  config.maxResponseBytes = 1024;
+  engine.configure(config);
+
+  const RawResponse r = sendBuffered(engine, request(1, "/gzip"));
+
+  EXPECT_EQ(r.errorKind, RAWERRORKIND_RESPONSE_TOO_LARGE);
+  EXPECT_EQ(r.engineErrorCode, 0)
+      << "curl refused this on wire bytes; the running count should have";
+}
+
+TEST_F(EngineTest, ARedirectBodyDoesNotCountTowardTheFinalOne) {
+  // `/redirect/<n>` sends "redirecting" as the body of each 302. The counter
+  // resets on every status line, so only the body the caller receives is
+  // measured.
+  CurlEngine engine(1);
+  RawClientConfig config = nitrohttp::test::defaultClientConfig();
+  config.maxResponseBytes = 64;
+  engine.configure(config);
+
+  const RawResponse r = sendBuffered(engine, request(1, "/redirect/3"));
+
+  EXPECT_EQ(r.errorKind, RAWERRORKIND_NONE) << r.errorMessage;
+  EXPECT_EQ(bodyOf(r), "redirect-done");
+}
+
+TEST_F(EngineTest, AHeadRequestIsNotRefusedOnADeclaredLength) {
+  // HEAD describes a body it never sends. Refusing on the declaration would
+  // break the one thing HEAD is for: asking how big something is before
+  // deciding to fetch it.
+  CurlEngine engine(1);
+  RawClientConfig config = nitrohttp::test::defaultClientConfig();
+  config.maxResponseBytes = 16;
+  engine.configure(config);
+
+  PendingRequest pending = request(1, "/bytes/4096");
+  pending.req.method = RawMethod::RAWMETHOD_HEAD;
+
+  const RawResponse r = sendBuffered(engine, std::move(pending));
+
+  EXPECT_EQ(r.errorKind, RAWERRORKIND_NONE) << r.errorMessage;
+  EXPECT_EQ(r.statusCode, 200);
+}
+
+// ─── Writing the body to a file ──────────────────────────────────────────────
+
+TEST_F(EngineTest, AResponseFilePathReceivesTheBodyInsteadOfTheCaller) {
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  const fs::path target = tempRoot_ / "download.bin";
+  PendingRequest pending = request(1, "/bytes/4096");
+  pending.req.responseFilePath = target.string();
+
+  const RawResponse r = sendBuffered(engine, std::move(pending));
+
+  EXPECT_EQ(r.errorKind, RAWERRORKIND_NONE) << r.errorMessage;
+  EXPECT_EQ(r.statusCode, 200);
+  // The bytes went to disk, so none of them crossed the bridge.
+  EXPECT_TRUE(r.body.empty());
+  ASSERT_TRUE(fs::exists(target));
+  EXPECT_EQ(fs::file_size(target), 4096u);
+}
+
+TEST_F(EngineTest, AnErrorStatusLeavesNoFileAndReturnsTheBody) {
+  // An error page under the name the caller chose is worse than no file:
+  // nothing about it says it is not the download.
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  const fs::path target = tempRoot_ / "missing.bin";
+  PendingRequest pending = request(1, "/status/404");
+  pending.req.responseFilePath = target.string();
+
+  const RawResponse r = sendBuffered(engine, std::move(pending));
+
+  EXPECT_EQ(r.statusCode, 404);
+  EXPECT_FALSE(fs::exists(target));
+  EXPECT_EQ(bodyOf(r), "status 404")
+      << "the error body should still reach the caller";
+}
+
+TEST_F(EngineTest, ARedirectHopDoesNotLeaveItsBodyInTheFile) {
+  // The file is opened before the first hop, so each 302's "redirecting" body
+  // is written to it. Rewinding on the next status line is what keeps it from
+  // being glued in front of the real body — a silently wrong file rather than
+  // a missing one.
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  const fs::path target = tempRoot_ / "redirected.bin";
+  PendingRequest pending = request(1, "/redirect/3");
+  pending.req.responseFilePath = target.string();
+
+  const RawResponse r = sendBuffered(engine, std::move(pending));
+
+  EXPECT_EQ(r.errorKind, RAWERRORKIND_NONE) << r.errorMessage;
+  ASSERT_TRUE(fs::exists(target));
+
+  std::ifstream in(target.string(), std::ios::binary);
+  const std::string contents((std::istreambuf_iterator<char>(in)),
+                             std::istreambuf_iterator<char>());
+  EXPECT_EQ(contents, "redirect-done");
+}
+
+TEST_F(EngineTest, AFailedTransferRemovesThePartialFile) {
+  CurlEngine engine(1);
+  RawClientConfig config = nitrohttp::test::defaultClientConfig();
+  config.maxResponseBytes = 1024;
+  engine.configure(config);
+
+  const fs::path target = tempRoot_ / "partial.bin";
+  PendingRequest pending = request(1, "/chunked/16/512");
+  pending.req.responseFilePath = target.string();
+
+  const RawResponse r = sendBuffered(engine, std::move(pending));
+
+  EXPECT_EQ(r.errorKind, RAWERRORKIND_RESPONSE_TOO_LARGE);
+  EXPECT_FALSE(fs::exists(target)) << "half a download was left behind";
+}
+
+TEST_F(EngineTest, AResponseFilePathIsRefusedOnAStreamedRequest) {
+  // The body goes to one place or the other, never both, so this is refused
+  // rather than silently picking one.
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  const fs::path target = tempRoot_ / "streamed.bin";
+  PendingRequest pending = request(1, "/bytes/16", RespMode::Streamed);
+  pending.req.responseFilePath = target.string();
+
+  engine.submit(std::move(pending));
+  ASSERT_TRUE(Captures::instance().waitForPosts(1));
+  const RawResponseHead head = RawResponseHead::fromNative(NitroCppBuffer{
+      Captures::instance().posts()[0].payload.data(),
+      Captures::instance().posts()[0].payload.size()});
+
+  EXPECT_EQ(head.errorKind, RAWERRORKIND_BAD_REQUEST);
+  EXPECT_FALSE(fs::exists(target));
+}
+
+TEST_F(EngineTest, AnUnopenableResponseFilePathFailsBeforeTheRequest) {
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  PendingRequest pending = request(1, "/bytes/16");
+  pending.req.responseFilePath = (tempRoot_ / "no" / "such" / "dir").string();
+
+  const RawResponse r = sendBuffered(engine, std::move(pending));
+
+  EXPECT_EQ(r.errorKind, RAWERRORKIND_IO);
+  EXPECT_TRUE(contains(r.errorMessage, "response body file")) << r.errorMessage;
+}

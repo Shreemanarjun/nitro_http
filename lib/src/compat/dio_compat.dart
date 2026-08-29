@@ -384,6 +384,9 @@ DioExceptionType dioExceptionTypeOf(nh.NitroHttpException error) =>
       nh.NitroHttpRedirectException() ||
       nh.NitroHttpProtocolException() ||
       nh.NitroHttpDecodingException() ||
+      // dio has no size-limit bucket, and `badResponse` would leave a consumer
+      // reading a `response` that was never delivered.
+      nh.NitroHttpResponseTooLargeException() ||
       nh.NitroHttpCacheMissException() ||
       nh.NitroHttpDisposedException() ||
       nh.NitroHttpUnknownException() => DioExceptionType.unknown,

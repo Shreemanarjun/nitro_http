@@ -167,9 +167,14 @@ RawErrorKind mapCurlError(int curlCode, bool proxyInUse) {
     case CURLE_WRITE_ERROR:
     case CURLE_READ_ERROR:
     case CURLE_FILE_COULDNT_READ_FILE:
-    case CURLE_FILESIZE_EXCEEDED:
     case CURLE_CHUNK_FAILED:
       return RawErrorKind::RAWERRORKIND_IO;
+
+    // Only `CURLOPT_MAXFILESIZE_LARGE` produces this, and only when a declared
+    // Content-Length is over the ceiling — so it means the same thing as our own
+    // running byte check, just earlier.
+    case CURLE_FILESIZE_EXCEEDED:
+      return RawErrorKind::RAWERRORKIND_RESPONSE_TOO_LARGE;
 
     // ── Caller-supplied nonsense ─────────────────────────────────────────────
     case CURLE_BAD_FUNCTION_ARGUMENT:
@@ -228,6 +233,7 @@ const char* kindToken(RawErrorKind kind) {
     case RawErrorKind::RAWERRORKIND_SEND_FAILURE: return "sendFailure";
     case RawErrorKind::RAWERRORKIND_RECEIVE_FAILURE: return "receiveFailure";
     case RawErrorKind::RAWERRORKIND_DECOMPRESSION_FAILURE: return "decompressionFailure";
+    case RawErrorKind::RAWERRORKIND_RESPONSE_TOO_LARGE: return "responseTooLarge";
     case RawErrorKind::RAWERRORKIND_IO: return "io";
     case RawErrorKind::RAWERRORKIND_CACHE_MISS: return "cacheMiss";
     case RawErrorKind::RAWERRORKIND_ENGINE_ERROR: return "engineError";

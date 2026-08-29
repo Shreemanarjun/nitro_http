@@ -51,3 +51,7 @@ migrate_working_dir/
 /.agents/
 /.claude/
 /skills-lock.json
+
+# Scaffolded by `nitrogen link` on every run. Templates the WASM web build,
+# which this package does not use — see test_web/ for the real web test.
+/test/nitro_http_web_test.dart

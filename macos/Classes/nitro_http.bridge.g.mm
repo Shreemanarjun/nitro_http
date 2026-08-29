@@ -22,7 +22,7 @@ NITRO_EXPORT uint32_t nitro_http_nitro_abi_version(void) {
     return 1;
 }
 NITRO_EXPORT const char* nitro_http_nitro_bridge_checksum(void) {
-    return "20f1884978e5e296";
+    return "8f8ae94532877555";
 }
 NITRO_EXPORT intptr_t nitro_http_init_dart_api_dl(void* data) {
     return Dart_InitializeApiDL(data);

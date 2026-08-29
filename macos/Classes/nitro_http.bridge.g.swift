@@ -69,11 +69,12 @@ public enum RawErrorKind: Int64 {
   case sendFailure = 17
   case receiveFailure = 18
   case decompressionFailure = 19
-  case io = 20
-  case cacheMiss = 21
-  case engineError = 22
-  case badRequest = 23
-  case unknown = 24
+  case responseTooLarge = 20
+  case io = 21
+  case cacheMiss = 22
+  case engineError = 23
+  case badRequest = 24
+  case unknown = 25
 }
 
 public enum RawProxyMode: Int64 {
@@ -465,6 +466,10 @@ public struct RawClientConfig: NitroEncodable {
   public var streamChunkBytes: Int64
   public var streamChunkMinContentLength: Int64
   public var streamChunkMaxHoldMs: Int64
+  public var maxResponseBytes: Int64
+  public var hstsCachePath: String
+  public var unixSocketPath: String
+  public var networkInterface: String
   public var defaultHeaders: [RawHeader]
   public var tls: RawTlsConfig
   public var proxy: RawProxyConfig
@@ -472,7 +477,7 @@ public struct RawClientConfig: NitroEncodable {
   public var cookies: RawCookieConfig
   public var pool: RawPoolConfig
 
-  public init(httpVersion: RawHttpVersionPref, connectTimeoutMs: Int64, requestTimeoutMs: Int64, idleTimeoutMs: Int64, followRedirects: Bool, maxRedirects: Int64, enableCompression: Bool, enableCache: Bool, userAgent: String, altSvcCachePath: String, streamChunkBytes: Int64, streamChunkMinContentLength: Int64, streamChunkMaxHoldMs: Int64, defaultHeaders: [RawHeader], tls: RawTlsConfig, proxy: RawProxyConfig, dns: RawDnsConfig, cookies: RawCookieConfig, pool: RawPoolConfig) {
+  public init(httpVersion: RawHttpVersionPref, connectTimeoutMs: Int64, requestTimeoutMs: Int64, idleTimeoutMs: Int64, followRedirects: Bool, maxRedirects: Int64, enableCompression: Bool, enableCache: Bool, userAgent: String, altSvcCachePath: String, streamChunkBytes: Int64, streamChunkMinContentLength: Int64, streamChunkMaxHoldMs: Int64, maxResponseBytes: Int64, hstsCachePath: String, unixSocketPath: String, networkInterface: String, defaultHeaders: [RawHeader], tls: RawTlsConfig, proxy: RawProxyConfig, dns: RawDnsConfig, cookies: RawCookieConfig, pool: RawPoolConfig) {
     self.httpVersion = httpVersion
     self.connectTimeoutMs = connectTimeoutMs
     self.requestTimeoutMs = requestTimeoutMs
@@ -486,6 +491,10 @@ public struct RawClientConfig: NitroEncodable {
     self.streamChunkBytes = streamChunkBytes
     self.streamChunkMinContentLength = streamChunkMinContentLength
     self.streamChunkMaxHoldMs = streamChunkMaxHoldMs
+    self.maxResponseBytes = maxResponseBytes
+    self.hstsCachePath = hstsCachePath
+    self.unixSocketPath = unixSocketPath
+    self.networkInterface = networkInterface
     self.defaultHeaders = defaultHeaders
     self.tls = tls
     self.proxy = proxy
@@ -513,6 +522,10 @@ public struct RawClientConfig: NitroEncodable {
       streamChunkBytes: r.readInt(),
       streamChunkMinContentLength: r.readInt(),
       streamChunkMaxHoldMs: r.readInt(),
+      maxResponseBytes: r.readInt(),
+      hstsCachePath: r.readString(),
+      unixSocketPath: r.readString(),
+      networkInterface: r.readString(),
       defaultHeaders: (0..<Int(r.readInt32())).map { _ in RawHeader.fromReader(r) },
       tls: RawTlsConfig.fromReader(r),
       proxy: RawProxyConfig.fromReader(r),
@@ -536,6 +549,10 @@ public struct RawClientConfig: NitroEncodable {
     writer.writeInt(streamChunkBytes)
     writer.writeInt(streamChunkMinContentLength)
     writer.writeInt(streamChunkMaxHoldMs)
+    writer.writeInt(maxResponseBytes)
+    writer.writeString(hstsCachePath)
+    writer.writeString(unixSocketPath)
+    writer.writeString(networkInterface)
     writer.writeInt32(Int32(defaultHeaders.count))
     for e in defaultHeaders { e.writeFields(writer) }
     tls.writeFields(writer)
@@ -624,9 +641,10 @@ public struct RawRequest: NitroEncodable {
   public var headers: [RawHeader]
   public var bodyKind: RawBodyKind
   public var bodyFilePath: String
+  public var responseFilePath: String
   public var options: RawRequestOptions
 
-  public init(requestId: Int64, method: RawMethod, customMethod: String, url: String, headers: [RawHeader], bodyKind: RawBodyKind, bodyFilePath: String, options: RawRequestOptions) {
+  public init(requestId: Int64, method: RawMethod, customMethod: String, url: String, headers: [RawHeader], bodyKind: RawBodyKind, bodyFilePath: String, responseFilePath: String, options: RawRequestOptions) {
     self.requestId = requestId
     self.method = method
     self.customMethod = customMethod
@@ -634,6 +652,7 @@ public struct RawRequest: NitroEncodable {
     self.headers = headers
     self.bodyKind = bodyKind
     self.bodyFilePath = bodyFilePath
+    self.responseFilePath = responseFilePath
     self.options = options
   }
 
@@ -650,6 +669,7 @@ public struct RawRequest: NitroEncodable {
       headers: (0..<Int(r.readInt32())).map { _ in RawHeader.fromReader(r) },
       bodyKind: RawBodyKind(rawValue: r.readInt())!,
       bodyFilePath: r.readString(),
+      responseFilePath: r.readString(),
       options: RawRequestOptions.fromReader(r)
     )
   }
@@ -663,6 +683,7 @@ public struct RawRequest: NitroEncodable {
     for e in headers { e.writeFields(writer) }
     writer.writeInt(bodyKind.rawValue)
     writer.writeString(bodyFilePath)
+    writer.writeString(responseFilePath)
     options.writeFields(writer)
   }
 

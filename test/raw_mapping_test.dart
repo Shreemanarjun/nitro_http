@@ -709,6 +709,8 @@ void main() {
           expect(e, isA<NitroHttpProtocolException>()),
       RawErrorKind.decompressionFailure: (e) =>
           expect(e, isA<NitroHttpDecodingException>()),
+      RawErrorKind.responseTooLarge: (e) =>
+          expect(e, isA<NitroHttpResponseTooLargeException>()),
       RawErrorKind.cacheMiss: (e) =>
           expect(e, isA<NitroHttpCacheMissException>()),
       RawErrorKind.io: (e) => expect(e, isA<NitroHttpUnknownException>()),
@@ -720,6 +722,20 @@ void main() {
           expect(e, isA<NitroHttpConfigurationException>()),
       RawErrorKind.unknown: (e) => expect(e, isA<NitroHttpUnknownException>()),
     };
+
+    test('an over-size failure carries the ceiling the engine named', () {
+      // The number lives in the engine's message rather than a field of its
+      // own: the caller configured the limit and already has it, so parsing it
+      // back out would only duplicate what they set.
+      final error = mapError(
+        kind: RawErrorKind.responseTooLarge,
+        message: 'response body exceeds the configured limit of 1048576 bytes',
+        engineErrorCode: 0,
+      );
+
+      expect(error, isA<NitroHttpResponseTooLargeException>());
+      expect(error.message, contains('1048576'));
+    });
 
     test('none is a programming error, not a failure', () {
       expect(

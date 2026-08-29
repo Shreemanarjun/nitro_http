@@ -123,7 +123,7 @@ final class _NitroHttpNativeWebImpl extends NitroHttpNative {
     );
     NitroRuntime.checkLinkChecksum(
       _libName,
-      '20f1884978e5e296',
+      '8f8ae94532877555',
       () => _m.readCString(
         dartI64(_m.call('nitro_http_nitro_bridge_checksum', const [])),
       ),

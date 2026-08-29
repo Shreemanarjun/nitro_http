@@ -15,8 +15,10 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:web/web.dart' as web;
 
+import '../api/settings.dart' show ReferrerPolicy;
 import '../nitro_http.native.dart';
-import 'executor_fetch.dart' show fetchCacheMode, timingsFromMilestones;
+import 'executor_fetch.dart'
+    show fetchCacheMode, streamsUploadBody, timingsFromMilestones;
 
 /// Sends requests with `fetch`, honouring the cache mode the executor sets.
 class NitroFetchClient extends http.BaseClient {
@@ -26,9 +28,16 @@ class NitroFetchClient extends http.BaseClient {
   /// buffered entries asynchronously, so an observer created while the first
   /// response is being read has nothing in it yet and that request alone falls
   /// back to the wall clock.
-  NitroFetchClient() {
+  NitroFetchClient({this.keepAlive = false, this.referrerPolicy}) {
     _ensureObserving();
   }
+
+  /// Whether requests may outlive the page. See `ClientSettings.keepAlive`.
+  final bool keepAlive;
+
+  /// How much of the referring URL to disclose, or null for the browser's
+  /// default.
+  final ReferrerPolicy? referrerPolicy;
 
   /// Whether cookies ride along on cross-origin requests.
   bool withCredentials = false;
@@ -59,7 +68,16 @@ class NitroFetchClient extends http.BaseClient {
       cache: cache,
     );
 
-    if (request is http.StreamedRequest && supportsStreamingUpload()) {
+    final referrer = referrerPolicy;
+    if (referrer != null) init.referrerPolicy = referrer.wireName;
+
+    if (keepAlive) init.keepalive = true;
+
+    if (streamsUploadBody(
+      isStreamed: request is http.StreamedRequest,
+      keepAlive: keepAlive,
+      browserSupportsStreaming: supportsStreamingUpload(),
+    )) {
       // The body goes up as it arrives. `duplex: 'half'` is mandatory for a
       // stream body and means "finish sending before reading the response",
       // which is the only mode any browser implements.

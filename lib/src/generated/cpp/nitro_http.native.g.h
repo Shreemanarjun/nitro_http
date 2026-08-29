@@ -451,6 +451,10 @@ struct RawClientConfig {
     int64_t streamChunkBytes;
     int64_t streamChunkMinContentLength;
     int64_t streamChunkMaxHoldMs;
+    int64_t maxResponseBytes;
+    std::string hstsCachePath;
+    std::string unixSocketPath;
+    std::string networkInterface;
     std::vector<RawHeader> defaultHeaders;
     RawTlsConfig tls;
     RawProxyConfig proxy;
@@ -478,6 +482,10 @@ struct RawClientConfig {
         _obj.streamChunkBytes = _r.readInt();
         _obj.streamChunkMinContentLength = _r.readInt();
         _obj.streamChunkMaxHoldMs = _r.readInt();
+        _obj.maxResponseBytes = _r.readInt();
+        _obj.hstsCachePath = _r.readString();
+        _obj.unixSocketPath = _r.readString();
+        _obj.networkInterface = _r.readString();
         { auto& _target = _obj.defaultHeaders; int32_t _n = _r.readInt32(); _target.reserve((size_t)_n); for (int32_t _i = 0; _i < _n; _i++) { _target.push_back(RawHeader::fromReader(_r)); } }
         _obj.tls = RawTlsConfig::fromReader(_r);
         _obj.proxy = RawProxyConfig::fromReader(_r);
@@ -502,6 +510,10 @@ struct RawClientConfig {
         w.writeInt(streamChunkBytes);
         w.writeInt(streamChunkMinContentLength);
         w.writeInt(streamChunkMaxHoldMs);
+        w.writeInt(maxResponseBytes);
+        w.writeString(hstsCachePath);
+        w.writeString(unixSocketPath);
+        w.writeString(networkInterface);
         { w.writeInt32((int32_t)defaultHeaders.size()); for (const auto& _e : defaultHeaders) { _e.encodeInto(w); } }
         tls.encodeInto(w);
         proxy.encodeInto(w);
@@ -580,6 +592,7 @@ struct RawRequest {
     std::vector<RawHeader> headers;
     RawBodyKind bodyKind;
     std::string bodyFilePath;
+    std::string responseFilePath;
     RawRequestOptions options;
 
     static RawRequest fromNative(NitroCppBuffer buf) {
@@ -596,6 +609,7 @@ struct RawRequest {
         { auto& _target = _obj.headers; int32_t _n = _r.readInt32(); _target.reserve((size_t)_n); for (int32_t _i = 0; _i < _n; _i++) { _target.push_back(RawHeader::fromReader(_r)); } }
         _obj.bodyKind = static_cast<RawBodyKind>(_r.readInt());
         _obj.bodyFilePath = _r.readString();
+        _obj.responseFilePath = _r.readString();
         _obj.options = RawRequestOptions::fromReader(_r);
         return _obj;
     }
@@ -609,6 +623,7 @@ struct RawRequest {
         { w.writeInt32((int32_t)headers.size()); for (const auto& _e : headers) { _e.encodeInto(w); } }
         w.writeInt(static_cast<int64_t>(bodyKind));
         w.writeString(bodyFilePath);
+        w.writeString(responseFilePath);
         options.encodeInto(w);
     }
 
@@ -1160,67 +1175,67 @@ public:
     virtual ~HybridNitroHttpNative() = default;
 
     // ── Methods ──────────────────────────────────────────────────────────
-    // source: nitro_http.native.dart:744
+    // source: nitro_http.native.dart:789
     virtual std::string engineVersion() = 0;
-    // source: nitro_http.native.dart:746
+    // source: nitro_http.native.dart:791
     virtual bool supportsHttp3() = 0;
-    // source: nitro_http.native.dart:747
+    // source: nitro_http.native.dart:792
     virtual bool supportsWebSockets() = 0;
-    // source: nitro_http.native.dart:748
+    // source: nitro_http.native.dart:793
     virtual bool supportsBrotli() = 0;
-    // source: nitro_http.native.dart:749
+    // source: nitro_http.native.dart:794
     virtual bool supportsZstd() = 0;
-    // source: nitro_http.native.dart:753
+    // source: nitro_http.native.dart:798
     virtual void resetNative() = 0;
-    // source: nitro_http.native.dart:759
+    // source: nitro_http.native.dart:804
     virtual void configureClient(NitroCppBuffer config) = 0;
-    // source: nitro_http.native.dart:762
+    // source: nitro_http.native.dart:807
     virtual void sendBuffered(NitroCppBuffer request, const uint8_t* body, size_t body_length, NitroError* _nitro_err, int64_t dartPort) = 0;
-    // source: nitro_http.native.dart:785
+    // source: nitro_http.native.dart:830
     virtual void sendBufferedCoalesced(int64_t callId, NitroCppBuffer request, const uint8_t* body, size_t body_length, int64_t dartPort) = 0;
-    // source: nitro_http.native.dart:802
+    // source: nitro_http.native.dart:847
     virtual void releaseRecord(int64_t address) = 0;
-    // source: nitro_http.native.dart:805
-    virtual void startStreamed(NitroCppBuffer request, const uint8_t* body, size_t body_length, NitroError* _nitro_err, int64_t dartPort) = 0;
-    // source: nitro_http.native.dart:810
-    virtual void cancel(int64_t requestId) = 0;
-    // source: nitro_http.native.dart:811
-    virtual void cancelAll() = 0;
-    // source: nitro_http.native.dart:823
-    virtual void cancelToken(int64_t tokenId, const std::string& reason) = 0;
-    // source: nitro_http.native.dart:831
-    virtual void releaseCancelToken(int64_t tokenId) = 0;
-    // source: nitro_http.native.dart:846
-    virtual void grantCredit(int64_t requestId, int64_t chunkCount, int64_t ackedChunks) = 0;
     // source: nitro_http.native.dart:850
-    virtual int64_t feedUploadChunk(int64_t requestId, const uint8_t* chunk, size_t chunk_length) = 0;
-    // source: nitro_http.native.dart:852
-    virtual void finishUpload(int64_t requestId) = 0;
+    virtual void startStreamed(NitroCppBuffer request, const uint8_t* body, size_t body_length, NitroError* _nitro_err, int64_t dartPort) = 0;
     // source: nitro_http.native.dart:855
+    virtual void cancel(int64_t requestId) = 0;
+    // source: nitro_http.native.dart:856
+    virtual void cancelAll() = 0;
+    // source: nitro_http.native.dart:868
+    virtual void cancelToken(int64_t tokenId, const std::string& reason) = 0;
+    // source: nitro_http.native.dart:876
+    virtual void releaseCancelToken(int64_t tokenId) = 0;
+    // source: nitro_http.native.dart:891
+    virtual void grantCredit(int64_t requestId, int64_t chunkCount, int64_t ackedChunks) = 0;
+    // source: nitro_http.native.dart:895
+    virtual int64_t feedUploadChunk(int64_t requestId, const uint8_t* chunk, size_t chunk_length) = 0;
+    // source: nitro_http.native.dart:897
+    virtual void finishUpload(int64_t requestId) = 0;
+    // source: nitro_http.native.dart:900
     virtual void failUpload(int64_t requestId, const std::string& message) = 0;
-    // source: nitro_http.native.dart:858
+    // source: nitro_http.native.dart:903
     virtual NitroCppBuffer getCookies(const std::string& url) = 0;
-    // source: nitro_http.native.dart:859
+    // source: nitro_http.native.dart:904
     virtual void setCookie(NitroCppBuffer cookie) = 0;
-    // source: nitro_http.native.dart:860
+    // source: nitro_http.native.dart:905
     virtual void clearCookies() = 0;
-    // source: nitro_http.native.dart:861
+    // source: nitro_http.native.dart:906
     virtual void flushCookies() = 0;
-    // source: nitro_http.native.dart:865
+    // source: nitro_http.native.dart:910
     virtual void configureCache(NitroCppBuffer config) = 0;
-    // source: nitro_http.native.dart:870
+    // source: nitro_http.native.dart:915
     virtual void prefetch(NitroCppBuffer request, NitroError* _nitro_err, int64_t dartPort) = 0;
-    // source: nitro_http.native.dart:872
+    // source: nitro_http.native.dart:917
     virtual void clearCache() = 0;
-    // source: nitro_http.native.dart:873
+    // source: nitro_http.native.dart:918
     virtual NitroCppBuffer cacheStats() = 0;
-    // source: nitro_http.native.dart:878
+    // source: nitro_http.native.dart:923
     virtual void wsConnect(NitroCppBuffer config, NitroError* _nitro_err, int64_t dartPort) = 0;
-    // source: nitro_http.native.dart:881
+    // source: nitro_http.native.dart:926
     virtual int64_t wsSend(int64_t opcode, const uint8_t* payload, size_t payload_length) = 0;
-    // source: nitro_http.native.dart:883
+    // source: nitro_http.native.dart:928
     virtual void wsClose(int64_t code, const std::string& reason) = 0;
-    // source: nitro_http.native.dart:886
+    // source: nitro_http.native.dart:931
     virtual void wsGrantCredit(int64_t frameCount, int64_t ackedFrames) = 0;
 
     // ── Streams ──────────────────────────────────────────────────────────

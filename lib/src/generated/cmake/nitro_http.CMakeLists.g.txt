@@ -40,4 +40,4 @@ elseif(UNIX AND NOT APPLE)
     target_link_libraries(${NITRO_MODULE_NAME} PRIVATE dl pthread)
 endif()
 
-# nitro bridge checksum: 20f1884978e5e296
+# nitro bridge checksum: 8f8ae94532877555

@@ -247,8 +247,61 @@ void main() {
         'pool:',
         'cache:',
         'altSvcCachePath: /tmp/altsvc',
+        'maxResponseBytes:',
+        'hstsCachePath:',
+        'unixSocketPath:',
+        'networkInterface:',
+        'keepAlive:',
+        'referrerPolicy:',
+        'unsupportedSettings:',
       ]) {
         expect(rendered, contains(field), reason: field);
+      }
+    });
+
+    test('every setting takes part in equality', () {
+      // A client rebuilds its native configuration when its settings change, so
+      // a field missing from `==` means a change that silently never reaches the
+      // engine. These seven were added after the first cut of this class, and
+      // `unsupportedSettings` was in fact missing until this test was written.
+      const base = ClientSettings();
+
+      final variants = <String, ClientSettings>{
+        'maxResponseBytes': base.copyWith(maxResponseBytes: 1024),
+        'hstsCachePath': base.copyWith(hstsCachePath: '/tmp/hsts'),
+        'unixSocketPath': base.copyWith(unixSocketPath: '/tmp/app.sock'),
+        'networkInterface': base.copyWith(networkInterface: 'en0'),
+        'keepAlive': base.copyWith(keepAlive: true),
+        'referrerPolicy': base.copyWith(
+          referrerPolicy: ReferrerPolicy.noReferrer,
+        ),
+        'unsupportedSettings': base.copyWith(
+          unsupportedSettings: UnsupportedSettingPolicy.ignore,
+        ),
+      };
+
+      for (final MapEntry(key: name, value: changed) in variants.entries) {
+        expect(changed, isNot(base), reason: '$name is missing from ==');
+        expect(
+          changed.hashCode,
+          isNot(base.hashCode),
+          reason: '$name is missing from hashCode',
+        );
+        expect(changed, changed.copyWith(), reason: '$name is lost by copyWith');
+      }
+    });
+
+    test('the referrer policies carry the strings fetch expects', () {
+      // Spelled by the Fetch specification, so a typo here is a policy the
+      // browser silently ignores.
+      expect(ReferrerPolicy.noReferrer.wireName, 'no-referrer');
+      expect(
+        ReferrerPolicy.strictOriginWhenCrossOrigin.wireName,
+        'strict-origin-when-cross-origin',
+      );
+      expect(ReferrerPolicy.unsafeUrl.wireName, 'unsafe-url');
+      for (final policy in ReferrerPolicy.values) {
+        expect(policy.wireName, matches(RegExp(r'^[a-z-]+$')), reason: '$policy');
       }
     });
 

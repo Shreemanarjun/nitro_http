@@ -13,7 +13,10 @@ import 'request_runner.dart';
 
 /// The executor a client gets in the browser.
 RequestExecutor defaultExecutor(int clientId, ClientSettings settings) {
-  final client = NitroFetchClient();
+  final client = NitroFetchClient(
+    keepAlive: settings.keepAlive,
+    referrerPolicy: settings.referrerPolicy,
+  );
   return FetchRequestExecutor(
     client,
     setCredentials: (enabled) => client.withCredentials = enabled,

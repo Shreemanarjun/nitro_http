@@ -203,6 +203,10 @@ extension RawClientConfigRecordExt on RawClientConfig {
     streamChunkBytes: r.readInt(),
     streamChunkMinContentLength: r.readInt(),
     streamChunkMaxHoldMs: r.readInt(),
+    maxResponseBytes: r.readInt(),
+    hstsCachePath: r.readString(),
+    unixSocketPath: r.readString(),
+    networkInterface: r.readString(),
     defaultHeaders: List.generate(
       r.readInt32(),
       (_) => RawHeaderRecordExt.fromReader(r),
@@ -228,6 +232,10 @@ extension RawClientConfigRecordExt on RawClientConfig {
     writer.writeInt(streamChunkBytes);
     writer.writeInt(streamChunkMinContentLength);
     writer.writeInt(streamChunkMaxHoldMs);
+    writer.writeInt(maxResponseBytes);
+    writer.writeString(hstsCachePath);
+    writer.writeString(unixSocketPath);
+    writer.writeString(networkInterface);
     writer.writeInt32(defaultHeaders.length);
     for (final e in defaultHeaders) {
       e.writeFields(writer);
@@ -280,6 +288,7 @@ extension RawRequestRecordExt on RawRequest {
     ),
     bodyKind: r.readInt().toRawBodyKind(),
     bodyFilePath: r.readString(),
+    responseFilePath: r.readString(),
     options: RawRequestOptionsRecordExt.fromReader(r),
   );
 
@@ -294,6 +303,7 @@ extension RawRequestRecordExt on RawRequest {
     }
     writer.writeInt(bodyKind.nativeValue);
     writer.writeString(bodyFilePath);
+    writer.writeString(responseFilePath);
     options.writeFields(writer);
   }
 }

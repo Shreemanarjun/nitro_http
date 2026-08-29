@@ -220,6 +220,13 @@ class RequestTask {
   /// First thing `emitHeadIfNeeded` does, because both the cache write-back and
   /// the published head read `headers_` after it has run.
   void beginContentDecoding();
+  /// Completes the task with `responseTooLarge`, naming the ceiling.
+  ///
+  /// [curlCode] distinguishes the two checks: `CURLE_FILESIZE_EXCEEDED` when a
+  /// declared `Content-Length` was refused before the body was read, `0` when
+  /// the running count caught a body that was chunked or under-declared.
+  void failResponseTooLarge(int64_t limit, int curlCode = 0);
+
   /// Completes the task with `decompressionFailure` and the decoder's message.
   void failContentDecoding();
 
@@ -256,6 +263,11 @@ class RequestTask {
   struct curl_slist* connectToList_ = nullptr;
   FILE* uploadFile_ = nullptr;
 
+  // Set when the request names a `responseFilePath`: the body is written here
+  // instead of into `bodyBuf_`, so a multi-gigabyte download never sits in
+  // memory on either side of the bridge.
+  FILE* responseFile_ = nullptr;
+
   bool attached_ = false;
   // Header accumulation. A redirect chain restarts the block, so the vectors
   // are cleared whenever a new status line arrives.
@@ -265,6 +277,15 @@ class RequestTask {
   bool headSent_ = false;
 
   std::vector<uint8_t> bodyBuf_;   // buffered + prefetch modes
+
+  // Decoded body bytes delivered so far, checked against `maxResponseBytes_`.
+  // Counted after decoding because that is the size the caller would actually
+  // receive.
+  int64_t bodyBytes_ = 0;
+
+  // Copied from the client config at `prepare`: the write callback runs on the
+  // loop thread long after that reference has gone out of scope.
+  int64_t maxResponseBytes_ = 0;
   size_t readOffset_ = 0;          // inline-body upload cursor
 
   // Content decoding. Null means "pass the body through untouched", which is

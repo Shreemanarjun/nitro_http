@@ -322,6 +322,7 @@ final class NitroSender implements HttpSender {
         nitro.NitroHttpRedirectException() ||
         nitro.NitroHttpProtocolException() ||
         nitro.NitroHttpDecodingException() ||
+        nitro.NitroHttpResponseTooLargeException() ||
         nitro.NitroHttpStatusCodeException() ||
         nitro.NitroHttpUnknownException() => SendFailureKind.unknown,
       };

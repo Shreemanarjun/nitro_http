@@ -928,16 +928,19 @@ void main() {
         expect(res.statusCode, 200);
         c.dispose();
 
-        // The flush happens when the ENGINE tears down its handles, not when
-        // the client is disposed — the engine outlives a client. Checking
-        // after dispose alone finds no file and looks like a broken setting.
-        expect(File(path).existsSync(), isFalse,
-            reason: 'documents that dispose() alone does not flush');
-        NitroHttp.reset();
-        await Future<void>.delayed(const Duration(seconds: 1));
+        // curl writes the cache from `curl_easy_cleanup`, which the engine now
+        // does per request rather than recycling the handle — a recycled one is
+        // reset, and reset discards what it learned without saving. Written on
+        // the loop thread just after the response is delivered, so this waits
+        // rather than reading immediately.
+        final file = File(path);
+        for (var i = 0; i < 50 && !file.existsSync(); i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 40));
+        }
 
-        expect(File(path).existsSync(), isTrue);
-        expect(File(path).readAsStringSync(), contains('h3'),
+        expect(file.existsSync(), isTrue,
+            reason: 'the Alt-Svc cache was never written');
+        expect(file.readAsStringSync(), contains('h3'),
             reason: 'the advertised h3 endpoint should be recorded');
       });
     }, skip: netSkip);

@@ -671,6 +671,41 @@ final class NoRedirects extends RedirectSettings {
 
 // ── Pool ─────────────────────────────────────────────────────────────────────
 
+/// How much of the referring URL a browser sends with a request.
+///
+/// Web only, and the values are the ones `fetch` defines. Native never sends a
+/// `Referer` it was not given, so there is nothing here for it to honour.
+enum ReferrerPolicy {
+  /// Send nothing.
+  noReferrer('no-referrer'),
+
+  /// Send the full URL to HTTPS origins, nothing when downgrading to HTTP.
+  noReferrerWhenDowngrade('no-referrer-when-downgrade'),
+
+  /// Send the full URL to this origin, nothing to any other.
+  sameOrigin('same-origin'),
+
+  /// Send only the scheme, host and port.
+  origin('origin'),
+
+  /// Send the origin, and nothing when downgrading to HTTP.
+  strictOrigin('strict-origin'),
+
+  /// Send the full URL to this origin, the origin alone elsewhere.
+  originWhenCrossOrigin('origin-when-cross-origin'),
+
+  /// Like [originWhenCrossOrigin], but sends nothing when downgrading.
+  strictOriginWhenCrossOrigin('strict-origin-when-cross-origin'),
+
+  /// Always send the full URL, downgrades included. Leaks paths; avoid.
+  unsafeUrl('unsafe-url');
+
+  const ReferrerPolicy(this.wireName);
+
+  /// The string `fetch` expects.
+  final String wireName;
+}
+
 /// What a platform does with a setting it cannot honour.
 ///
 /// Only web has any: the browser owns TLS, proxying, DNS and its own cache, so
@@ -919,6 +954,12 @@ final class ClientSettings {
     this.cacheSettings = const CacheSettings(),
     this.altSvcCachePath,
     this.streamChunks = const StreamChunkSettings.adaptive(),
+    this.maxResponseBytes,
+    this.hstsCachePath,
+    this.unixSocketPath,
+    this.networkInterface,
+    this.keepAlive = false,
+    this.referrerPolicy,
     this.unsupportedSettings = UnsupportedSettingPolicy.reject,
   });
 
@@ -1001,6 +1042,56 @@ final class ClientSettings {
   /// response and needs no tuning. Override it only for a workload the size
   /// heuristic reads wrongly — see that class for when that happens.
   final StreamChunkSettings streamChunks;
+
+  /// Largest response body to accept, in bytes. `null` means no ceiling.
+  ///
+  /// The engine already caps how far a *compressed* body may inflate, which
+  /// stops a gzip bomb, but an uncompressed response has no limit of its own —
+  /// a server that keeps sending will keep being read. Set this to what your
+  /// API can plausibly return and an oversized one fails with
+  /// `NitroHttpResponseTooLargeException` instead of filling memory.
+  ///
+  /// Counted after decoding, and enforced from `Content-Length` before a byte
+  /// arrives when the server sends one.
+  final int? maxResponseBytes;
+
+  /// Path of the file remembering which hosts sent `Strict-Transport-Security`.
+  /// `null` disables HSTS.
+  ///
+  /// Without a file the header is honoured only for the life of the client, so
+  /// the first request to a known-HTTPS host after each launch can still go out
+  /// over plaintext. Native only — a browser keeps its own HSTS list.
+  final String? hstsCachePath;
+
+  /// Unix domain socket to carry every request. `null` uses ordinary TCP.
+  ///
+  /// The URL still supplies the host header and path, so a daemon listening on
+  /// `/var/run/app.sock` is reached with `http://localhost/status`. Native only,
+  /// and not available on Windows.
+  final String? unixSocketPath;
+
+  /// Interface, IP address or host name to bind outgoing connections to.
+  /// `null` lets the OS route.
+  ///
+  /// Useful on a device with more than one route — pinning traffic to the VPN
+  /// or to a specific NIC. Native only. Binding to an interface by name needs
+  /// elevated privileges on some platforms; an address does not.
+  final String? networkInterface;
+
+  /// Whether requests may outlive the page that started them.
+  ///
+  /// Web only. A `keepalive` request keeps running after a tab is closed or
+  /// navigated away, which is the only way an unload-time analytics or
+  /// session-end call reliably arrives. Browsers cap the total in-flight
+  /// keepalive body at 64 KiB and refuse a streamed body, so a client with this
+  /// set is a client for small beacons.
+  final bool keepAlive;
+
+  /// How much of the referring URL to disclose. `null` uses the browser's
+  /// default.
+  ///
+  /// Web only.
+  final ReferrerPolicy? referrerPolicy;
 
   /// What to do with settings this platform cannot honour. Web only; native
   /// honours everything and ignores this.
@@ -1087,6 +1178,13 @@ final class ClientSettings {
     CacheSettings? cacheSettings,
     String? altSvcCachePath,
     StreamChunkSettings? streamChunks,
+    int? maxResponseBytes,
+    String? hstsCachePath,
+    String? unixSocketPath,
+    String? networkInterface,
+    bool? keepAlive,
+    ReferrerPolicy? referrerPolicy,
+    UnsupportedSettingPolicy? unsupportedSettings,
   }) => ClientSettings(
     baseUrl: baseUrl ?? this.baseUrl,
     timeout: timeout ?? this.timeout,
@@ -1106,6 +1204,13 @@ final class ClientSettings {
     cacheSettings: cacheSettings ?? this.cacheSettings,
     altSvcCachePath: altSvcCachePath ?? this.altSvcCachePath,
     streamChunks: streamChunks ?? this.streamChunks,
+    maxResponseBytes: maxResponseBytes ?? this.maxResponseBytes,
+    hstsCachePath: hstsCachePath ?? this.hstsCachePath,
+    unixSocketPath: unixSocketPath ?? this.unixSocketPath,
+    networkInterface: networkInterface ?? this.networkInterface,
+    keepAlive: keepAlive ?? this.keepAlive,
+    referrerPolicy: referrerPolicy ?? this.referrerPolicy,
+    unsupportedSettings: unsupportedSettings ?? this.unsupportedSettings,
   );
 
   @override
@@ -1129,7 +1234,14 @@ final class ClientSettings {
           other.poolSettings == poolSettings &&
           other.cacheSettings == cacheSettings &&
           other.altSvcCachePath == altSvcCachePath &&
-          other.streamChunks == streamChunks;
+          other.streamChunks == streamChunks &&
+          other.maxResponseBytes == maxResponseBytes &&
+          other.hstsCachePath == hstsCachePath &&
+          other.unixSocketPath == unixSocketPath &&
+          other.networkInterface == networkInterface &&
+          other.keepAlive == keepAlive &&
+          other.referrerPolicy == referrerPolicy &&
+          other.unsupportedSettings == unsupportedSettings;
 
   @override
   int get hashCode => Object.hash(
@@ -1151,6 +1263,15 @@ final class ClientSettings {
     cookieSettings,
     poolSettings,
     Object.hash(cacheSettings, altSvcCachePath, streamChunks),
+    Object.hash(
+      maxResponseBytes,
+      hstsCachePath,
+      unixSocketPath,
+      networkInterface,
+      keepAlive,
+      referrerPolicy,
+      unsupportedSettings,
+    ),
   );
 
   @override
@@ -1162,7 +1283,11 @@ final class ClientSettings {
       'compression: $enableCompression, tls: $tlsSettings, '
       'proxy: $proxySettings, dns: $dnsSettings, cookies: $cookieSettings, '
       'pool: $poolSettings, cache: $cacheSettings, '
-      'altSvcCachePath: $altSvcCachePath, streamChunks: $streamChunks)';
+      'altSvcCachePath: $altSvcCachePath, streamChunks: $streamChunks, '
+      'maxResponseBytes: $maxResponseBytes, hstsCachePath: $hstsCachePath, '
+      'unixSocketPath: $unixSocketPath, networkInterface: $networkInterface, '
+      'keepAlive: $keepAlive, referrerPolicy: ${referrerPolicy?.name}, '
+      'unsupportedSettings: ${unsupportedSettings.name})';
 }
 
 Uri _withoutQuery(Uri uri) => uri.hasQuery

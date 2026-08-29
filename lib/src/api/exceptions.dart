@@ -335,6 +335,24 @@ final class NitroHttpDecodingException extends NitroHttpException {
   String _describe() => 'Could not decode the response body';
 }
 
+/// The response body exceeded `ClientSettings.maxResponseBytes`.
+///
+/// Thrown as soon as the ceiling is passed — from `Content-Length` before any
+/// body arrives when the server declares one, otherwise mid-transfer — so an
+/// oversized response is never fully read.
+final class NitroHttpResponseTooLargeException extends NitroHttpException {
+  /// Creates an over-size failure.
+  NitroHttpResponseTooLargeException({
+    super.request,
+    super.message,
+    super.engineMessage,
+    super.engineErrorCode,
+  });
+
+  @override
+  String _describe() => 'Response body is larger than the configured limit';
+}
+
 /// `CacheMode.onlyIfCached` was requested and nothing usable was cached.
 final class NitroHttpCacheMissException extends NitroHttpException {
   /// Creates a cache-miss failure.

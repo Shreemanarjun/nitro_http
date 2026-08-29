@@ -329,6 +329,7 @@ class NitroHttpClient {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     RequestOptions options = const RequestOptions(),
+    String? saveToPath,
   }) {
     return HttpRequest(
       method: method,
@@ -341,6 +342,7 @@ class NitroHttpClient {
       cancelToken: cancelToken,
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
+      saveToPath: saveToPath,
     );
   }
 
@@ -491,6 +493,43 @@ class NitroHttpClient {
 /// Convenience: download straight to bytes without going through the text
 /// decoder. Equivalent to `requestBytes(HttpMethod.get, path)`.
 extension NitroHttpClientDownload on NitroHttpClient {
+  /// Downloads [path] to the file at [savePath] and returns the response.
+  ///
+  /// The body never enters the Dart heap — the engine writes it as it arrives —
+  /// so a download is bounded by disk, not by memory, and
+  /// [HttpBytesResponse.bodyBytes] on the returned response is empty. The
+  /// status, headers and timings are all there as usual.
+  ///
+  /// A 4xx or 5xx response is not written to disk. The file is removed, and the
+  /// error body comes back in `bodyBytes` so it can be inspected, which is what
+  /// keeps a failed download from leaving an error page under [savePath].
+  ///
+  /// An existing file at [savePath] is truncated. Web has no filesystem to
+  /// write to, so this throws `NitroHttpConfigurationException` there.
+  Future<HttpBytesResponse> downloadToFile(
+    String path,
+    String savePath, {
+    Map<String, dynamic>? query,
+    HttpHeaders? headers,
+    CancelToken? cancelToken,
+    ProgressCallback? onReceiveProgress,
+    RequestOptions options = const RequestOptions(),
+  }) async =>
+      await request(
+            _build(
+              HttpMethod.get,
+              path,
+              HttpExpectedBody.bytes,
+              query: query,
+              headers: headers,
+              cancelToken: cancelToken,
+              onReceiveProgress: onReceiveProgress,
+              options: options,
+              saveToPath: savePath,
+            ),
+          )
+          as HttpBytesResponse;
+
   Future<Uint8List> download(
     String path, {
     Map<String, dynamic>? query,

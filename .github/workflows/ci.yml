@@ -88,20 +88,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The ONE job that pins Flutter rather than tracking stable. It asserts
-      # that regenerating leaves every tracked file byte-identical, and the
-      # generated bridge is formatted by `dart_style` — which the Flutter SDK
-      # pins EXACTLY (3.44.9 ships 3.1.7, 3.47.2 ships 3.1.13). `pubspec.lock`
-      # is not committed, so a floating channel re-resolves the formatter on
-      # every run and a release that rewraps one line turns this job red with
-      # no source change behind it.
-      #
-      # Raise this deliberately, regenerating with the same version in the same
-      # commit. Every other job stays on `channel: stable` so Flutter-compat
-      # breakage is still caught.
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: 3.47.2
           channel: stable
           cache: true
 
@@ -109,7 +97,7 @@ jobs:
 
       - name: Install the nitrogen CLI
         run: |
-          dart pub global activate nitrogen_cli 0.7.4
+          dart pub global activate nitrogen_cli 0.7.5
           echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
 
       # nitrogen unconditionally runs `pod install` for the example's Apple

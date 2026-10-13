@@ -808,49 +808,16 @@ abstract class NitroHttpNative extends HybridObject {
   /// constructor when configuration is a sub-microsecond FFI call.
   void configureClient(RawClientConfig config);
 
+  /// Completions are batched at the bridge by nitro's `NitroCompletionBatch`
+  /// (nitro 0.7.6+): results that arrive while Dart is still handling the
+  /// previous one travel together over one shared port, so a burst shares a
+  /// single isolate wake with no work here. A hand-rolled coalescer used to do
+  /// this — posting the response blob's address over a `NitroCoalescer` port,
+  /// freed through an explicit `releaseRecord` — but once the framework batched
+  /// the plain path it measured 9–12 % *slower* than it (serial and burst,
+  /// 0.7.9, `coalescer_ab_test`), so it was removed.
   @nitroNativeAsync
   Future<RawResponse> sendBuffered(RawRequest request, @zeroCopy Uint8List body);
-
-  /// [sendBuffered] with its completion batched through a [NitroCoalescer].
-  ///
-  /// Same transfer, same result — only the delivery differs. `sendBuffered`
-  /// posts its own result over its own `ReceivePort`, so 64 requests finishing
-  /// together wake the isolate 64 times; the measured floor for one such round
-  /// trip is 37 us and it is 74 % of everything this client spends outside curl
-  /// (`handoff_cost_test`). Here the engine buffers completions and posts each
-  /// drained batch as ONE `kArray`, so a burst shares one wake.
-  ///
-  /// Sync, not `@nitroNativeAsync`: it returns the instant the request is
-  /// queued. The result arrives later on [dartPort], addressed by [callId].
-  ///
-  /// A coalescer carries `int64` values only, so the value posted back is the
-  /// ADDRESS of the encoded `RawResponse` blob. That costs nothing extra — the
-  /// non-coalesced path already posts exactly this pointer as an int64 — but it
-  /// does move ownership: **Dart must decode the blob and free it**, which
-  /// `RequestRunner` does. Native does not free it after posting.
-  ///
-  /// Buffered responses only. Streamed transfers already deliver their body over
-  /// the module-global `chunks` stream, which is one subscriber and therefore
-  /// already coalesced by construction.
-  void sendBufferedCoalesced(
-    int callId,
-    RawRequest request,
-    @zeroCopy Uint8List body,
-    int dartPort,
-  );
-
-  /// Frees a record blob whose address arrived over a coalesced batch.
-  ///
-  /// The non-coalesced path never needs this: the generated `unpack` owns the
-  /// pointer and calls the module's `nitro_free` itself. A coalesced completion
-  /// hands Dart a bare integer instead, so the release has to be explicit — and
-  /// it has to run through the engine's own C runtime. `package:ffi`'s
-  /// `malloc.free` is NOT interchangeable with the allocator the plugin's binary
-  /// used, which is precisely the mismatch that makes Windows abort.
-  ///
-  /// Idempotent only against zero. Passing an address twice is a double free.
-  @nitroFast
-  void releaseRecord(int address);
 
   @nitroNativeAsync
   Future<RawResponseHead> startStreamed(

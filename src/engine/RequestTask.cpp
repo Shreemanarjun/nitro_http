@@ -1527,18 +1527,10 @@ void RequestTask::finish(int curlCode) {
 }
 
 void RequestTask::deliverBuffered(Blob blob) {
-  if (!pending_.coalesced()) {
-    postRecord(pending_.dartPort, blob);
-    return;
-  }
-  // The address IS the value on this path — the same pointer `postRecord` would
-  // have posted as an int64, just carried in a batch. Ownership moves to Dart,
-  // so nothing here frees it; `postCoalescedBatch` frees the whole batch if the
-  // port turns out to be dead.
-  const auto address =
-      static_cast<int64_t>(reinterpret_cast<intptr_t>(blob.data));
-  engine_.enqueueCompletion(pending_.coalescePort, pending_.coalesceCallId,
-                            address);
+  // One post per completion. nitro's `NitroCompletionBatch` coalesces these at
+  // the bridge when a burst finishes while Dart is busy, so there is no engine
+  // batching to do here.
+  postRecord(pending_.dartPort, blob);
 }
 
 void RequestTask::completeWithError(const EngineError& err) {

@@ -70,22 +70,6 @@ class HybridNitroHttpImpl final : public HybridNitroHttpNative {
     submit(request, body, body_length, RespMode::Buffered, dartPort);
   }
 
-  void sendBufferedCoalesced(int64_t callId, NitroCppBuffer request,
-                             const uint8_t* body, size_t body_length,
-                             int64_t dartPort) override {
-    // Same submission as `sendBuffered`; only the completion route differs, and
-    // that is carried on the PendingRequest rather than branching the engine.
-    submit(request, body, body_length, RespMode::Buffered, /*dartPort=*/0,
-           dartPort, callId);
-  }
-
-  void releaseRecord(int64_t address) override {
-    if (address == 0) return;
-    // Same allocator that `Blob::copy` used, which is the whole reason this
-    // crosses the bridge instead of being a `malloc.free` on the Dart side.
-    std::free(reinterpret_cast<void*>(static_cast<intptr_t>(address)));
-  }
-
   void startStreamed(NitroCppBuffer request, const uint8_t* body,
                      size_t body_length, NitroError*,
                      int64_t dartPort) override {
@@ -189,12 +173,8 @@ class HybridNitroHttpImpl final : public HybridNitroHttpNative {
   }
 
  private:
-  /// `dartPort` and `coalescePort` are mutually exclusive: a request completes
-  /// through its own port or through the shared batch, never both, because two
-  /// posts would complete the same Dart call twice.
   void submit(NitroCppBuffer request, const uint8_t* body, size_t bodyLen,
-              RespMode mode, int64_t dartPort, int64_t coalescePort = 0,
-              int64_t coalesceCallId = -1) {
+              RespMode mode, int64_t dartPort) {
     PendingRequest pending;
     pending.req = wire::decodeRequest(request);  // deep copy
     if (body != nullptr && bodyLen > 0) {
@@ -202,8 +182,6 @@ class HybridNitroHttpImpl final : public HybridNitroHttpNative {
     }
     pending.mode = mode;
     pending.dartPort = dartPort;
-    pending.coalescePort = coalescePort;
-    pending.coalesceCallId = coalesceCallId;
     pending.submittedAtMs = monotonicMs();
     role_.engine().submit(std::move(pending));
   }

@@ -86,16 +86,6 @@ public:
         throw std::runtime_error("Not implemented: sendBuffered");
     }
 
-    void sendBufferedCoalesced(int64_t callId, NitroCppBuffer request, const uint8_t* body, size_t body_length, int64_t dartPort) override {
-        // TODO: implement sendBufferedCoalesced
-        throw std::runtime_error("Not implemented: sendBufferedCoalesced");
-    }
-
-    void releaseRecord(int64_t address) override {
-        // TODO: implement releaseRecord
-        throw std::runtime_error("Not implemented: releaseRecord");
-    }
-
     void startStreamed(NitroCppBuffer request, const uint8_t* body, size_t body_length, NitroError* _nitro_err, int64_t dartPort) override {
         // TODO: on error, populate _nitro_err (hasError/name/message via strdup) before posting.
         // TODO: post result via Dart_PostCObject_DL(dartPort, ...)

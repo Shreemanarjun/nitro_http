@@ -111,19 +111,6 @@ class CurlEngine {
   /// Removes a completed task's handle and destroys it. Loop thread only.
   void retire(RequestTask* task);
 
-  /// Buffers one coalesced completion. `blobAddress` is the encoded record's
-  /// malloc'd pointer widened to int64; ownership passes to Dart, which decodes
-  /// it and calls `nitro_http_nitro_free`. Nothing here frees it.
-  ///
-  /// Nothing is posted until `flushCompletionBatch()`, which the loop runs once
-  /// its completion drain finishes — that is what turns N wakes into one.
-  ///
-  /// Unrelated to `RequestTask::flushCoalesced`, which batches body CHUNKS on a
-  /// streamed transfer. This batches whole COMPLETIONS across transfers.
-  ///
-  /// LOOP THREAD ONLY.
-  void enqueueCompletion(int64_t port, int64_t callId, int64_t blobAddress);
-
   const ThreadGuard& loopGuard() const { return loopGuard_; }
 
  private:
@@ -240,22 +227,6 @@ class CurlEngine {
 
   /// Owned by the loop thread after startup.
   std::unordered_map<int64_t, std::unique_ptr<RequestTask>> tasks_;
-
-  /// Posts every buffered coalesced completion as ONE `kArray` of int64 pairs,
-  /// `[callId0, addr0, callId1, addr1, …]`, matching `NitroCoalescer`'s wire.
-  /// No-op when the buffer is empty, so the loop can call it unconditionally.
-  ///
-  /// LOOP THREAD ONLY.
-  void flushCompletionBatch();
-
-  /// Completions waiting for the next flush, as `(callId, blobAddress)`.
-  /// Loop-thread owned; never touched from the Dart thread.
-  std::vector<std::pair<int64_t, int64_t>> completionBatch_;
-
-  /// The port the buffered batch goes to. All coalesced requests on one client
-  /// share a coalescer, so this is uniform in practice; a change flushes the
-  /// batch already buffered rather than misdelivering it to the new port.
-  int64_t completionBatchPort_ = 0;
 
   /// Spare easy handles, loop-thread owned. See `acquireEasy`.
   ///

@@ -12,7 +12,6 @@
 #include <cstdlib>
 #include <mutex>
 #include <utility>
-#include <vector>
 
 #include "dart_api_dl.h"
 
@@ -45,21 +44,6 @@ std::mutex& postHookMutex() {
 PostHook& postHookSlot() {
   static PostHook hook;
   return hook;
-}
-
-BatchHook& batchHookSlot() {
-  static BatchHook hook;
-  return hook;
-}
-
-/// Frees every blob in a batch. Used on the paths where the batch cannot be
-/// delivered — a dead port or an uninitialised Dart API — because the addresses
-/// are the only surviving references to those allocations.
-void releaseBatch(const std::vector<std::pair<int64_t, int64_t>>& items) {
-  for (const auto& item : items) {
-    auto* ptr = reinterpret_cast<uint8_t*>(static_cast<intptr_t>(item.second));
-    if (ptr != nullptr) std::free(ptr);
-  }
 }
 
 }  // namespace
@@ -111,54 +95,6 @@ bool postRecord(int64_t port, Blob blob) {
     return false;
   }
   return true;
-}
-
-bool postCoalescedBatch(
-    int64_t port, const std::vector<std::pair<int64_t, int64_t>>& items) {
-  if (items.empty()) return true;
-
-  {
-    std::lock_guard<std::mutex> lock(postHookMutex());
-    if (batchHookSlot()) return batchHookSlot()(port, items);
-  }
-
-  if (!dartPostAvailable()) {
-    releaseBatch(items);
-    return false;
-  }
-
-  // `[callId0, addr0, callId1, addr1, …]` — flat int64 pairs, which is what
-  // `NitroCoalescer._onBatch` walks two at a time. The element array is built on
-  // the stack-adjacent heap and only has to outlive the post call itself:
-  // Dart_PostCObject_DL copies the message before returning.
-  const size_t n = items.size() * 2;
-  std::vector<Dart_CObject> elems(n);
-  std::vector<Dart_CObject*> ptrs(n);
-  for (size_t i = 0; i < items.size(); ++i) {
-    elems[2 * i].type = Dart_CObject_kInt64;
-    elems[2 * i].value.as_int64 = items[i].first;   // callId
-    elems[2 * i + 1].type = Dart_CObject_kInt64;
-    elems[2 * i + 1].value.as_int64 = items[i].second;  // blob address
-  }
-  for (size_t i = 0; i < n; ++i) ptrs[i] = &elems[i];
-
-  Dart_CObject message{};
-  message.type = Dart_CObject_kArray;
-  message.value.as_array.length = static_cast<intptr_t>(n);
-  message.value.as_array.values = ptrs.data();
-
-  if (!Dart_PostCObject_DL(static_cast<Dart_Port_DL>(port), &message)) {
-    // Dead port. Every blob in the batch is unreachable from Dart now, so the
-    // whole burst has to be freed here — the single-post path does the same.
-    releaseBatch(items);
-    return false;
-  }
-  return true;
-}
-
-void setBatchHook(BatchHook hook) {
-  std::lock_guard<std::mutex> lock(postHookMutex());
-  batchHookSlot() = std::move(hook);
 }
 
 bool postNull(int64_t port) {

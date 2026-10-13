@@ -40,32 +40,11 @@ bool postRecord(int64_t port, Blob blob);
 /// transport failures ride inside the record.
 bool postNull(int64_t port);
 
-/// Posts a whole batch of completions as ONE `kArray` of int64,
-/// `[callId0, addr0, callId1, addr1, …]` — the wire `NitroCoalescer` decodes.
-///
-/// This is the entire point of coalescing: N completions that finish together
-/// cost ONE isolate wake instead of N. Each `addr` is an encoded record's
-/// malloc'd pointer widened to int64, and ownership passes to Dart exactly as it
-/// does for `postRecord` — Dart decodes and calls `nitro_http_nitro_free`.
-///
-/// Takes ownership unconditionally, like `postRecord`: on a dead port every blob
-/// in the batch is freed here and `false` is returned, so a hot restart cannot
-/// leak the burst it was holding.
-bool postCoalescedBatch(int64_t port,
-                        const std::vector<std::pair<int64_t, int64_t>>& items);
-
 /// Test seam. `hook` receives ownership of the blob exactly as
 /// `Dart_PostCObject_DL` would and returns whether the port was alive.
 /// Passing `nullptr` restores the real Dart post.
 using PostHook = std::function<bool(int64_t port, Blob blob)>;
 void setPostHook(PostHook hook);
-
-/// Test seam for [postCoalescedBatch]. Same contract: the hook owns every blob
-/// in the batch. `nullptr` restores the real Dart post.
-using BatchHook =
-    std::function<bool(int64_t port,
-                       const std::vector<std::pair<int64_t, int64_t>>& items)>;
-void setBatchHook(BatchHook hook);
 
 /// True when the Dart API DL has been initialised, i.e. posting is possible.
 /// False inside the C++ test binary, where the hook is used instead.

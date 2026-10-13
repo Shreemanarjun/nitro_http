@@ -24,7 +24,6 @@
 #include <chrono>
 #include <utility>
 
-#include "DartPost.h"
 #include "DeferredPayloads.h"
 
 namespace nitrohttp {
@@ -261,19 +260,11 @@ void CurlEngine::loop() {
       retire(task);
     }
 
-    // Every completion this turn produced is now buffered, so one post carries
-    // the whole burst. Draining first and posting once is the entire mechanism:
-    // flushing inside the loop above would be one wake per completion again.
-    flushCompletionBatch();
-
     enforceIdleDeadlines();
     flushAgedCoalesceBuffers();
   }
 
   completeAllWith(shutdownError());
-  // Shutdown completions are coalesced too — otherwise aborting a 64-request
-  // burst would post 64 times on the way down.
-  flushCompletionBatch();
 
   // Ops queued behind the shutdown op still own promises and pending requests.
   // Dropping them would hang a Dart Future or a cookie call forever.
@@ -295,32 +286,6 @@ void CurlEngine::loop() {
     std::lock_guard<std::mutex> lock(inboxMtx_);
     if (cookies_) cookies_->flush();
   }
-}
-
-void CurlEngine::enqueueCompletion(int64_t port, int64_t callId,
-                                  int64_t blobAddress) {
-  NITRO_HTTP_ASSERT_THREAD(loopGuard_);
-
-  // A port change would misdeliver everything already buffered, so flush first.
-  // In practice one client's coalesced requests all share one coalescer and this
-  // never fires; it exists so that "never fires" is a property, not a hope.
-  if (completionBatchPort_ != 0 && completionBatchPort_ != port) flushCompletionBatch();
-  completionBatchPort_ = port;
-  completionBatch_.emplace_back(callId, blobAddress);
-}
-
-void CurlEngine::flushCompletionBatch() {
-  NITRO_HTTP_ASSERT_THREAD(loopGuard_);
-  if (completionBatch_.empty()) return;
-
-  // Ownership of every blob leaves here: `postCoalescedBatch` either transfers
-  // the batch to Dart or frees it. Clearing before the call would strand the
-  // addresses, and clearing after a throw is not a concern because it does not
-  // throw — but the buffer is still swapped out first so that a re-entrant call
-  // could never see a half-posted batch.
-  std::vector<std::pair<int64_t, int64_t>> batch;
-  batch.swap(completionBatch_);
-  postCoalescedBatch(completionBatchPort_, batch);
 }
 
 /// How long the next `curl_multi_poll` may sleep.

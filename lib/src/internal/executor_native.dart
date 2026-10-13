@@ -1,17 +1,13 @@
 /// The FFI-backed [RequestExecutor] and [StreamDemux].
 ///
-/// Split out of `request_runner.dart` so the runner itself carries no
-/// `dart:ffi` import: web selects `executor_web.dart` instead, and a library
-/// that imports `dart:ffi` at all cannot be compiled for the browser.
+/// Split out of `request_runner.dart` so the runner carries no transitive FFI
+/// dependency: this library drives the native `NitroHttpNative` bindings, which
+/// cannot compile for the browser, so web selects `executor_web.dart` instead.
 library;
 
 import 'dart:async';
-import 'dart:ffi';
 import 'dart:typed_data';
 
-import 'package:nitro/nitro.dart' show NitroCoalescer, RecordReader;
-
-import '../api/exceptions.dart';
 import '../nitro_http.native.dart';
 import 'instance_keys.dart';
 import 'native_attach.dart';
@@ -25,78 +21,17 @@ final class NativeRequestExecutor implements RequestExecutor {
   NativeRequestExecutor(this.clientId)
     : _native = attachedNative(clientKey(clientId));
 
-  /// Whether buffered completions are batched through a [NitroCoalescer].
-  ///
-  /// A benchmark seam, not a user setting: the two paths are behaviourally
-  /// identical, so the only reason to switch is to measure them against each
-  /// other on the same machine in the same run. Flipping it mid-flight is safe —
-  /// each request captures its route at submit time — but the coalescer is
-  /// created lazily and never torn down until the executor is disposed.
-  static bool coalesceCompletions = true;
-
   final int clientId;
   final NitroHttpNative _native;
   bool _disposed = false;
-
-  /// Created on first coalesced send, so a client that only streams never opens
-  /// a port for this.
-  NitroCoalescer? _coalescer;
-
 
   @override
   void configureClient(RawClientConfig config) =>
       _native.configureClient(config);
 
   @override
-  Future<RawResponse> sendBuffered(RawRequest request, Uint8List body) {
-    if (!coalesceCompletions) return _native.sendBuffered(request, body);
-    return _sendCoalesced(request, body);
-  }
-
-  /// One post per BURST instead of one per request.
-  ///
-  /// `sendBuffered` opens a `ReceivePort` per call, so 64 requests finishing
-  /// together wake the isolate 64 times — measured at 37 us each and 74 % of
-  /// everything this client spends outside curl. Here the engine buffers
-  /// completions and posts each drained batch as a single `kArray`.
-  ///
-  /// The value carried back is the response blob's ADDRESS, because a coalescer
-  /// is int64-only. That is the same pointer the non-coalesced path posts; the
-  /// difference is that ownership is now explicit — decode it, then release it
-  /// through the engine's own allocator.
-  Future<RawResponse> _sendCoalesced(RawRequest request, Uint8List body) async {
-    final coalescer = _coalescer ??= NitroCoalescer();
-
-    final int address;
-    try {
-      address = await coalescer.submit(
-        (int callId, int port) =>
-            _native.sendBufferedCoalesced(callId, request, body, port),
-      );
-    } on StateError catch (error) {
-      // nitro 0.6.1 settles a call the coalescer can no longer deliver — the
-      // client was disposed mid-request — with a StateError rather than
-      // dropping it, which is what used to leave the Future hanging forever
-      // (nitro_ecosystem#47). Only the type is ours to improve: a caller should
-      // see this API's disposed exception, not the runtime's internal error.
-      throw NitroHttpDisposedException(engineMessage: error.message);
-    }
-
-    if (address == 0) {
-      // The batch wire has no null, so zero is how native says "could not even
-      // encode the error envelope" — the coalesced twin of `postNull`.
-      throw StateError(
-        'sendBufferedCoalesced: native could not encode the response record',
-      );
-    }
-    try {
-      return RawResponseRecordExt.fromReader(
-        RecordReader.fromNative(Pointer<Uint8>.fromAddress(address)),
-      );
-    } finally {
-      _shared.releaseRecord(address);
-    }
-  }
+  Future<RawResponse> sendBuffered(RawRequest request, Uint8List body) =>
+      _native.sendBuffered(request, body);
 
   @override
   Future<RawResponseHead> startStreamed(RawRequest request, Uint8List body) =>
@@ -121,13 +56,6 @@ final class NativeRequestExecutor implements RequestExecutor {
   /// called into a disposed native instance, which hangs the app rather than
   /// throwing. Disposing a screen's client and then cancelling its token on the
   /// way out is a perfectly ordinary thing to do.
-  ///
-  /// `releaseRecord` rides here for the same reason: natively it is a bare
-  /// `std::free` on the module's allocator, with nothing client-specific about
-  /// it. Freeing through the client meant a completion that arrived DURING
-  /// disposal — exactly the shutdown-abort case — threw `has been disposed`
-  /// from the `finally`, replacing the real error with a StateError and leaking
-  /// the blob it was trying to free.
   ///
   /// The engine role is a process singleton, so it is alive whenever any client
   /// is, and this static is cleared by a hot restart along with everything else.
@@ -182,16 +110,10 @@ final class NativeRequestExecutor implements RequestExecutor {
       // A client that never issued a request may have no jar; disposal must not
       // fail because of it.
     }
-    // Native first, Dart second. `_native.dispose()` aborts every in-flight
-    // transfer, and those abort completions still go through the batch — closing
-    // the coalescer first would drop the port they are posted to, and every one
-    // of those blobs would leak with its Future left hanging.
+    // `_native.dispose()` aborts every in-flight transfer; those abort
+    // completions ride nitro's shared completion batch, which the runtime drains
+    // and closes with the instance, so nothing is left hanging here.
     _native.dispose();
-
-    // `NitroCoalescer.dispose()` drains what native already posted before
-    // closing, and fails anything genuinely lost, so nothing here has to.
-    unawaited(_coalescer?.dispose() ?? Future<void>.value());
-    _coalescer = null;
   }
 
 }

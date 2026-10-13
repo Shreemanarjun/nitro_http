@@ -17,8 +17,6 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nitro_http/nitro_http.dart';
-import 'package:nitro_http/src/internal/executor_native.dart'
-    show NativeRequestExecutor;
 
 
 String? _locateLibrary() {
@@ -948,49 +946,5 @@ void main() {
             reason: 'the advertised h3 endpoint should be recorded');
       });
     }, skip: netSkip);
-  });
-
-  // ── The coalescer fallback ─────────────────────────────────────────────────
-  group('completion coalescing', () {
-    late _Origin origin;
-    NitroHttpClient? client;
-
-    setUp(() async => origin = await _Origin.start());
-    tearDown(() async {
-      client?.dispose();
-      client = null;
-      NativeRequestExecutor.coalesceCompletions = true;
-      await origin.stop();
-    });
-
-    test('requests still complete with coalescing OFF', () async {
-      // The fallback path for a feature that is on by default, so nothing
-      // exercised it. If the non-coalesced branch ever rots, every consumer who
-      // turns the optimisation off gets a client that never completes — and no
-      // test would have noticed.
-      NativeRequestExecutor.coalesceCompletions = false;
-      client = NitroHttpClient(
-        settings: const ClientSettings(timeout: Duration(seconds: 15)),
-      );
-      final results = await Future.wait([
-        for (var i = 0; i < 8; i++)
-          client!.get('http://127.0.0.1:${origin.port}/n$i'),
-      ]);
-      expect(results.map((r) => r.statusCode), everyElement(200));
-      expect(origin.hits, 8);
-    }, skip: skipReason);
-
-    test('and with coalescing ON, for comparison', () async {
-      NativeRequestExecutor.coalesceCompletions = true;
-      client = NitroHttpClient(
-        settings: const ClientSettings(timeout: Duration(seconds: 15)),
-      );
-      final results = await Future.wait([
-        for (var i = 0; i < 8; i++)
-          client!.get('http://127.0.0.1:${origin.port}/n$i'),
-      ]);
-      expect(results.map((r) => r.statusCode), everyElement(200));
-      expect(origin.hits, 8);
-    }, skip: skipReason);
   });
 }

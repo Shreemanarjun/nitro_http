@@ -55,18 +55,6 @@ struct PendingRequest {
   RespMode mode = RespMode::Buffered;
   int64_t dartPort = 0;
   double submittedAtMs = 0;     ///< for RawTimings::queueMs
-
-  /// Set by `sendBufferedCoalesced`. When `coalescePort` is non-zero the
-  /// completion does NOT get its own post: the encoded blob's address is buffered
-  /// as `(coalesceCallId, address)` and the whole drained batch goes out as one
-  /// `kArray` on `coalescePort`, so a burst shares one isolate wake.
-  ///
-  /// `dartPort` stays 0 in that case — the two are mutually exclusive, and
-  /// posting both would complete the same call twice.
-  int64_t coalescePort = 0;
-  int64_t coalesceCallId = -1;
-
-  bool coalesced() const { return coalescePort != 0; }
 };
 
 class RequestTask {
@@ -239,14 +227,10 @@ class RequestTask {
   /// the terminal chunk, a pause, a failure — or the tail of the body would be
   /// delivered late or not at all.
   void flushCoalesced();
-  /// Delivers a finished BUFFERED response. Ordinary requests get their own
-  /// post; `sendBufferedCoalesced` requests join the engine's batch instead, so
-  /// a burst finishing together costs one isolate wake rather than one each.
-  ///
-  /// Takes ownership of `blob` on both paths. A zero address is the batch wire's
-  /// "could not encode" signal — the coalescer carries plain int64s and has no
-  /// null — which the Dart runner turns into a StateError, mirroring what
-  /// `postNull` does for the non-coalesced path.
+  /// Delivers a finished BUFFERED response with one post. nitro's
+  /// `NitroCompletionBatch` coalesces these at the bridge when a burst finishes
+  /// while Dart is busy, so a burst still costs one isolate wake without any
+  /// batching here. Takes ownership of `blob`.
   void deliverBuffered(Blob blob);
 
   void emitTerminalChunk(const EngineError& err);

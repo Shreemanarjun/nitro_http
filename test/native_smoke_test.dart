@@ -638,11 +638,11 @@ void main() {
 
       doomed.dispose();
 
-      // Regression: the completions native posts on shutdown were queued but
-      // undelivered when `NitroCoalescer.dispose()` closed the port and cleared
-      // its completers, so this Future never resolved AT ALL. A request that
-      // hangs forever is worse than one that fails, and exactly-once completion
-      // is the invariant the whole engine is built around.
+      // Regression guard for exactly-once completion on disposal: the engine
+      // aborts every in-flight transfer when the instance is torn down, and
+      // those abort completions must still reach Dart. A request that hangs
+      // forever is worse than one that fails, and exactly-once completion is the
+      // invariant the whole engine is built around.
       final result = await pending.timeout(
         const Duration(seconds: 6),
         onTimeout: () => 'TIMED OUT — disposal dropped the completion',

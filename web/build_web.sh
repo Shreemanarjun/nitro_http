@@ -8,7 +8,7 @@
 #
 # Records the generated bridge each module was built against; `nitrogen doctor`
 # warns when a bridge has been regenerated since this script was written.
-# NITRO_BRIDGE_CHECKSUM nitro_http a610b1509657851a
+# NITRO_BRIDGE_CHECKSUM nitro_http f943b9e23ab23937
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -36,7 +36,7 @@ fi
 # nitro_http: shared src/ impl
 em++ -O2 --no-entry -fwasm-exceptions $THREAD_FLAGS \
   -Isrc -Isrc/native -I"$GEN" \
-  "$GEN/nitro_http.bridge.g.cpp" $IMPL_SOURCES \
+  "$GEN/nitro_http.bridge.g.cpp" $(ls src/HybridNitroHttp.cpp 2>/dev/null || echo $IMPL_SOURCES) \
   -sMODULARIZE=1 -sEXPORT_NAME=createNitroHttpModule \
   -sALLOW_MEMORY_GROWTH=1 -sALLOW_TABLE_GROWTH=1 \
   -sWASM_BIGINT=1 -sENVIRONMENT=web \

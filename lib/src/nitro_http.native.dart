@@ -786,11 +786,16 @@ abstract class NitroHttpNative extends HybridObject {
   // ── Capabilities (valid on any instance) ───────────────────────────────────
 
   /// e.g. `libcurl/8.21.0 OpenSSL/3.5.0 nghttp2/1.70.0 ngtcp2/1.25.0`.
+  @nitroFast
   String engineVersion();
 
+  @nitroFast
   bool supportsHttp3();
+  @nitroFast
   bool supportsWebSockets();
+  @nitroFast
   bool supportsBrotli();
+  @nitroFast
   bool supportsZstd();
 
   /// Hot-restart recovery: abort every transfer, join every thread, flush jars.
@@ -844,6 +849,7 @@ abstract class NitroHttpNative extends HybridObject {
   /// used, which is precisely the mismatch that makes Windows abort.
   ///
   /// Idempotent only against zero. Passing an address twice is a double free.
+  @nitroFast
   void releaseRecord(int address);
 
   @nitroNativeAsync
@@ -873,6 +879,7 @@ abstract class NitroHttpNative extends HybridObject {
   /// state alive through that transfer's own reference, so releasing early can
   /// never resurrect a cancelled transfer. Omitting the call leaks one small
   /// entry per token, which is why Dart releases from a `Finalizer`.
+  @nitroFast
   void releaseCancelToken(int tokenId);
 
   /// Download flow control **and** payload release, in one sub-microsecond call.

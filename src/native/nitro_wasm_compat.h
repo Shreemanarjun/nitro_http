@@ -200,11 +200,19 @@ static inline bool Dart_PostCObject_DL(Dart_Port_DL port, Dart_CObject* obj) {
       return true;
     }
     case Dart_CObject_kTypedData: {
-      // Record/variant batch streams post a Uint8 buffer. Length is in
-      // elements — for kUint8 that equals bytes (the only type bridges post).
+      // Typed-data posts travel as raw bytes (tag 6); the Dart side restores
+      // the element type. Length is in elements, so scale it to bytes.
+      const int64_t _elems = (int64_t)obj->value.as_typed_data.length;
+      int64_t _esz = 1;
+      switch (obj->value.as_typed_data.type) {
+        case Dart_TypedData_kInt16: case Dart_TypedData_kUint16: _esz = 2; break;
+        case Dart_TypedData_kInt32: case Dart_TypedData_kUint32: case Dart_TypedData_kFloat32: _esz = 4; break;
+        case Dart_TypedData_kInt64: case Dart_TypedData_kUint64: case Dart_TypedData_kFloat64: _esz = 8; break;
+        default: break;
+      }
 #if defined(__EMSCRIPTEN_PTHREADS__)
       if (_NITRO_OFF_MAIN()) {
-        const int64_t len = (int64_t)obj->value.as_typed_data.length;
+        const int64_t len = _elems * _esz;
         uint8_t* copy = (uint8_t*)malloc(len > 0 ? (size_t)len : 1);
         if (!copy) return false;
         memcpy(copy, obj->value.as_typed_data.values, (size_t)len);
@@ -213,7 +221,7 @@ static inline bool Dart_PostCObject_DL(Dart_Port_DL port, Dart_CObject* obj) {
 #endif
       g_nitro_post_fn(port, 6,
                       (int64_t)(intptr_t)obj->value.as_typed_data.values,
-                      (int64_t)obj->value.as_typed_data.length, 0.0);
+                      _elems * _esz, 0.0);
       return true;
     }
   }

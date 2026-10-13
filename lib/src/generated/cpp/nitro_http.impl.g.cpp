@@ -18,6 +18,10 @@
 //     Dart would decode-and-free a live local buffer.
 //   • Record/variant PARAMS are non-owning payload views (no length prefix)
 //     — copy if you need them after the call.
+//   • @HybridStruct RETURNS: the bridge deep-copies every pointer field
+//     (String, typed data, nested struct) before Dart sees it, so return
+//     views of your own storage (or the argument) and keep ownership of
+//     what you return; do not malloc fields for Dart to free.
 //   • TypedData RETURNS use NitroCppBuffer{ data, size } where size is in
 //     BYTES, not elements (Float32List: count * sizeof(float)). A wrong
 //     unit silently truncates the list Dart sees (bytes / elemSize).

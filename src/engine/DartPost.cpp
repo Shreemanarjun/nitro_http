@@ -16,6 +16,19 @@
 
 #include "dart_api_dl.h"
 
+#ifdef NITRO_HTTP_TESTING
+// The generated bridge header redefines `Dart_PostCObject_DL(port, obj)` to the
+// exported `nitro_http_nitro_post`, which lives in `nitro_http.bridge.g.cpp` —
+// deliberately not compiled into the test binaries, so a post can be intercepted
+// through `setPostHook` without the completion-batch machinery or a live
+// isolate. Dropping the macro here restores the direct call to Dart's own DL
+// pointer — null until an isolate initialises it, which is exactly what the test
+// wants: `dartPostAvailable()` is false and every post goes through the hook.
+// This is the only engine TU that calls the symbol directly; everything else
+// routes through `postRecord`.
+#undef Dart_PostCObject_DL
+#endif
+
 namespace nitrohttp {
 namespace {
 

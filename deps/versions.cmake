@@ -13,7 +13,7 @@
 #     re-reading ngtcp2's release notes.
 # ─────────────────────────────────────────────────────────────────────────────
 
-set(NITRO_HTTP_DEPS_RELEASE "deps-v1"
+set(NITRO_HTTP_DEPS_RELEASE "deps-v2"
     CACHE STRING "GitHub release tag holding the prebuilt dependency archives")
 # NOT a CACHE variable, deliberately.
 #
@@ -75,13 +75,13 @@ set(NH_ZLIB_SHA256     bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f
 #     So: never re-push an existing deps-vN tag. Cut deps-v(N+1) instead. If a
 #     tag does move, re-run `tool/deps/publish.sh --dir <downloaded assets>`
 #     and commit the result before anyone builds.
-set(NH_SLICE_android-arm64-v8a_SHA256   "6b91fbb0b857fad81b5738db96e968ab9c8448a09c2b4674ce2933b67d48e30b")
-set(NH_SLICE_android-armeabi-v7a_SHA256 "32672acf02a2f28674ff9f312fadee9f24f49a03cce5d9d918097cf6efe5cde5")
-set(NH_SLICE_android-x86_64_SHA256      "01dbb0912af563d2916e276977c3478832a9d019906351dc511dff715d1fabce")
-set(NH_SLICE_linux-x64_SHA256           "7559cc7ac1270330e4b689152a72e951dad94e6206d258d2f0bbdb0d9753b3e6")
-set(NH_SLICE_linux-arm64_SHA256         "293595ae0f3d56d5b469cd87e70231ef7f9fe20c84d44fcd440a7a061939f1f3")
-set(NH_SLICE_windows-x64_SHA256         "30671eaf7d4c7a1287ac98d9c8e484a5a6875d6ee521a633934778e25a8045d2")
-set(NH_SLICE_apple-xcframework_SHA256   "81c29b579f0bb9a6e3fa5a6c2c325e12e7c65ff72b70d63b755c5e6480498ba4")
+set(NH_SLICE_android-arm64-v8a_SHA256   "19d01b5ec8b431c09cb174b6370125fb835295392670fc45c8ee44733ab35428")
+set(NH_SLICE_android-armeabi-v7a_SHA256 "5d938ed62b9f99b9dd6780709594a3acaa4ec3e8228d54f96020996a04e3b378")
+set(NH_SLICE_android-x86_64_SHA256      "5b4f976ecc60c73d7d5fdd01bda5c55eb5da8446ae4abf59eeddf0a8fc12b413")
+set(NH_SLICE_linux-x64_SHA256           "aad99eb0727ca4dae30ae8f6a68e2188ec5ee6bff44a9f21179c7d4ae2804a7d")
+set(NH_SLICE_linux-arm64_SHA256         "ebc0af2bcdc198bd1c77c056219fa6bc5f9f019be06f7230e6776e94666724a4")
+set(NH_SLICE_windows-x64_SHA256         "71d95b09f2ebe725cad9e8f09691f515d2c1d55b78399eb922d33f108968c4d8")
+set(NH_SLICE_apple-xcframework_SHA256   "ec1e31d6e3ac83c7402568cb27825b11033f09ad70c9010b45ca08a74ed2bf2a")
 
 # The Apple release carries TWO artifacts built from the same objects but packed
 # differently, so they have different checksums and need different pins:
@@ -93,4 +93,4 @@ set(NH_SLICE_apple-xcframework_SHA256   "81c29b579f0bb9a6e3fa5a6c2c325e12e7c65ff
 #
 # Verifying the .zip against the .tar.gz pin is a guaranteed mismatch, and the
 # podspecs treat a mismatch as tampering and fail the install outright.
-set(NH_APPLE_XCFRAMEWORK_ZIP_SHA256     "ec24145c92c6dc6ea2c89b262d6c93da593838e1ca458dc86e9f1b170a866ce0")
+set(NH_APPLE_XCFRAMEWORK_ZIP_SHA256     "fb448ab9a5c5263ba439922f5e178784045cb309fce1a4f4916a53dc502aed9b")

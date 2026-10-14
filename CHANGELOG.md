@@ -2,23 +2,16 @@
 
 ### Changed
 
-* Upgraded to `nitro` 0.7.9 from 0.7.5. The 0.7.6–0.7.9 runtime adds completion
-  batching — native-async results that arrive while Dart is still handling the
-  previous message travel together and are acked once — plus a faster sync-call
-  path and quicker native↔Dart string codecs. No API or behaviour change.
-* Removed the hand-rolled completion coalescer. It posted each buffered
-  response's blob address over a `NitroCoalescer` port to batch bursts into one
-  isolate wake, freed through an explicit `releaseRecord`. nitro 0.7.6 now
-  batches every `@nitroNativeAsync` completion at the bridge, so the plain send
-  path is already coalesced — and measured 9–12 % *faster* than the manual layer
-  (serial and 64-wide burst, 0.7.9, `coalescer_ab_test`). The spec's
-  `sendBufferedCoalesced` / `releaseRecord`, their engine machinery and the
-  `coalesceCompletions` seam are gone. No API change.
-* The small synchronous bridge calls are now `@nitroFast`: the capability queries
-  (`engineVersion`, `supportsHttp3`/`WebSockets`/`Brotli`/`Zstd`) and
-  `releaseCancelToken` run inline instead of through a closure, with the error
-  slot read in debug builds only. Lower overhead on the hot, tiny calls; the
-  async send path is unchanged.
+* Upgraded to `nitro` 0.7.9 (from 0.7.5): bridge-level completion batching,
+  faster sync calls and string codecs. No API change.
+* Removed the hand-rolled completion coalescer — nitro 0.7.6 batches every
+  `@nitroNativeAsync` completion itself, and measured 9–12 % faster. No API change.
+* Small sync bridge calls (capability queries, `releaseCancelToken`) are now
+  `@nitroFast`.
+* `HttpTextResponse.bodyToJson()` decodes straight from `bodyBytes` (fused
+  UTF-8→JSON), ~30 % faster; a non-UTF-8 charset still uses the string path.
+* `CURLOPT_PIPEWAIT` is skipped for `http11Only` (nothing to multiplex); neutral
+  otherwise.
 
 ## 0.0.5
 

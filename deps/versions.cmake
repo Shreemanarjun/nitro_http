@@ -41,7 +41,7 @@ if(NOT DEFINED NITRO_HTTP_DEPS_BASE_URL)
 endif()
 
 # ── Component versions ───────────────────────────────────────────────────────
-set(NH_CURL_VERSION      8.21.0)
+set(NH_CURL_VERSION      8.22.0)
 set(NH_NGHTTP2_VERSION   1.70.0)
 set(NH_NGTCP2_VERSION    1.25.0)
 set(NH_NGHTTP3_VERSION   1.18.0)
@@ -51,7 +51,7 @@ set(NH_ZSTD_VERSION      1.5.7)
 set(NH_ZLIB_VERSION      1.3.2)   # vendored on Windows/Linux only
 
 # ── Source archive checksums (used by the superbuild) ────────────────────────
-set(NH_CURL_SHA256     aa1b66a70eace83dc624508745646c08ae561de512ab403adffb93ac87fc72e6)
+set(NH_CURL_SHA256     f7ef3ae8a22e521f289803fe93543eb64c329b58aa73a9e224dfd915a2a5f4f7)
 set(NH_NGHTTP2_SHA256  e05cb1388eaca3830aded4ccf20044b6e1ac1a61411dcca11b0437c4285c8bc2)
 set(NH_NGTCP2_SHA256   2a34d2484ba17847a5d11965704e9dd0fac4c6d8efc75ffe1ec7de66d8c6b6fb)
 set(NH_NGHTTP3_SHA256  aad782c23d3f01bd4bb52c8bac7a553b631ef8115fd1612703df6183449fef19)

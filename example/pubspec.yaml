@@ -53,6 +53,7 @@ dependencies:
   # is required to compile the example app. Comment this out (and the two
   # `rhttp` entries in benchmark.dart) if you do not have one.
   rhttp: ^0.18.0
+  http2: ^3.1.0
 
 dev_dependencies:
   # The measurement loop for `matrix_benchmark_test`: `AsyncBenchmarkBase`

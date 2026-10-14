@@ -201,10 +201,12 @@ Future<void> _writeReport(
 /// Never throws: a release build that dies in `main` cannot say why, so failures
 /// are printed and marked instead.
 Future<void> runReleaseBenchmark() async {
-  LocalServer? server;
+  IsolatedServer? server;
   try {
     NitroHttp.reset();
-    server = await LocalServer.start();
+    // The server runs in its own isolate so its event loop never contends with
+    // the pure-Dart clients under test — see [IsolatedServer].
+    server = await IsolatedServer.start();
     _emit('$beginMarker mode=$_buildMode '
         'engine=${NitroHttp.engineVersion.replaceAll('\n', ' ')}');
     if (!kReleaseMode) {

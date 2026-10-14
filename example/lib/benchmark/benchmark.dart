@@ -541,6 +541,43 @@ final class BenchmarkRunner {
 
     pairs:
     for (final (scenarioIndex, scenario) in _scenarios.indexed) {
+      if (cancel != null && cancel.isCancelled) break pairs;
+
+      // INTERLEAVED when the scenario supports it, the run is serial, and there
+      // is more than one client to interleave. Instead of measuring one client's
+      // whole block then the next, every client runs round-robin inside one
+      // shared window, so a machine spike lands on all of them in proportion
+      // rather than on whichever block happened to straddle it. That is what
+      // collapses the control-drift spread the aggregator kept flagging
+      // UNSTABLE — and it leaves the per-run medians drift-aligned, which is the
+      // comparison we actually want. (Round-robin forces one request at a time,
+      // so a concurrent/parallel run keeps the per-client block path.)
+      final spec = scenario.interleave;
+      final interleave = spec != null &&
+          libraries.length > 1 &&
+          config.execution == BenchmarkExecution.serial;
+
+      if (interleave) {
+        // Let the previous scenario's sockets drain before this one starts.
+        if (step > 0) {
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+        }
+        results.addAll(await _runInterleaved(
+          scenario: scenario,
+          spec: spec,
+          libraries: libraries,
+          baseUrl: baseUrl,
+          config: config,
+          cancel: cancel,
+          step: step,
+          stepCount: stepCount,
+          onProgress: onProgress,
+          onResult: onResult,
+        ));
+        step += libraries.length;
+        continue;
+      }
+
       // ROTATED, not fixed. Iterating `libraries` in enum order every time makes
       // one client permanently first, and first is not a neutral position: it
       // absorbs whatever the previous scenario left behind. A 512-connection
@@ -634,8 +671,137 @@ final class BenchmarkRunner {
         HttpLibrary.rhttp => _RhttpSubject(baseUrl),
       };
 
+  /// Measures one scenario across every client at once, round-robin.
+  ///
+  /// Every client is built and warmed up front, then each round runs one unit
+  /// of work for every client in rotation (the starting client advances each
+  /// round so none is systematically first). Because every client's samples are
+  /// spread across the whole measurement window, a transient on the machine
+  /// biases all of them together instead of penalising whichever block it landed
+  /// in — the per-run medians come out drift-aligned, which is the point.
+  ///
+  /// A client's reported wall clock is the sum of its OWN unit times, not the
+  /// shared window, so `req/s` stays that client's throughput as if it had run
+  /// the block alone.
+  static Future<List<BenchmarkResult>> _runInterleaved({
+    required _Scenario scenario,
+    required _InterleaveSpec spec,
+    required List<HttpLibrary> libraries,
+    required String baseUrl,
+    required BenchmarkConfig config,
+    required int step,
+    required int stepCount,
+    BenchmarkCancellation? cancel,
+    void Function(BenchmarkProgress)? onProgress,
+    void Function(BenchmarkResult)? onResult,
+  }) async {
+    final results = <BenchmarkResult>[];
+    final subjects = <_Subject>[];
+
+    // Build + warm (+ prime) every client. A client whose native library is
+    // missing becomes a failed row and simply does not take part in the
+    // rotation — the baseline columns must still be measured.
+    for (final library in libraries) {
+      try {
+        final subject = _subjectFor(library, baseUrl);
+        await subject.warmup(config);
+        subjects.add(subject);
+      } on Object catch (error) {
+        final failure = BenchmarkResult.failed(
+          scenario: scenario.name,
+          library: library,
+          error: '$error',
+        );
+        results.add(failure);
+        onResult?.call(failure);
+      }
+    }
+
+    if (subjects.isNotEmpty) {
+      final total = scenario.plannedIterations(config);
+      final units = spec.units(config);
+      final collected = <HttpLibrary, List<(Duration, int)>>{
+        for (final s in subjects) s.library: <(Duration, int)>[],
+      };
+      final busy = <HttpLibrary, Duration>{
+        for (final s in subjects) s.library: Duration.zero,
+      };
+
+      // Progress is reported once per round, rate-capped, and keyed to ONE
+      // constant library — not the rotating current one. Both receivers (the
+      // headless heartbeat and the UI strip) coalesce on a stable scenario/
+      // library pair; a label that changed every unit would defeat that
+      // coalescing and flood the platform log with tens of thousands of lines,
+      // whose own throttle would then swallow the results table printed last.
+      final reportLibrary = subjects.first.library;
+      final progressClock = Stopwatch()..start();
+      void report() => onProgress?.call(
+        BenchmarkProgress(
+          scenario: scenario.name,
+          library: reportLibrary,
+          completed: collected[reportLibrary]!.length,
+          total: total,
+          step: step + 1,
+          stepCount: stepCount,
+        ),
+      );
+      report();
+
+      for (var round = 0; round < units; round++) {
+        if (cancel?.isCancelled ?? false) break;
+        for (var k = 0; k < subjects.length; k++) {
+          final subject = subjects[(k + round) % subjects.length];
+          final (sample, wall) = await spec.unit(subject, config, round);
+          collected[subject.library]!.add(sample);
+          busy[subject.library] = busy[subject.library]! + wall;
+        }
+        if (progressClock.elapsedMilliseconds >= 100 || round == units - 1) {
+          progressClock.reset();
+          report();
+        }
+      }
+
+      // One result per client, in the libraries' declared order.
+      for (final subject in subjects) {
+        final result = _fromSamples(
+          scenario.name,
+          subject,
+          collected[subject.library]!,
+          busy[subject.library]!,
+          bytesVaryByClient: spec.bytesVaryByClient,
+        );
+        results.add(result);
+        onResult?.call(result);
+      }
+    }
+
+    for (final subject in subjects) {
+      await subject.close();
+    }
+    return results;
+  }
+
   static final List<_Scenario> _scenarios = [
-    _Scenario('small GET', (BenchmarkConfig c) => c.iterations, _runSmallGet),
+    _Scenario(
+      'small GET',
+      (BenchmarkConfig c) => c.iterations,
+      _runSmallGet,
+      interleave: _InterleaveSpec(
+        units: (BenchmarkConfig c) => c.iterations,
+        unit: (_Subject s, BenchmarkConfig c, int _) async {
+          final one = Stopwatch()..start();
+          final received = await s.getBytes('/bytes/${c.smallBodyBytes}');
+          final elapsed = one.elapsed;
+          return ((elapsed, received), elapsed);
+        },
+      ),
+    ),
+    // burst GET keeps the per-client block path: interleaving it would hold all
+    // five native client pools open while each fires a 16-wide burst, and five
+    // live libcurl/reqwest engines bursting against one loopback server is a
+    // different, heavier load than the row is meant to measure. Its drift is
+    // addressed instead by the out-of-process server (see [IsolatedServer]),
+    // which removes the event-loop contention that made the row noisy.
     _Scenario(
       'burst GET',
       (BenchmarkConfig c) => c.burstRequests * c.burstRepeats,
@@ -643,7 +809,32 @@ final class BenchmarkRunner {
     ),
     _Scenario('download', (BenchmarkConfig c) => c.transferRepeats, _runDownload),
     _Scenario('upload', (BenchmarkConfig c) => c.transferRepeats, _runUpload),
-    _Scenario('mixed', (BenchmarkConfig c) => c.mixedRequests, _runMixed),
+    _Scenario(
+      'mixed',
+      (BenchmarkConfig c) => c.mixedRequests,
+      _runMixed,
+      interleave: _InterleaveSpec(
+        units: (BenchmarkConfig c) => c.mixedRequests,
+        bytesVaryByClient: true,
+        unit: (_Subject s, BenchmarkConfig c, int i) async {
+          final clock = Stopwatch()..start();
+          final int transferred;
+          switch (i % 4) {
+            case 0:
+              transferred = await s.getBytes('/bytes/${c.smallBodyBytes}');
+            case 1:
+              transferred = await s.getBytes('/redirect/2');
+            case 2:
+              transferred = await s.getBytes('/slow/5');
+            default:
+              final (downloaded, _) = await s.download('/bytes/${256 * 1024}');
+              transferred = downloaded;
+          }
+          final elapsed = clock.elapsed;
+          return ((elapsed, transferred), elapsed);
+        },
+      ),
+    ),
   ];
 
   // ── Scenarios ──────────────────────────────────────────────────────────────
@@ -871,11 +1062,17 @@ final class _Context {
 /// A named scenario, how many iterations it plans, and the closure that measures
 /// it.
 final class _Scenario {
-  const _Scenario(this.name, this._plan, this._run);
+  const _Scenario(this.name, this._plan, this._run, {this.interleave});
 
   final String name;
   final int Function(BenchmarkConfig) _plan;
   final Future<BenchmarkResult> Function(_Subject, _Context) _run;
+
+  /// Non-null for the iteration scenarios that can be measured round-robin
+  /// across every client at once — see [BenchmarkRunner._runInterleaved]. Null
+  /// scenarios (download, upload) are single transfers with nothing to
+  /// interleave and keep the per-client block path.
+  final _InterleaveSpec? interleave;
 
   /// How many iterations this scenario will attempt, so progress has a
   /// denominator before the first request goes out.
@@ -883,6 +1080,38 @@ final class _Scenario {
 
   Future<BenchmarkResult> run(_Subject subject, _Context ctx) =>
       _run(subject, ctx);
+}
+
+/// One unit of interleaved work for one client: a `(latency, bytes)` sample and
+/// the wall clock the client itself spent on it (not the shared window).
+typedef _InterleaveUnit =
+    Future<((Duration, int), Duration)> Function(
+      _Subject subject,
+      BenchmarkConfig config,
+      int unitIndex,
+    );
+
+/// How a scenario is measured when its work is interleaved across every client.
+///
+/// Only the serial-dispatch latency scenarios (`small GET`, `mixed`) carry one:
+/// round-robin forces one request at a time per client, so a run in `concurrent`
+/// or `parallel` mode falls back to the per-client block path.
+final class _InterleaveSpec {
+  const _InterleaveSpec({
+    required this.units,
+    required this.unit,
+    this.bytesVaryByClient = false,
+  });
+
+  /// How many units (rounds) each client runs.
+  final int Function(BenchmarkConfig) units;
+
+  /// The measured unit of work.
+  final _InterleaveUnit unit;
+
+  /// Passed through to the result; `mixed` echoes request headers so its byte
+  /// counts legitimately differ by client.
+  final bool bytesVaryByClient;
 }
 
 /// The four operations every benchmarked client has to provide.

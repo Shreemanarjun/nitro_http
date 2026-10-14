@@ -10,6 +10,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -649,4 +650,62 @@ final class _DigestSink implements Sink<Digest> {
 
   @override
   void close() {}
+}
+
+/// A [LocalServer] running in its own isolate, for the benchmark only.
+///
+/// Three of the five benchmarked clients (`dart:io`, `package:http`, `dio`) do
+/// all their work on the Dart event loop. When the test server shares that loop,
+/// its request handling competes with the client under test for the one thread —
+/// and competes *unevenly*, because `nitro_http` and `rhttp` run their transfer
+/// on native threads and leave the loop freer than a pure-Dart client does. That
+/// asymmetry is a systematic bias, not just noise, and it is worst on the burst
+/// row where the server is doing the most. Hosting the server in its own isolate
+/// gives it its own event loop on its own thread, so loopback traffic crosses
+/// between two threads exactly as it would against an out-of-process server.
+///
+/// Only [baseUrl] and [stop] are exposed: the benchmark verifies via the byte
+/// counts the client returns, never via the server's hit log, so none of
+/// [LocalServer]'s introspection is needed here — and it could not be read across
+/// the isolate boundary anyway. The functional suites that DO assert on
+/// server-side state keep using [LocalServer] in-process.
+final class IsolatedServer {
+  IsolatedServer._(this.baseUrl, this._control);
+
+  /// `http://127.0.0.1:<port>` with no trailing slash, served from the child
+  /// isolate.
+  final String baseUrl;
+
+  /// Where the child waits for the stop signal.
+  final SendPort _control;
+
+  /// Spawns the isolate, starts a [LocalServer] inside it, and returns once it
+  /// is bound and serving.
+  static Future<IsolatedServer> start() async {
+    final handshake = ReceivePort();
+    await Isolate.spawn(_main, handshake.sendPort);
+    final ready = await handshake.first as List<Object?>;
+    handshake.close();
+    return IsolatedServer._(ready[0]! as String, ready[1]! as SendPort);
+  }
+
+  /// Stops the server and lets the isolate exit. Returns only once the child has
+  /// actually closed its sockets, so a following run cannot race the teardown.
+  Future<void> stop() async {
+    final done = ReceivePort();
+    _control.send(done.sendPort);
+    await done.first;
+    done.close();
+  }
+
+  /// Child-isolate entry point — a static method, as `Isolate.spawn` requires.
+  static Future<void> _main(SendPort reply) async {
+    final server = await LocalServer.start();
+    final control = ReceivePort();
+    reply.send(<Object?>[server.baseUrl, control.sendPort]);
+    final ack = await control.first as SendPort;
+    await server.stop();
+    control.close();
+    ack.send(null); // unblocks the parent's stop(); the isolate then exits.
+  }
 }

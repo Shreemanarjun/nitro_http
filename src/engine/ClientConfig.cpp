@@ -335,7 +335,15 @@ EngineError ClientConfig::applyTo(CURL* easy) const {
   // connections, which is worth most where a handshake costs an RTT and CPU.
   // HTTP/1.1 was checked for the obvious regression (waiting cannot help where
   // nothing multiplexes) and does not pay for it: 40 ms median either way.
-  curl_easy_setopt(easy, CURLOPT_PIPEWAIT, 1L);
+  //
+  // Still, PIPEWAIT is meaningless when the caller has pinned HTTP/1.1 — there
+  // is no multiplexing connection to wait for — so gate it on the version
+  // preference. Every multiplex-capable preference (auto, http2*, http3*) keeps
+  // it; only `http11Only` drops it. This also gives the burst A/B a clean lever:
+  // `http11Only` vs `auto` on the same h1 origin isolates the wait's cost.
+  if (raw_.httpVersion != RawHttpVersionPref::RAWHTTPVERSIONPREF_HTTP11_ONLY) {
+    curl_easy_setopt(easy, CURLOPT_PIPEWAIT, 1L);
+  }
 
   curl_easy_setopt(easy, CURLOPT_TCP_KEEPALIVE, 1L);
   if (raw_.pool.keepAlivePingMs > 0) {

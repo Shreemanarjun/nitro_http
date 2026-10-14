@@ -331,6 +331,42 @@ void main() {
       expect(response.bodyToJson, throwsA(isA<NitroHttpDecodingException>()));
       expect(response.bodyToJson, throwsA(isA<NitroHttpException>()));
     });
+
+    HttpTextResponse jsonBytesWith(String contentType, List<int> bytes) =>
+        HttpTextResponse(
+          meta: _meta(headers: HttpHeaders()..set('content-type', contentType)),
+          bodyBytes: Uint8List.fromList(bytes),
+        );
+
+    test('decodes multi-byte UTF-8 straight from the bytes', () {
+      // The fast path walks UTF-8 bytes directly rather than a UTF-16 string,
+      // so prove it handles multi-byte sequences, not just ASCII.
+      final bytes = utf8.encode('{"name":"café","emoji":"😀"}');
+      expect(jsonBytesWith('application/json', bytes).bodyToJson(), {
+        'name': 'café',
+        'emoji': '😀',
+      });
+    });
+
+    test('honours an explicit utf-8 charset on the fast path', () {
+      final bytes = utf8.encode('{"x":"café"}');
+      expect(
+        jsonBytesWith('application/json; charset=utf-8', bytes).bodyToJson(),
+        {'x': 'café'},
+      );
+    });
+
+    test('falls back to the charset path for a non-utf-8 charset', () {
+      // 0xE9 is 'é' in latin1 but a lone malformed byte in UTF-8. The latin1
+      // branch must decode through the charset-aware string, so the result is
+      // 'é' and not the U+FFFD the byte decoder would substitute.
+      final bytes = latin1.encode('{"x":"é"}');
+      expect(
+        jsonBytesWith('application/json; charset=iso-8859-1', bytes)
+            .bodyToJson(),
+        {'x': 'é'},
+      );
+    });
   });
 
   group('toString', () {

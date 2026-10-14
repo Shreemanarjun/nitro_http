@@ -79,11 +79,13 @@ BenchmarkExecution get _execution => BenchmarkExecution.values.firstWhere(
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  late LocalServer server;
+  late IsolatedServer server;
 
   setUpAll(() async {
     NitroHttp.reset();
-    server = await LocalServer.start();
+    // Own isolate, own event loop: the server never shares a thread with the
+    // pure-Dart clients it is measuring — see [IsolatedServer].
+    server = await IsolatedServer.start();
   });
 
   tearDownAll(() async => server.stop());

@@ -745,6 +745,11 @@ final class PoolSettings {
   /// Simultaneous connections to one origin. Defaults to 6, matching browser
   /// behaviour for HTTP/1.1. HTTP/2 and HTTP/3 multiplex over one connection
   /// and rarely reach this.
+  ///
+  /// The default throttles a large HTTP/1.1 burst: firing 64 requests at once
+  /// over a 6-connection cap serialises them 6 at a time. Raise it for a
+  /// burst-heavy HTTP/1.1 workload; on HTTP/2 leave it low and let multiplexing
+  /// carry the concurrency.
   final int maxConnectionsPerHost;
 
   /// How long an unused connection stays pooled. Defaults to 90 seconds — below

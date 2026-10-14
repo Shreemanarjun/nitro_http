@@ -47,6 +47,8 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:nitro_http/nitro_http.dart';
 
+import '../core/http_library.dart';
+import '../server/h2_server.dart';
 import '../server/local_server.dart';
 import 'benchmark.dart';
 import 'execution.dart';
@@ -130,6 +132,26 @@ const String _executionName =
 const int _concurrency =
     int.fromEnvironment('BENCH_CONCURRENCY', defaultValue: 16);
 
+/// Which test server to run against: `h1` (default, the full HTTP/1.1 suite) or
+/// `h2` (cleartext HTTP/2, prior knowledge).
+///
+/// HTTP/2 mode is nitro-only on the four h2-served scenarios: the pure-Dart
+/// clients have no HTTP/2 client, rhttp needs a prior-knowledge flag the subject
+/// does not set, and the h2 server does not serve `mixed`'s redirect/slow/echo
+/// routes. It measures nitro's multiplexing across scenarios, read against an h1
+/// run of the same scenarios.
+const String _serverMode =
+    String.fromEnvironment('BENCH_SERVER', defaultValue: 'h1');
+const bool _useH2 = _serverMode == 'h2';
+
+/// The scenarios the h2 test server can serve (everything but `mixed`).
+const List<String> _h2Scenarios = <String>[
+  'small GET',
+  'burst GET',
+  'download',
+  'upload',
+];
+
 /// Resolves [_executionName], falling back rather than throwing: a typo in a
 /// `--dart-define` must not turn a twenty-minute device run into a crash on
 /// launch. The chosen mode is printed in the preamble either way.
@@ -201,13 +223,22 @@ Future<void> _writeReport(
 /// Never throws: a release build that dies in `main` cannot say why, so failures
 /// are printed and marked instead.
 Future<void> runReleaseBenchmark() async {
-  IsolatedServer? server;
+  Future<void> Function()? stopServer;
   try {
     NitroHttp.reset();
     // The server runs in its own isolate so its event loop never contends with
-    // the pure-Dart clients under test — see [IsolatedServer].
-    server = await IsolatedServer.start();
-    _emit('$beginMarker mode=$_buildMode '
+    // the pure-Dart clients under test — see [IsolatedServer] / [IsolatedH2Server].
+    final String baseUrl;
+    if (_useH2) {
+      final h2 = await IsolatedH2Server.start();
+      baseUrl = h2.baseUrl;
+      stopServer = h2.stop;
+    } else {
+      final h1 = await IsolatedServer.start();
+      baseUrl = h1.baseUrl;
+      stopServer = h1.stop;
+    }
+    _emit('$beginMarker mode=$_buildMode server=$_serverMode '
         'engine=${NitroHttp.engineVersion.replaceAll('\n', ' ')}');
     if (!kReleaseMode) {
       _emit('WARNING this is a $_buildMode build. Its timings are not '
@@ -220,7 +251,7 @@ Future<void> runReleaseBenchmark() async {
 
     final started = Stopwatch()..start();
     final report = await BenchmarkRunner(
-      baseUrl: server.baseUrl,
+      baseUrl: baseUrl,
       config: BenchmarkConfig(
         warmupRequests: _warmup,
         iterations: _iterations,
@@ -232,6 +263,13 @@ Future<void> runReleaseBenchmark() async {
         uploadBytes: _uploadMiB * 1024 * 1024,
         execution: _execution,
         concurrency: _concurrency,
+        // h2 mode is nitro-only on the h2-served scenarios (see [_serverMode]).
+        libraries: _useH2
+            ? const <HttpLibrary>[HttpLibrary.nitroHttp]
+            : HttpLibrary.values,
+        httpVersionPref:
+            _useH2 ? HttpVersionPref.http2Only : HttpVersionPref.auto,
+        includeScenarios: _useH2 ? _h2Scenarios : null,
       ),
     ).run(onProgress: _heartbeat(started));
 
@@ -253,7 +291,7 @@ Future<void> runReleaseBenchmark() async {
     _emit('$stack');
     exitCode = 1;
   } finally {
-    await server?.stop();
+    await stopServer?.call();
     await _quit();
   }
 }

@@ -53,6 +53,8 @@ final class BenchmarkConfig {
     this.execution = BenchmarkExecution.serial,
     this.concurrency = 16,
     this.libraries = HttpLibrary.values,
+    this.httpVersionPref = HttpVersionPref.auto,
+    this.includeScenarios,
   });
 
   /// A configuration small enough to run interactively.
@@ -68,7 +70,9 @@ final class BenchmarkConfig {
       smallBodyBytes = 1024,
       execution = BenchmarkExecution.serial,
       concurrency = 16,
-      libraries = HttpLibrary.values;
+      libraries = HttpLibrary.values,
+      httpVersionPref = HttpVersionPref.auto,
+      includeScenarios = null;
 
   /// Requests discarded before measuring, so connection setup and JIT warm-up
   /// do not land in the p50.
@@ -135,6 +139,15 @@ final class BenchmarkConfig {
   /// fifths of the time, and because a machine with no native engine built has
   /// two rows that can only ever say "unsupported".
   final List<HttpLibrary> libraries;
+
+  /// Protocol preference handed to the nitro client (the others ignore it). The
+  /// benchmark's HTTP/2 server mode sets `http2Only` so nitro reaches the
+  /// cleartext-h2 server by prior knowledge.
+  final HttpVersionPref httpVersionPref;
+
+  /// When non-null, only these scenario names run. HTTP/2 mode drops `mixed` —
+  /// its redirect/slow/echo routes are not served by the h2 test server.
+  final List<String>? includeScenarios;
 
   /// How many of [count] iterations may be in flight under [execution].
   int inFlight(int count) => switch (execution) {
@@ -536,11 +549,16 @@ final class BenchmarkRunner {
     final overall = Stopwatch()..start();
     final results = <BenchmarkResult>[];
     final libraries = config.libraries;
-    final stepCount = _scenarios.length * libraries.length;
+    final scenarios = config.includeScenarios == null
+        ? _scenarios
+        : _scenarios
+            .where((_Scenario s) => config.includeScenarios!.contains(s.name))
+            .toList(growable: false);
+    final stepCount = scenarios.length * libraries.length;
     var step = 0;
 
     pairs:
-    for (final (scenarioIndex, scenario) in _scenarios.indexed) {
+    for (final (scenarioIndex, scenario) in scenarios.indexed) {
       if (cancel != null && cancel.isCancelled) break pairs;
 
       // INTERLEAVED when the scenario supports it, the run is serial, and there
@@ -623,7 +641,7 @@ final class BenchmarkRunner {
 
         _Subject? subject;
         try {
-          subject = _subjectFor(library, baseUrl);
+          subject = _subjectFor(library, baseUrl, config.httpVersionPref);
           await subject.warmup(config);
           final result = await scenario.run(
             subject,
@@ -662,9 +680,13 @@ final class BenchmarkRunner {
     );
   }
 
-  static _Subject _subjectFor(HttpLibrary library, String baseUrl) =>
+  static _Subject _subjectFor(
+    HttpLibrary library,
+    String baseUrl,
+    HttpVersionPref httpVersionPref,
+  ) =>
       switch (library) {
-        HttpLibrary.nitroHttp => _NitroSubject(baseUrl),
+        HttpLibrary.nitroHttp => _NitroSubject(baseUrl, httpVersionPref),
         HttpLibrary.dartIo => _DartIoSubject(baseUrl),
         HttpLibrary.packageHttp => _PackageHttpSubject(baseUrl),
         HttpLibrary.dio => _DioSubject(baseUrl),
@@ -703,7 +725,7 @@ final class BenchmarkRunner {
     // rotation — the baseline columns must still be measured.
     for (final library in libraries) {
       try {
-        final subject = _subjectFor(library, baseUrl);
+        final subject = _subjectFor(library, baseUrl, config.httpVersionPref);
         await subject.warmup(config);
         subjects.add(subject);
       } on Object catch (error) {
@@ -1144,13 +1166,14 @@ mixin _WarmupMixin implements _Subject {
 }
 
 final class _NitroSubject with _WarmupMixin implements _Subject {
-  _NitroSubject(String baseUrl)
+  _NitroSubject(String baseUrl, HttpVersionPref httpVersionPref)
     : _client = NitroHttpClient(
         settings: ClientSettings(
           baseUrl: baseUrl,
           // Compression off: the payload is incompressible random bytes, so
           // gzip would only add CPU to both ends and skew the comparison.
           enableCompression: false,
+          httpVersionPref: httpVersionPref,
           poolSettings: const PoolSettings(maxConnectionsPerHost: 64),
         ),
       );

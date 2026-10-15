@@ -100,6 +100,24 @@ hash_url() {
   rm -f "$tmp"
 }
 
+# The libcurl version string baked into a release's Apple xcframework, or empty.
+# A release built BEFORE a version bump still PASSES checksum verification (the
+# pins describe its real content) yet ships the wrong library — the one failure
+# mode a hash can't see. This reads the truth out of the binary.
+artifact_curl_version() {
+  local dir="$1" zip tmp lib ver
+  zip="$dir/NitroCurl.xcframework.zip"
+  [ -f "$zip" ] || return 0
+  command -v unzip >/dev/null 2>&1 && command -v strings >/dev/null 2>&1 || return 0
+  tmp="$(mktemp -d)"
+  if unzip -q "$zip" -d "$tmp" 2>/dev/null; then
+    lib="$(find "$tmp" -path '*macos*' -name '*.a' 2>/dev/null | head -1)"
+    ver="$(strings "$lib" 2>/dev/null | grep -oE 'libcurl/[0-9]+\.[0-9]+\.[0-9]+' | sed 's#libcurl/##' | sort -u | head -1)"
+  fi
+  rm -rf "$tmp"
+  printf '%s' "$ver"
+}
+
 # Replace the value token of a `set(VAR  value)` line, preserving the leading
 # alignment and any trailing `)  # comment`.
 set_cmake() {
@@ -137,7 +155,22 @@ if [ -n "$PIN_TAG" ]; then
   tool/deps/publish.sh --dir "$dir" || die "publish.sh failed"
   echo "==> pointing NITRO_HTTP_DEPS_RELEASE at $PIN_TAG"
   perl -i -pe "s/(set\\(NITRO_HTTP_DEPS_RELEASE\\s+\")[^\"]+(\")/\${1}$PIN_TAG\${2}/" "$VERSIONS"
-  tool/deps/publish.sh --check || warn "pins do not verify — inspect $VERSIONS"
+  # Verify against the SAME downloaded release, not tool/deps/out — a stale local
+  # build there would otherwise report a false mismatch.
+  tool/deps/publish.sh --check --dir "$dir" || warn "pins do not verify — inspect $VERSIONS"
+
+  # Cross-check the shipped library version against the source pin: a release cut
+  # before a version bump passes every checksum yet carries the old library.
+  built="$(artifact_curl_version "$dir")"
+  pinned="$(cmake_value NH_CURL_VERSION)"
+  if [ -n "$built" ] && [ "$built" != "$pinned" ]; then
+    warn ""
+    warn "VERSION MISMATCH: $PIN_TAG was built with curl $built, but NH_CURL_VERSION is $pinned."
+    warn "The release predates the version bump — it will NOT ship curl $pinned."
+    warn "Cut a new deps tag from a commit that already has $pinned (bump + commit, THEN tag)."
+  elif [ -n "$built" ]; then
+    echo "  curl $built in the release matches the source pin"
+  fi
   echo
   echo "Done. Review and commit $VERSIONS, then rebuild the app."
   exit 0

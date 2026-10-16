@@ -187,7 +187,7 @@ void assertThread(const ThreadGuard& guard, const char* file, int line);
 
 // ── Capability queries ───────────────────────────────────────────────────────
 
-/// `libcurl/8.21.0 OpenSSL/3.5.0 nghttp2/1.70.0 …` — whatever curl reports,
+/// `libcurl/8.23.0 OpenSSL/3.5.0 nghttp2/1.70.0 …` — whatever curl reports,
 /// verbatim, so a bug report identifies the exact stack.
 std::string engineVersionString();
 bool hasHttp3();

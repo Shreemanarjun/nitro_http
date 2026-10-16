@@ -785,7 +785,7 @@ abstract class NitroHttpNative extends HybridObject {
 
   // ── Capabilities (valid on any instance) ───────────────────────────────────
 
-  /// e.g. `libcurl/8.21.0 OpenSSL/3.5.0 nghttp2/1.70.0 ngtcp2/1.25.0`.
+  /// e.g. `libcurl/8.23.0 OpenSSL/3.5.0 nghttp2/1.70.0 ngtcp2/1.25.0`.
   @nitroFast
   String engineVersion();
 

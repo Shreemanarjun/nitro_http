@@ -2,6 +2,9 @@
 
 ### Changed
 
+* Upgraded the bundled **libcurl to 8.23.0** (from 8.21.0), built against
+  BoringSSL with HTTP/3, brotli and zstd. Prebuilt native slices ship as the
+  `deps-v4` release; no API change.
 * Upgraded to `nitro` 0.7.9 (from 0.7.5): bridge-level completion batching,
   faster sync calls and string codecs. No API change.
 * Removed the hand-rolled completion coalescer — nitro 0.7.6 batches every

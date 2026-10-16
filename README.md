@@ -211,7 +211,7 @@ way to confirm a build picked up the vendored slice rather than a system
 libcurl:
 
 ```dart
-print(NitroHttp.engineVersion);      // libcurl/8.21.0 BoringSSL … ngtcp2/1.25.0
+print(NitroHttp.engineVersion);      // libcurl/8.23.0 BoringSSL … ngtcp2/1.25.0
 print(NitroHttp.supportsHttp3);      // true with the shipped slice
 print(NitroHttp.supportsBrotli);
 print(NitroHttp.supportsZstd);
@@ -993,7 +993,7 @@ not use the adapter tree-shakes it away.
 Ask the engine what it can actually do, rather than assuming:
 
 ```dart
-print(NitroHttp.engineVersion);      // libcurl/8.21.0 ... nghttp2/1.70.0 ...
+print(NitroHttp.engineVersion);      // libcurl/8.23.0 ... nghttp2/1.70.0 ...
 print(NitroHttp.supportsHttp3);
 print(NitroHttp.supportsWebSockets);
 print(NitroHttp.supportsBrotli);

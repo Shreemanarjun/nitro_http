@@ -113,7 +113,7 @@ final class EngineInfo {
     }
   }
 
-  /// The native stack string, e.g. `libcurl/8.21.0 OpenSSL/3.5.0`.
+  /// The native stack string, e.g. `libcurl/8.23.0 OpenSSL/3.5.0`.
   final String version;
 
   /// Whether the linked libcurl has a QUIC backend.

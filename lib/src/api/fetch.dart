@@ -80,7 +80,7 @@ abstract final class NitroHttp {
   // ── Capabilities ───────────────────────────────────────────────────────────
 
   /// The native stack, verbatim — e.g.
-  /// `libcurl/8.21.0 OpenSSL/3.5.0 nghttp2/1.70.0 ngtcp2/1.25.0`.
+  /// `libcurl/8.23.0 OpenSSL/3.5.0 nghttp2/1.70.0 ngtcp2/1.25.0`.
   static String get engineVersion => _engineExecutor.engineVersion;
 
   /// Whether the linked libcurl was built with QUIC support. `HttpVersionPref`

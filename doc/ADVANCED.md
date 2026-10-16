@@ -338,7 +338,7 @@ One binary has to behave correctly against whatever libcurl it was linked with,
 so features are queried rather than assumed:
 
 ```dart
-print(NitroHttp.engineVersion);      // libcurl/8.21.0 ... nghttp2/1.70.0 ...
+print(NitroHttp.engineVersion);      // libcurl/8.23.0 ... nghttp2/1.70.0 ...
 print(NitroHttp.supportsHttp3);
 print(NitroHttp.supportsWebSockets);
 print(NitroHttp.supportsBrotli);

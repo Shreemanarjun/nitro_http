@@ -1,0 +1,69 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# nitro_http vs native HTTP client — comparison benchmark.
+#
+# Deliberately NOT part of ci.yml and NOT PR-gated: a benchmark on a shared
+# cloud runner is noisy, so its numbers are informational, never a pass/fail
+# gate (a perf regression that matters is caught locally on real hardware with
+# tool/bench-compare.sh). Run it by hand from the Actions tab when you want a
+# fresh nitro-vs-URLSession table, e.g. after a nitro bump or an engine change.
+#
+# macOS only. GitHub's macos runners are real Apple silicon, so the ratio is
+# meaningful. Android is intentionally absent: tool/bench-android.sh refuses an
+# emulator because emulated timings are not device-representative — run
+# `tool/bench-compare.sh android` locally against a real phone instead.
+# ─────────────────────────────────────────────────────────────────────────────
+name: bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "nitro benchmark runs (the aggregator takes the median)"
+        default: "10"
+
+permissions:
+  contents: read
+
+jobs:
+  compare-macos:
+    name: nitro_http vs URLSession (macOS, Apple silicon)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # The example depends on rhttp, which builds a Rust crate — same toolchain
+      # step the ci.yml example jobs carry.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        run: |
+          flutter pub get
+          (cd example && flutter pub get)
+
+      # BENCH_CI=1 downgrades bench-macos.sh's quiet-machine preflight (a CI VM
+      # never passes it); the comparison is a ratio, so shared-runner noise hits
+      # both clients equally. Build once, run N times, emit the table.
+      - name: Run comparison
+        env:
+          BENCH_CI: "1"
+        run: bash tool/bench-compare.sh macos "${{ github.event.inputs.runs || '10' }}"
+
+      - name: Publish table to the run summary
+        if: always()
+        run: |
+          f=$(ls build/bench/compare-macos-*/comparison.md 2>/dev/null | tail -1 || true)
+          [ -n "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY" || echo "no comparison produced" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-compare-macos
+          path: build/bench/compare-macos-*/
+          if-no-files-found: warn

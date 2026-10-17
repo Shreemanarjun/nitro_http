@@ -647,6 +647,51 @@ All three then discard the first run as warm-up and hand the rest to
 The raw per-run logs are kept under `build/bench/`, so any published number can
 be traced back to the runs it came from.
 
+#### Against the platform's native client
+
+The four competitors above are Dart clients. To answer the other question — how
+fast is nitro_http against the platform's *native* HTTP stack, Swift
+`URLSession` on Apple and Kotlin `OkHttp` on Android — `tool/bench-compare.sh`
+runs nitro_http and the native client against the **same** `shelf` server, the
+same scenarios and the same hardware, then prints one table with a speedup
+column:
+
+```sh
+tool/bench-compare.sh macos 10      # nitro_http vs URLSession, on this Mac
+tool/bench-compare.sh android 10    # nitro_http vs OkHttp, on an attached REAL device
+```
+
+Fairness is enforced as carefully as the heat and load gates. The native client
+hits the identical server — `tool/bench_serve.dart` on macOS, the
+`example/lib/bench_serve_device.dart` entrypoint on the device for Android — and
+on Android that server runs **on the device**, never across an `adb reverse` USB
+tunnel: the tunnel caps throughput at USB speed and adds a round-trip to every
+request (measured, it turned a device-local 1.2 ms small GET into 4.6 ms and
+113 MiB/s into 29). The OkHttp burst uses async `enqueue` so it is the fair
+analogue of nitro_http's async engine rather than paying 64 thread creations a
+round; the Swift binary is compiled with `swiftc` directly because SPM is broken
+under Xcode 27. `tool/bench_compare.py` merges the two sides on their p50s.
+
+CI runs this on macOS only — a **manual** `bench` workflow (Actions tab), on a
+real Apple-silicon runner, with its table posted to the run summary and uploaded
+as an artifact. It is informational, never a PR gate. Android is local-only: an
+emulator's timings are not device-representative, which is exactly why
+`tool/bench-android.sh` refuses one. `BENCH_CI=1` bypasses the quiet-machine and
+thermal gates on a runner (the ratio still holds — shared-host noise hits both
+clients), and `BENCH_KEEP=1` reuses an existing build.
+
+A representative result — nitro_http wins concurrency and bulk on both
+platforms; the native client wins tiny-request latency on mobile, where
+nitro's per-call FFI overhead dominates on a slower CPU and is negligible on the
+Mac:
+
+| scenario   | macOS vs URLSession | Android vs OkHttp |
+|------------|---------------------|-------------------|
+| small GET  | nitro **3.3×**      | OkHttp **1.7×**   |
+| burst (64) | nitro **7.5×**      | nitro **3.1×**    |
+| download   | parity              | nitro **1.2×**    |
+| upload     | nitro **1.1×**      | nitro **1.2×**    |
+
 To do it by hand instead:
 
 ```sh

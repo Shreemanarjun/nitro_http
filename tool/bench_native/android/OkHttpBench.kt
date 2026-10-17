@@ -8,11 +8,16 @@
 // Android section. Args: <baseUrl> [smallIters=10000] [transfers=10]
 // [burst=64] [burstRepeats=10].
 
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.system.exitProcess
 
@@ -71,17 +76,30 @@ fun main(args: Array<String>) {
     val p90 = pctile(us, 0.90); val p99 = pctile(us, 0.99)
     println("  small GET   p50 ${r(median(us))} us   p90 ${r(p90)}   p99 ${r(p99)}")
 
-    // burst: `burstWidth` concurrent GETs via threads, repeated
+    // burst: `burstWidth` concurrent GETs, repeated. Uses OkHttp's async
+    // enqueue (its dispatcher thread pool) rather than one raw thread per
+    // request — the fair analogue of nitro_http firing N concurrent requests on
+    // its async engine. Raw threads would charge OkHttp 64 OS-thread creations
+    // per round, which nitro never pays.
     run {
         repeat(2) { getFully(smallPath) }
         val ms = DoubleArray(burstReps)
         for (rep in 0 until burstReps) {
+            val latch = CountDownLatch(burstWidth)
             val t = System.nanoTime()
-            val threads = (0 until burstWidth).map { Thread { getFully(smallPath) }.apply { start() } }
-            threads.forEach { it.join() }
+            for (j in 0 until burstWidth) {
+                client.newCall(Request.Builder().url(base + smallPath).build())
+                    .enqueue(object : Callback {
+                        override fun onFailure(call: Call, e: IOException) { latch.countDown() }
+                        override fun onResponse(call: Call, response: Response) {
+                            response.use { it.body!!.bytes() }; latch.countDown()
+                        }
+                    })
+            }
+            latch.await()
             ms[rep] = (System.nanoTime() - t) / 1_000_000.0
         }
-        println("  burst GET   p50 ${r(median(ms), 2)} ms   ($burstWidth concurrent)")
+        println("  burst GET   p50 ${r(median(ms), 2)} ms   ($burstWidth concurrent, async enqueue)")
     }
 
     // download

@@ -109,7 +109,18 @@ else
   echo "  ok      no booted simulator, emulator or active build"
 fi
 
-[ "$fail" -eq 1 ] && { echo; echo "Preflight failed. Fix the above, or run tool/bench-clean.sh."; exit 1; }
+# CI / non-interactive: a shared cloud runner is never "quiet" by these gates
+# (a busy VM, often <70% idle, sometimes on a throttled core), so the preflight
+# only blocks a CI run. BENCH_CI=1 downgrades it to a warning — the numbers are
+# then informational, but the nitro-vs-native ratio still holds because both
+# clients share the same noisy VM.
+if [ "$fail" -eq 1 ]; then
+  if [ "${BENCH_CI:-0}" = 1 ]; then
+    echo; echo "  (BENCH_CI: continuing despite preflight — numbers will be noisy, ratio only)"
+  else
+    echo; echo "Preflight failed. Fix the above, or run tool/bench-clean.sh."; exit 1
+  fi
+fi
 
 # ── Harden the machine for the run (best effort) ─────────────────────────────
 # Spotlight reindexing (mds_stores) is the single biggest bursty-noise source on

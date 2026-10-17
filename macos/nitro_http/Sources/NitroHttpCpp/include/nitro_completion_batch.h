@@ -34,6 +34,7 @@
 // the std headers and the class stay behind __cplusplus (C callers only need
 // the exported <lib>_nitro_post/bind/ack declared in the bridge header).
 #ifdef __cplusplus
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -44,6 +45,56 @@
 
 class NitroCompletionBatch {
  public:
+  // ── Single-in-flight completion spin (issue #57) ───────────────────────────
+  // Client-side workaround for dart-lang/sdk#53156 (Dart_PostCObject_DL wake
+  // latency; closed not-planned). sdk#64229 (Isolate.onEvent) would be the
+  // principled fix if it ships.
+  //
+  // A lone serial @nitroNativeAsync completion pays a full isolate wake (~15-20
+  // µs) because the isolate is parked on `await` and the OS must reschedule it.
+  // When the Dart side arms the slot (only when exactly one call is in flight
+  // and NitroConfig.nativeAsyncSpinUs > 0), it busy-polls `poll()` for a short
+  // window instead of parking; a completion that lands inside the window is
+  // picked up with no port post and no OS wake. A CAS on `flag` arbitrates the
+  // boundary race, so exactly one of {slot delivery, port delivery} ever fires.
+  // Opt-in: spinning burns a CPU core, wrong default on battery.
+  enum : int32_t { kPending = 0, kDone = 1, kParked = 2 };
+  enum : int32_t { kTagNull = 0, kTagInt = 1, kTagDouble = 2, kTagBool = 3 };
+
+  // Dart, before a spin-eligible single-in-flight call: arm the slot for [id].
+  void arm(int64_t id) noexcept {
+    spin_.tag = kTagNull;
+    spin_.i = 0;
+    spin_.d = 0;
+    spinId_.store(id, std::memory_order_relaxed);
+    spin_.flag.store(kPending, std::memory_order_release);
+  }
+
+  // Dart spin: poll the armed slot. With [giveUp] set, first try to claim the
+  // slot for the port (CAS kPending→kParked) so a later completion takes the
+  // port. Returns kPending (keep spinning), kDone (payload written to [out]:
+  // int32 tag @0, int64 @8, double @16 — matching the Dart read), or kParked
+  // (await the port). The decision is read off the flag alone, never spinId_:
+  // the worker clears spinId_ the instant it sets kDone, so gating on it here
+  // would miss a just-delivered result and leave Dart awaiting a port the
+  // worker never posts to. The worker owns spinId_ and bound_ cleanup; poll
+  // only touches the flag and the payload. [id] is unused but kept for symmetry
+  // with arm() and as a guard for a future multi-slot design.
+  int32_t poll([[maybe_unused]] int64_t id, uint8_t* out, int32_t giveUp) noexcept {
+    if (giveUp) {
+      int32_t expected = kPending;
+      spin_.flag.compare_exchange_strong(expected, kParked, std::memory_order_acq_rel, std::memory_order_acquire);
+    }
+    const int32_t f = spin_.flag.load(std::memory_order_acquire);
+    if (f == kPending) return kPending;
+    if (f == kDone) {
+      memcpy(out + 0, &spin_.tag, sizeof(spin_.tag));
+      memcpy(out + 8, &spin_.i, sizeof(spin_.i));
+      memcpy(out + 16, &spin_.d, sizeof(spin_.d));
+      return kDone;
+    }
+    return kParked;
+  }
   // A deep copy of a Dart_CObject that owns its storage.
   struct Owned {
     Dart_CObject obj{};
@@ -140,6 +191,34 @@ class NitroCompletionBatch {
 
   // Native side: every post. Unbound ports post directly.
   bool post(int64_t idOrPort, Dart_CObject* obj) {
+    // Spin fast path: if Dart armed this id and is busy-polling, hand the
+    // result to the slot (no port, no OS wake). The flag CAS arbitrates the
+    // boundary race against Dart's giveUp in poll() — whoever wins decides the
+    // channel, so the result is delivered exactly once.
+    if (spinId_.load(std::memory_order_relaxed) == idOrPort) {
+      int32_t tag = kTagNull;
+      int64_t i = 0;
+      double d = 0;
+      if (extractScalar(obj, &tag, &i, &d)) {
+        spin_.tag = tag;
+        spin_.i = i;
+        spin_.d = d;
+        int32_t expected = kPending;
+        if (spin_.flag.compare_exchange_strong(expected, kDone, std::memory_order_release, std::memory_order_acquire)) {
+          spinId_.store(0, std::memory_order_relaxed);
+          std::lock_guard<std::mutex> lk(mu_);
+          bound_.erase(idOrPort);
+          return true;
+        }
+        // expected == kParked: Dart gave up the spin; deliver via the port.
+      } else {
+        // Non-scalar result (never happens for @nitroNativeAsync, which posts a
+        // scalar or an int64 heap address): stop Dart spinning, then post.
+        int32_t expected = kPending;
+        spin_.flag.compare_exchange_strong(expected, kParked, std::memory_order_acq_rel, std::memory_order_acquire);
+      }
+      spinId_.store(0, std::memory_order_relaxed);
+    }
     int64_t batchPort;
     bool stream = false;
     {
@@ -202,6 +281,28 @@ class NitroCompletionBatch {
     std::vector<std::pair<int64_t, std::unique_ptr<Owned>>> pending;
   };
 
+  // One reusable slot (single-in-flight): the worker writes tag/i/d, then
+  // release-stores flag; poll() acquire-loads flag before reading them.
+  struct SpinSlot {
+    std::atomic<int32_t> flag{kParked};
+    int32_t tag = kTagNull;
+    int64_t i = 0;
+    double d = 0;
+  };
+
+  // Extract a @nitroNativeAsync completion (always a scalar or an int64 heap
+  // address) into the slot's plain fields. Returns false for any other shape.
+  static bool extractScalar(const Dart_CObject* o, int32_t* tag, int64_t* i, double* d) noexcept {
+    switch (o->type) {
+      case Dart_CObject_kNull: *tag = kTagNull; return true;
+      case Dart_CObject_kInt32: *tag = kTagInt; *i = o->value.as_int32; return true;
+      case Dart_CObject_kInt64: *tag = kTagInt; *i = o->value.as_int64; return true;
+      case Dart_CObject_kDouble: *tag = kTagDouble; *d = o->value.as_double; return true;
+      case Dart_CObject_kBool: *tag = kTagBool; *i = o->value.as_bool ? 1 : 0; return true;
+      default: return false;
+    }
+  }
+
   static bool copyable(const Dart_CObject* obj) {
     switch (obj->type) {
       case Dart_CObject_kNull: case Dart_CObject_kBool: case Dart_CObject_kInt32: case Dart_CObject_kInt64:
@@ -256,6 +357,8 @@ class NitroCompletionBatch {
   std::unordered_map<int64_t, int64_t> bound_;  // id → batch port
   std::unordered_map<int64_t, FreeItem> coalesced_;  // stream port → item free (own batch target)
   std::unordered_map<int64_t, State> ports_;    // batch port → in-flight state
+  SpinSlot spin_;                               // single-in-flight completion spin
+  std::atomic<int64_t> spinId_{0};              // armed id, or 0
 };
 
 #endif  // __cplusplus

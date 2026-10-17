@@ -156,10 +156,10 @@ packages:
     dependency: transitive
     description:
       name: matcher
-      sha256: dc0b7dc7651697ea4ff3e69ef44b0407ea32c487a39fff6a4004fa585e901861
+      sha256: "31bd099b47c10cd1aeb55146a2d46ce0277630ecef3f7dae54ad7873f36696cd"
       url: "https://pub.dev"
     source: hosted
-    version: "0.12.19"
+    version: "0.12.20"
   material_color_utilities:
     dependency: transitive
     description:
@@ -172,10 +172,10 @@ packages:
     dependency: transitive
     description:
       name: meta
-      sha256: "1741988757a65eb6b36abe716829688cf01910bbf91c34354ff7ec1c3de2b349"
+      sha256: "307249ce4ff29d58a18e97f6345f539382eb9c9c29ecda628900f31de0443dd9"
       url: "https://pub.dev"
     source: hosted
-    version: "1.18.0"
+    version: "1.19.0"
   mime:
     dependency: transitive
     description:
@@ -188,25 +188,25 @@ packages:
     dependency: transitive
     description:
       name: nitro
-      sha256: e7cf4c07049ab8e37f94572325af2bd6c56c8b34d1b8cdd911db82509d8a836e
+      sha256: a3c3bdaa1fb8dd3e1ed77823b8869425acf9593e937db0aee7e7f3f8f3f0f786
       url: "https://pub.dev"
     source: hosted
-    version: "0.7.4"
+    version: "0.7.9"
   nitro_annotations:
     dependency: transitive
     description:
       name: nitro_annotations
-      sha256: a3b886096f2a544743b5f3f118e44d08ba8f3d31dc0eaa3c38763b1313fdf77c
+      sha256: "6133091192c752299cda63413bc3d30b4388e981d0b1960a9f4ff2782a367b8c"
       url: "https://pub.dev"
     source: hosted
-    version: "0.7.4"
+    version: "0.7.9"
   nitro_http:
     dependency: "direct main"
     description:
       path: ".."
       relative: true
     source: path
-    version: "0.0.5"
+    version: "0.0.6"
   path:
     dependency: transitive
     description:
@@ -272,10 +272,10 @@ packages:
     dependency: transitive
     description:
       name: test_api
-      sha256: "949a932224383300f01be9221c39180316445ecb8e7547f70a41a35bf421fb9e"
+      sha256: "2a122cbe059f8b610d3a5415f42e255b6c17b1f21eee1d960f31080237fb4f11"
       url: "https://pub.dev"
     source: hosted
-    version: "0.7.11"
+    version: "0.7.12"
   typed_data:
     dependency: transitive
     description:
@@ -288,10 +288,10 @@ packages:
     dependency: transitive
     description:
       name: vector_math
-      sha256: d530bd74fea330e6e364cda7a85019c434070188383e1cd8d9777ee586914c5b
+      sha256: "92b9910f66ed1057fd4da7b040ae7c74cafacf885bdc81be496928d5049b032d"
       url: "https://pub.dev"
     source: hosted
-    version: "2.2.0"
+    version: "2.4.3"
   vm_service:
     dependency: transitive
     description:

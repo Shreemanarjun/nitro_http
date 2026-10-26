@@ -5,9 +5,14 @@
 * Upgraded the bundled **libcurl to 8.23.0** (from 8.21.0), built against
   BoringSSL with HTTP/3, brotli and zstd. Prebuilt native slices ship as the
   `deps-v4` release; no API change.
-* Upgraded to `nitro` 0.7.11 (from 0.7.5): bridge-level completion batching,
-  faster sync calls and string codecs, plus an adaptive native-async completion
-  spin that trims lone-request latency (nitro #57). No API change.
+* Upgraded to `nitro` 0.8.0 (from 0.7.5): bridge-level completion batching,
+  faster sync calls and string codecs, and an adaptive native-async completion
+  spin that trims lone-request latency (nitro #57) — now isolate-safe, since the
+  spin slot is CAS-claimed per isolate rather than shared process-wide (nitro
+  #58, fixed in 0.7.12, ThreadSanitizer-verified). nitro itself is pure-Dart as
+  of 0.8.0; nitro_http keeps vendoring its headers via `nitrogen link`,
+  unchanged. The regenerated bridge carries a new internal `arm`/`disarm` ABI;
+  no public API change.
 * Removed the hand-rolled completion coalescer — nitro 0.7.6 batches every
   `@nitroNativeAsync` completion itself, and measured 9–12 % faster. No API change.
 * Small sync bridge calls (capability queries, `releaseCancelToken`) are now

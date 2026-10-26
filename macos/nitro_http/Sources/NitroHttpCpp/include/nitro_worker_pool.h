@@ -25,6 +25,31 @@ class NitroWorkerPool {
     cv_.notify_one();
   }
 
+  // Fire-and-forget bounded enqueue (issue #58; a void @nitroNativeAsync). Caps the
+  // backlog at [maxQueued]; when full it either blocks the caller until a worker
+  // drains one ([dropOldest]==0) or drops the oldest queued job ([dropOldest]!=0)
+  // so the newest wins. [maxQueued]==0 is unbounded. Returns false iff a job was
+  // dropped. Unlike enqueue(), the caller does not wait for the work's result —
+  // only (optionally) for queue space — so many calls dispatch concurrently.
+  bool enqueueBounded(std::function<void()> job, size_t maxQueued, int dropOldest) {
+    bool dropped = false;
+    {
+      std::unique_lock<std::mutex> lk(mu_);
+      if (threads_.empty()) start();
+      if (maxQueued > 0 && queue_.size() >= maxQueued) {
+        if (dropOldest) {
+          queue_.pop_front();
+          dropped = true;
+        } else {
+          space_.wait(lk, [&] { return queue_.size() < maxQueued; });
+        }
+      }
+      queue_.push_back(std::move(job));
+    }
+    cv_.notify_one();
+    return !dropped;
+  }
+
  private:
   void start() {
     unsigned n = std::thread::hardware_concurrency();
@@ -44,12 +69,14 @@ class NitroWorkerPool {
         job = std::move(queue_.front());
         queue_.pop_front();
       }
+      space_.notify_one();  // a bounded (fire-and-forget) producer may be waiting for room
       job();
     }
   }
 
   std::mutex mu_;
   std::condition_variable cv_;
+  std::condition_variable space_;  // signals queue space for enqueueBounded(block)
   std::deque<std::function<void()>> queue_;
   std::vector<std::thread> threads_;
 };

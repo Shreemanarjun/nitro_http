@@ -56,26 +56,95 @@ enum TlsVersion {
 }
 
 /// Where the client gets the trust anchors it validates server chains against.
-enum RootCaSource {
+///
+/// A sealed hierarchy rather than a flag beside a loose PEM field: the only
+/// variant that needs certificate text — [RootCaSource.custom] — carries it, so
+/// a custom source cannot be configured without roots and a PEM cannot be
+/// stranded on a source that ignores it.
+sealed class RootCaSource {
+  const RootCaSource();
+
   /// The operating system trust store — the keychain on Apple platforms, the
   /// system CA bundle elsewhere. Honours enterprise and user-installed roots.
-  platform,
+  /// The default.
+  const factory RootCaSource.platform() = PlatformRoots;
 
   /// The Mozilla CA bundle compiled into the plugin. Identical on every
   /// platform, and immune to a device's tampered trust store, but also blind to
   /// legitimately installed corporate roots.
-  bundled,
+  const factory RootCaSource.bundled() = BundledRoots;
 
-  /// Only the roots in `TlsSettings.trustedRootsPem`.
-  custom,
+  /// Trust exactly the roots in [pem] — concatenated PEM certificates.
+  const factory RootCaSource.custom(String pem) = CustomRoots;
 
   /// No trust anchors at all. Every chain fails unless
-  /// `TlsSettings.verifyCertificates` is `false` or a SPKI pin matches.
-  none;
+  /// [TlsSettings.verifyCertificates] is `false` or a SPKI pin matches.
+  const factory RootCaSource.none() = NoRoots;
 
   /// The discriminator the engine reads: `0` platform, `1` bundled, `2` custom,
   /// `3` none.
-  int get wireValue => index;
+  int get wireValue => switch (this) {
+    PlatformRoots() => 0,
+    BundledRoots() => 1,
+    CustomRoots() => 2,
+    NoRoots() => 3,
+  };
+
+  /// A short label (`platform` / `bundled` / `custom` / `none`) for logs.
+  String get name => switch (this) {
+    PlatformRoots() => 'platform',
+    BundledRoots() => 'bundled',
+    CustomRoots() => 'custom',
+    NoRoots() => 'none',
+  };
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! RootCaSource) return false;
+    return switch ((this, other)) {
+      (CustomRoots(:final pem), CustomRoots(pem: final o)) => pem == o,
+      _ => runtimeType == other.runtimeType,
+    };
+  }
+
+  @override
+  int get hashCode => switch (this) {
+    CustomRoots(:final pem) => Object.hash(CustomRoots, pem),
+    _ => runtimeType.hashCode,
+  };
+}
+
+/// [RootCaSource.platform]: the operating system trust store.
+final class PlatformRoots extends RootCaSource {
+  const PlatformRoots();
+  @override
+  String toString() => 'RootCaSource.platform';
+}
+
+/// [RootCaSource.bundled]: the Mozilla CA bundle compiled into the plugin.
+final class BundledRoots extends RootCaSource {
+  const BundledRoots();
+  @override
+  String toString() => 'RootCaSource.bundled';
+}
+
+/// [RootCaSource.custom]: trust exactly the roots in [pem].
+final class CustomRoots extends RootCaSource {
+  const CustomRoots(this.pem);
+
+  /// Concatenated PEM certificates to trust as the only roots.
+  final String pem;
+
+  @override
+  String toString() => 'RootCaSource.custom(${pem.length} bytes)';
+}
+
+/// [RootCaSource.none]: no trust anchors at all.
+final class NoRoots extends RootCaSource {
+  const NoRoots();
+  @override
+  String toString() => 'RootCaSource.none';
 }
 
 /// A PEM-encoded client certificate and its private key, for mutual TLS.
@@ -130,8 +199,7 @@ final class TlsSettings {
   /// platform trust store with no pinning and no version clamp.
   const TlsSettings({
     this.verifyCertificates = true,
-    this.rootCaSource = RootCaSource.platform,
-    this.trustedRootsPem,
+    this.rootCaSource = const RootCaSource.platform(),
     this.clientCertificate,
     this.pinnedSpkiSha256 = const <String>[],
     this.minVersion,
@@ -149,12 +217,9 @@ final class TlsSettings {
   /// request made with it.
   final bool verifyCertificates;
 
-  /// Which trust anchors verification uses.
+  /// Which trust anchors verification uses. [RootCaSource.custom] carries its
+  /// own PEM bundle.
   final RootCaSource rootCaSource;
-
-  /// Concatenated PEM certificates used when [rootCaSource] is
-  /// [RootCaSource.custom]. Ignored otherwise.
-  final String? trustedRootsPem;
 
   /// Certificate presented when a server requests client authentication.
   /// `null` disables mutual TLS.
@@ -186,7 +251,6 @@ final class TlsSettings {
   TlsSettings copyWith({
     bool? verifyCertificates,
     RootCaSource? rootCaSource,
-    String? trustedRootsPem,
     ClientCertificate? clientCertificate,
     List<String>? pinnedSpkiSha256,
     TlsVersion? minVersion,
@@ -195,7 +259,6 @@ final class TlsSettings {
   }) => TlsSettings(
     verifyCertificates: verifyCertificates ?? this.verifyCertificates,
     rootCaSource: rootCaSource ?? this.rootCaSource,
-    trustedRootsPem: trustedRootsPem ?? this.trustedRootsPem,
     clientCertificate: clientCertificate ?? this.clientCertificate,
     pinnedSpkiSha256: pinnedSpkiSha256 ?? this.pinnedSpkiSha256,
     minVersion: minVersion ?? this.minVersion,
@@ -209,7 +272,6 @@ final class TlsSettings {
       other is TlsSettings &&
           other.verifyCertificates == verifyCertificates &&
           other.rootCaSource == rootCaSource &&
-          other.trustedRootsPem == trustedRootsPem &&
           other.clientCertificate == clientCertificate &&
           _listEquals(other.pinnedSpkiSha256, pinnedSpkiSha256) &&
           other.minVersion == minVersion &&
@@ -220,7 +282,6 @@ final class TlsSettings {
   int get hashCode => Object.hash(
     verifyCertificates,
     rootCaSource,
-    trustedRootsPem,
     clientCertificate,
     Object.hashAll(pinnedSpkiSha256),
     minVersion,
@@ -537,45 +598,74 @@ final class DohDnsSettings extends DnsSettings {
 // ── Cookies ──────────────────────────────────────────────────────────────────
 
 /// Cookie handling for a client.
-final class CookieSettings {
-  /// Creates cookie settings. By default cookies are stored in memory for the
-  /// lifetime of the client.
-  const CookieSettings({this.storeCookies = true, this.persistPath});
+/// Whether and where the client keeps a cookie jar.
+///
+/// A sealed hierarchy rather than a flag beside an optional path: the only
+/// variant that needs a path — [PersistentCookies] — carries it, so a path
+/// cannot be stranded on a jar that is turned off, and "persistent" cannot be
+/// asked for without saying where.
+///
+/// Sealed: [NoCookies], [InMemoryCookies] (the default) and
+/// [PersistentCookies].
+sealed class CookieSettings {
+  const CookieSettings();
 
-  /// Whether the engine keeps a cookie jar at all.
-  ///
-  /// `false` neither stores `Set-Cookie` nor sends a `Cookie:` header the
-  /// caller did not write itself.
-  final bool storeCookies;
+  /// No cookie jar at all: neither stores `Set-Cookie` nor sends a `Cookie:`
+  /// header the caller did not write itself.
+  const factory CookieSettings.none() = NoCookies;
 
-  /// Path of a Netscape-format cookie file to load at startup and flush to on
-  /// shutdown. `null` keeps the jar in memory only.
+  /// An in-memory jar for the lifetime of the client. The default.
+  const factory CookieSettings.inMemory() = InMemoryCookies;
+
+  /// A jar backed by the Netscape-format file at [path], loaded at startup and
+  /// flushed on shutdown.
   ///
   /// The file holds session credentials in plain text; put it somewhere the
   /// platform protects.
-  final String? persistPath;
-
-  /// Returns a copy with the given fields replaced. `null` keeps the current
-  /// value.
-  CookieSettings copyWith({bool? storeCookies, String? persistPath}) =>
-      CookieSettings(
-        storeCookies: storeCookies ?? this.storeCookies,
-        persistPath: persistPath ?? this.persistPath,
-      );
+  const factory CookieSettings.persistent(String path) = PersistentCookies;
 
   @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is CookieSettings &&
-          other.storeCookies == storeCookies &&
-          other.persistPath == persistPath;
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! CookieSettings) return false;
+    return switch ((this, other)) {
+      (PersistentCookies(:final path), PersistentCookies(path: final o)) =>
+        path == o,
+      _ => runtimeType == other.runtimeType,
+    };
+  }
 
   @override
-  int get hashCode => Object.hash(storeCookies, persistPath);
+  int get hashCode => switch (this) {
+    PersistentCookies(:final path) => Object.hash(PersistentCookies, path),
+    _ => runtimeType.hashCode,
+  };
+}
+
+/// [CookieSettings.none]: no cookie jar.
+final class NoCookies extends CookieSettings {
+  const NoCookies();
+  @override
+  String toString() => 'CookieSettings.none()';
+}
+
+/// [CookieSettings.inMemory]: an in-memory jar for the client's lifetime.
+final class InMemoryCookies extends CookieSettings {
+  const InMemoryCookies();
+  @override
+  String toString() => 'CookieSettings.inMemory()';
+}
+
+/// [CookieSettings.persistent]: a jar backed by the Netscape-format file at
+/// [path].
+final class PersistentCookies extends CookieSettings {
+  const PersistentCookies(this.path);
+
+  /// Path of the Netscape-format cookie file.
+  final String path;
 
   @override
-  String toString() =>
-      'CookieSettings(store: $storeCookies, persistent: ${persistPath != null})';
+  String toString() => 'CookieSettings.persistent($path)';
 }
 
 // ── Redirects ────────────────────────────────────────────────────────────────
@@ -954,7 +1044,7 @@ final class ClientSettings {
     this.tlsSettings = const TlsSettings(),
     this.proxySettings = const ProxySettings.system(),
     this.dnsSettings = const DnsSettings.system(),
-    this.cookieSettings = const CookieSettings(),
+    this.cookieSettings = const CookieSettings.inMemory(),
     this.poolSettings = const PoolSettings(),
     this.cacheSettings = const CacheSettings(),
     this.altSvcCachePath,

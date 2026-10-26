@@ -204,7 +204,9 @@ final class NitroSender implements HttpSender {
         // benchmark row must not abort because a fixture answered 500.
         throwOnStatusCode: false,
         enableCompression: spec.acceptEncoding,
-        cookieSettings: nitro.CookieSettings(storeCookies: spec.sendCookies),
+        cookieSettings: spec.sendCookies
+            ? const nitro.CookieSettings.inMemory()
+            : const nitro.CookieSettings.none(),
         // The disk cache stays off: a cache hit would turn a latency
         // measurement into a measurement of the filesystem. The capability is
         // still declared, because the library really does have one.

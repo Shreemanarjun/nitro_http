@@ -787,9 +787,8 @@ On by default, one jar per client, and persistable as a Netscape file:
 ```dart
 final client = NitroHttpClient(
   settings: ClientSettings(
-    cookieSettings: CookieSettings(
-      storeCookies: true,
-      persistPath: '$appSupportDir/cookies.txt',   // Netscape jar
+    cookieSettings: CookieSettings.persistent(
+      '$appSupportDir/cookies.txt',   // Netscape jar
     ),
   ),
 );
@@ -854,7 +853,7 @@ final client = NitroHttpClient(
   settings: ClientSettings(
     tlsSettings: TlsSettings(
       minVersion: TlsVersion.tls13,
-      rootCaSource: RootCaSource.platform,
+      rootCaSource: RootCaSource.platform(),
       pinnedSpkiSha256: const ['YLh1dUR9y6Kja30RrAn7JKnbQG/uEtLMkBgFF2Fuihg='],
       clientCertificate: ClientCertificate(
         certificatePem: certPem,

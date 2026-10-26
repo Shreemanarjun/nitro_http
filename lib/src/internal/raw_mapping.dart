@@ -33,13 +33,11 @@ RawTlsConfig toRawTls(TlsSettings tls) {
   final cert = tls.clientCertificate;
   return RawTlsConfig(
     verifyCertificates: tls.verifyCertificates,
-    rootCaSource: switch (tls.rootCaSource) {
-      RootCaSource.platform => 0,
-      RootCaSource.bundled => 1,
-      RootCaSource.custom => 2,
-      RootCaSource.none => 3,
+    rootCaSource: tls.rootCaSource.wireValue,
+    trustedRootsPem: switch (tls.rootCaSource) {
+      CustomRoots(:final pem) => pem,
+      _ => '',
     },
-    trustedRootsPem: tls.trustedRootsPem ?? '',
     clientCertPem: cert?.certificatePem ?? '',
     clientKeyPem: cert?.privateKeyPem ?? '',
     clientKeyPassword: cert?.password ?? '',
@@ -139,10 +137,13 @@ RawClientConfig toRawClientConfig(ClientSettings s) {
     tls: toRawTls(s.tlsSettings),
     proxy: toRawProxy(s.proxySettings),
     dns: toRawDns(s.dnsSettings),
-    cookies: RawCookieConfig(
-      enabled: s.cookieSettings.storeCookies,
-      persistPath: s.cookieSettings.persistPath ?? '',
-    ),
+    cookies: switch (s.cookieSettings) {
+      NoCookies() => const RawCookieConfig(enabled: false, persistPath: ''),
+      InMemoryCookies() =>
+        const RawCookieConfig(enabled: true, persistPath: ''),
+      PersistentCookies(:final path) =>
+        RawCookieConfig(enabled: true, persistPath: path),
+    },
     pool: RawPoolConfig(
       maxConnections: pool.maxConnections,
       maxConnectionsPerHost: pool.maxConnectionsPerHost,

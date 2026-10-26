@@ -517,8 +517,7 @@ void main() {
         hstsCachePath: altSvc ? null : cachePath,
         altSvcCachePath: altSvc ? altSvcPath : null,
         tlsSettings: TlsSettings(
-          rootCaSource: RootCaSource.custom,
-          trustedRootsPem: fixture.caPem,
+          rootCaSource: RootCaSource.custom(fixture.caPem),
         ),
       ),
     );

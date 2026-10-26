@@ -1061,23 +1061,23 @@ void main() {
       expect(res.bodyBytes, isNotEmpty);
     }), skip: tlsSkipReason);
 
-    test('RootCaSource.bundled verifies the same chain', () => skipIfOffline(() async {
+    test('RootCaSource.bundled() verifies the same chain', () => skipIfOffline(() async {
       client = NitroHttpClient(
         settings: const ClientSettings(
           timeout: Duration(seconds: 30),
-          tlsSettings: TlsSettings(rootCaSource: RootCaSource.bundled),
+          tlsSettings: TlsSettings(rootCaSource: RootCaSource.bundled()),
         ),
       );
       expect((await client!.get('https://example.com/')).statusCode, 200);
     }), skip: tlsSkipReason);
 
-    test('RootCaSource.platform verifies the same chain', () => skipIfOffline(() async {
+    test('RootCaSource.platform() verifies the same chain', () => skipIfOffline(() async {
       // The exact configuration that was broken: `platform` is the default, so
       // a regression here breaks every app that never touched TlsSettings.
       client = NitroHttpClient(
         settings: const ClientSettings(
           timeout: Duration(seconds: 30),
-          tlsSettings: TlsSettings(rootCaSource: RootCaSource.platform),
+          tlsSettings: TlsSettings(rootCaSource: RootCaSource.platform()),
         ),
       );
       expect((await client!.get('https://example.com/')).statusCode, 200);

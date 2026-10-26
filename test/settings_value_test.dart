@@ -19,7 +19,7 @@ void main() {
 
     test('toString reports verification, roots, pin count and mTLS', () {
       const settings = TlsSettings(
-        rootCaSource: RootCaSource.bundled,
+        rootCaSource: RootCaSource.bundled(),
         pinnedSpkiSha256: ['a', 'b'],
         clientCertificate: ClientCertificate(
           certificatePem: 'cert',
@@ -151,14 +151,14 @@ void main() {
     });
   });
 
-  test('CookieSettings.toString reports storage and persistence', () {
+  test('CookieSettings.toString names the variant', () {
     expect(
-      const CookieSettings().toString(),
-      'CookieSettings(store: true, persistent: false)',
+      const CookieSettings.inMemory().toString(),
+      'CookieSettings.inMemory()',
     );
     expect(
-      const CookieSettings(persistPath: '/tmp/jar').toString(),
-      'CookieSettings(store: true, persistent: true)',
+      const CookieSettings.persistent('/tmp/jar').toString(),
+      'CookieSettings.persistent(/tmp/jar)',
     );
   });
 

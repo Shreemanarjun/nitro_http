@@ -2,6 +2,20 @@
 
 ### Changed
 
+* **API:** `RootCaSource` is now a sealed class — `RootCaSource.platform()`,
+  `.bundled()`, `.custom(pem)`, `.none()` — and `TlsSettings.trustedRootsPem` is
+  gone: the PEM rides on the `custom(pem)` variant, so a custom source can't be
+  configured without roots and a PEM can't be stranded on a source that ignores
+  it. Migration: `rootCaSource: RootCaSource.custom, trustedRootsPem: pem` →
+  `rootCaSource: RootCaSource.custom(pem)`; the other three sources gain `()`.
+* **API:** `CookieSettings` is now a sealed class — `CookieSettings.none()`,
+  `.inMemory()` (the default) and `.persistent(path)` — replacing the
+  `storeCookies` flag and the optional `persistPath`, so a path can't be
+  stranded on a disabled jar and "persistent" can't be asked for without a path.
+  Migration: `CookieSettings()` / `CookieSettings(storeCookies: true)` →
+  `CookieSettings.inMemory()`; `CookieSettings(storeCookies: false)` →
+  `CookieSettings.none()`; `CookieSettings(persistPath: p)` →
+  `CookieSettings.persistent(p)`.
 * Upgraded the bundled **libcurl to 8.23.0** (from 8.21.0), built against
   BoringSSL with HTTP/3, brotli and zstd. Prebuilt native slices ship as the
   `deps-v4` release; no API change.

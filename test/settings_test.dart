@@ -124,7 +124,7 @@ void main() {
         tlsSettings: const TlsSettings.insecure(),
         proxySettings: const ProxySettings.noProxy(),
         dnsSettings: const DnsSettings.doh('https://doh.test/q'),
-        cookieSettings: const CookieSettings(storeCookies: false),
+        cookieSettings: const CookieSettings.none(),
         poolSettings: const PoolSettings(maxConnections: 7),
         cacheSettings: const CacheSettings(enabled: true),
         altSvcCachePath: '/tmp/altsvc',
@@ -143,7 +143,7 @@ void main() {
       expect(copy.tlsSettings, const TlsSettings.insecure());
       expect(copy.proxySettings, const ProxySettings.noProxy());
       expect(copy.dnsSettings, const DnsSettings.doh('https://doh.test/q'));
-      expect(copy.cookieSettings, const CookieSettings(storeCookies: false));
+      expect(copy.cookieSettings, const CookieSettings.none());
       expect(copy.poolSettings, const PoolSettings(maxConnections: 7));
       expect(copy.cacheSettings, const CacheSettings(enabled: true));
       expect(copy.altSvcCachePath, '/tmp/altsvc');
@@ -162,8 +162,7 @@ void main() {
       const original = TlsSettings();
       final copy = original.copyWith(
         verifyCertificates: false,
-        rootCaSource: RootCaSource.bundled,
-        trustedRootsPem: 'ROOTS',
+        rootCaSource: RootCaSource.custom('ROOTS'),
         clientCertificate: cert,
         pinnedSpkiSha256: const <String>['pin'],
         minVersion: TlsVersion.tls12,
@@ -172,8 +171,7 @@ void main() {
       );
 
       expect(copy.verifyCertificates, isFalse);
-      expect(copy.rootCaSource, RootCaSource.bundled);
-      expect(copy.trustedRootsPem, 'ROOTS');
+      expect(copy.rootCaSource, RootCaSource.custom('ROOTS'));
       expect(copy.clientCertificate, cert);
       expect(copy.pinnedSpkiSha256, <String>['pin']);
       expect(copy.minVersion, TlsVersion.tls12);
@@ -238,14 +236,15 @@ void main() {
     });
 
     test('CookieSettings, PoolSettings and CacheSettings', () {
-      const cookies = CookieSettings();
-      final cookieCopy = cookies.copyWith(
-        storeCookies: false,
-        persistPath: '/tmp/jar',
+      expect(
+        const CookieSettings.persistent('/tmp/jar'),
+        const CookieSettings.persistent('/tmp/jar'),
       );
-      expect(cookieCopy.storeCookies, isFalse);
-      expect(cookieCopy.persistPath, '/tmp/jar');
-      expect(cookieCopy.copyWith(), cookieCopy);
+      expect(const CookieSettings.none(), isNot(const CookieSettings.inMemory()));
+      expect(
+        const CookieSettings.persistent('/a'),
+        isNot(const CookieSettings.persistent('/b')),
+      );
 
       const pool = PoolSettings();
       final poolCopy = pool.copyWith(
@@ -342,9 +341,9 @@ void main() {
   });
 
   test('RootCaSource.wireValue matches the documented discriminator', () {
-    expect(RootCaSource.platform.wireValue, 0);
-    expect(RootCaSource.bundled.wireValue, 1);
-    expect(RootCaSource.custom.wireValue, 2);
-    expect(RootCaSource.none.wireValue, 3);
+    expect(RootCaSource.platform().wireValue, 0);
+    expect(RootCaSource.bundled().wireValue, 1);
+    expect(RootCaSource.custom('x').wireValue, 2);
+    expect(RootCaSource.none().wireValue, 3);
   });
 }

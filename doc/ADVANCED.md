@@ -68,7 +68,7 @@ final client = NitroHttpClient(
   settings: ClientSettings(
     tlsSettings: TlsSettings(
       minVersion: TlsVersion.tls13,
-      rootCaSource: RootCaSource.platform,
+      rootCaSource: RootCaSource.platform(),
       pinnedSpkiSha256: const ['YLh1dUR9y6Kja30RrAn7JKnbQG/uEtLMkBgFF2Fuihg='],
       clientCertificate: ClientCertificate(
         certificatePem: certPem,
@@ -94,10 +94,10 @@ await client.post(
 );
 ```
 
-`RootCaSource.platform` (the default) validates against the operating system
-trust store, honouring user-installed and MDM-deployed roots. `bundled` uses the
-Mozilla CA set compiled into the plugin, `custom` uses only
-`TlsSettings.trustedRootsPem`, and `none` removes every anchor — so it is
+`RootCaSource.platform()` (the default) validates against the operating system
+trust store, honouring user-installed and MDM-deployed roots. `bundled()` uses
+the Mozilla CA set compiled into the plugin, `custom(pem)` trusts only the roots
+in the PEM it carries, and `none()` removes every anchor — so it is
 **refused unless a pin is configured**, since without one it would accept any
 certificate rather than none. `TlsSettings.insecure()` exists for local
 development and logs a warning on every request; it must never reach a shipped

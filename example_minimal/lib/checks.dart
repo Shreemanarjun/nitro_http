@@ -427,7 +427,7 @@ final checks = <Check>[
   Check('tls', 'platform roots (default)', (_) async {
     final c = NitroHttpClient(settings: const ClientSettings(
       timeout: Duration(seconds: 20),
-      tlsSettings: TlsSettings(rootCaSource: RootCaSource.platform)));
+      tlsSettings: TlsSettings(rootCaSource: RootCaSource.platform())));
     try {
       return 'status ${(await c.get('$httpbin/get')).statusCode}';
     } finally { c.dispose(); }
@@ -435,7 +435,7 @@ final checks = <Check>[
   Check('tls', 'bundled roots', (_) async {
     final c = NitroHttpClient(settings: const ClientSettings(
       timeout: Duration(seconds: 20),
-      tlsSettings: TlsSettings(rootCaSource: RootCaSource.bundled)));
+      tlsSettings: TlsSettings(rootCaSource: RootCaSource.bundled())));
     try {
       return 'status ${(await c.get('$httpbin/get')).statusCode}';
     } finally { c.dispose(); }

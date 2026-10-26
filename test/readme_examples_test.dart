@@ -135,7 +135,7 @@ void main() {
           timeout: Duration(seconds: 30),
           connectTimeout: Duration(seconds: 10),
           httpVersionPref: HttpVersionPref.http2,
-          cookieSettings: CookieSettings(storeCookies: true),
+          cookieSettings: CookieSettings.inMemory(),
         ),
         interceptors: [RetryInterceptor(maxRetries: 3)],
         executor: executor,
@@ -674,7 +674,7 @@ void main() {
         settings: ClientSettings(
           tlsSettings: TlsSettings(
             minVersion: TlsVersion.tls13,
-            rootCaSource: RootCaSource.platform,
+            rootCaSource: RootCaSource.platform(),
             pinnedSpkiSha256: const [
               'YLh1dUR9y6Kja30RrAn7JKnbQG/uEtLMkBgFF2Fuihg=',
             ],
@@ -774,9 +774,8 @@ void main() {
       const appSupportDir = '/tmp/app-support';
       final client = NitroHttpClient(
         settings: ClientSettings(
-          cookieSettings: CookieSettings(
-            storeCookies: true,
-            persistPath: '$appSupportDir/cookies.txt', // Netscape jar
+          cookieSettings: CookieSettings.persistent(
+            '$appSupportDir/cookies.txt', // Netscape jar
           ),
         ),
         executor: executor,

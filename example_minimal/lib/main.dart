@@ -50,7 +50,7 @@ class _HomeState extends State<Home> {
       baseUrl: httpbin,
       userAgent: 'nitro_http_minimal/1.0',
       timeout: Duration(seconds: 30),
-      cookieSettings: CookieSettings(storeCookies: true),
+      cookieSettings: CookieSettings.inMemory(),
       cacheSettings: CacheSettings(enabled: true),
       // A checking app wants to INSPECT a 404 or 401, not have it thrown. The
       // default (true) is the right default for an app; it is wrong here.

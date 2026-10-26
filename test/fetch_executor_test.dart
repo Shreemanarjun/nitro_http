@@ -335,12 +335,12 @@ void main() {
 
       executor.configureClient(
         toRawClientConfig(
-          const ClientSettings(cookieSettings: CookieSettings()),
+          const ClientSettings(cookieSettings: CookieSettings.inMemory()),
         ),
       );
       executor.configureClient(
         toRawClientConfig(
-          const ClientSettings(cookieSettings: CookieSettings(storeCookies: false)),
+          const ClientSettings(cookieSettings: CookieSettings.none()),
         ),
       );
 

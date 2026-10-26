@@ -3,7 +3,7 @@
 //
 // The same audit that produced tls_settings_e2e_test.dart found these covered
 // exclusively by configuration tests. That is the pattern which let
-// `RootCaSource.platform` ship broken and `sniHostname` ship inert: the value
+// `RootCaSource.platform()` ship broken and `sniHostname` ship inert: the value
 // reaches the wire, and nothing checks that anything acts on it.
 //
 // Proxy and DNS are testable hermetically, because "did the request go
@@ -406,7 +406,7 @@ void main() {
       client = NitroHttpClient(
         settings: const ClientSettings(
           timeout: Duration(seconds: 20),
-          cookieSettings: CookieSettings(storeCookies: false),
+          cookieSettings: CookieSettings.none(),
         ),
       );
       await client!.get('http://127.0.0.1:${origin.port}/setcookie');
@@ -859,7 +859,7 @@ void main() {
       client = NitroHttpClient(
         settings: ClientSettings(
           timeout: const Duration(seconds: 15),
-          cookieSettings: CookieSettings(storeCookies: true, persistPath: path),
+          cookieSettings: CookieSettings.persistent(path),
         ),
       );
       await client!.get('http://127.0.0.1:${origin.port}/setcookie');

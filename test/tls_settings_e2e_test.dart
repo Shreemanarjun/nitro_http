@@ -2,7 +2,7 @@
 //
 // Every other TLS test in this repo is a configuration test: it proves a value
 // round-trips into the request, never that anything acts on it. That gap is not
-// hypothetical — `RootCaSource.platform` shipped completely broken in
+// hypothetical — `RootCaSource.platform()` shipped completely broken in
 // 0.0.1-0.0.3 while its configuration test passed, and `sniHostname` is still
 // accepted-but-ignored today.
 //
@@ -78,8 +78,7 @@ void main() {
             timeout: const Duration(seconds: 20),
             throwOnStatusCode: false,
             tlsSettings: TlsSettings(
-              rootCaSource: RootCaSource.custom,
-              trustedRootsPem: fixture.caPem,
+              rootCaSource: RootCaSource.custom(fixture.caPem),
               pinnedSpkiSha256: pins,
               clientCertificate: clientCertificate,
               minVersion: minVersion,
@@ -148,7 +147,7 @@ void main() {
       );
     }, skip: skipReason);
 
-    // ── RootCaSource.none ────────────────────────────────────────────────────
+    // ── RootCaSource.none() ────────────────────────────────────────────────────
     // Documented as "no trust anchors at all — every chain fails unless a pin
     // matches". The engine used to implement that by clearing VERIFYPEER, which
     // is the exact inverse: every chain succeeded, so the option that reads as
@@ -157,7 +156,7 @@ void main() {
       client = NitroHttpClient(
         settings: const ClientSettings(
           timeout: Duration(seconds: 20),
-          tlsSettings: TlsSettings(rootCaSource: RootCaSource.none),
+          tlsSettings: TlsSettings(rootCaSource: RootCaSource.none()),
         ),
       );
       await expectLater(
@@ -173,7 +172,7 @@ void main() {
           timeout: const Duration(seconds: 20),
           throwOnStatusCode: false,
           tlsSettings: TlsSettings(
-            rootCaSource: RootCaSource.none,
+            rootCaSource: RootCaSource.none(),
             pinnedSpkiSha256: [fixture.serverSpkiSha256],
           ),
         ),
@@ -188,7 +187,7 @@ void main() {
         settings: const ClientSettings(
           timeout: Duration(seconds: 20),
           tlsSettings: TlsSettings(
-            rootCaSource: RootCaSource.none,
+            rootCaSource: RootCaSource.none(),
             pinnedSpkiSha256: ['AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='],
           ),
         ),
@@ -309,8 +308,7 @@ void main() {
           Uri.parse(server.url('/ws').replaceFirst('https://', 'wss://')),
           connectTimeout: const Duration(seconds: 15),
           tlsSettings: TlsSettings(
-            rootCaSource: RootCaSource.custom,
-            trustedRootsPem: fixture.caPem,
+            rootCaSource: RootCaSource.custom(fixture.caPem),
           ),
         );
         final echoed = Completer<String>();
@@ -344,8 +342,7 @@ void main() {
             Uri.parse(server.url('/ws').replaceFirst('https://', 'wss://')),
             connectTimeout: const Duration(seconds: 15),
             tlsSettings: TlsSettings(
-              rootCaSource: RootCaSource.custom,
-              trustedRootsPem: fixture.caPem,
+              rootCaSource: RootCaSource.custom(fixture.caPem),
               pinnedSpkiSha256: const [
                 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
               ],
@@ -369,8 +366,7 @@ void main() {
           timeout: const Duration(seconds: 20),
           throwOnStatusCode: false,
           tlsSettings: TlsSettings(
-            rootCaSource: RootCaSource.custom,
-            trustedRootsPem: fixture.caPem,
+            rootCaSource: RootCaSource.custom(fixture.caPem),
             sniHostname: 'sni-only.invalid',
           ),
         ),
@@ -389,8 +385,7 @@ void main() {
           timeout: const Duration(seconds: 20),
           throwOnStatusCode: false,
           tlsSettings: TlsSettings(
-            rootCaSource: RootCaSource.custom,
-            trustedRootsPem: fixture.caPem,
+            rootCaSource: RootCaSource.custom(fixture.caPem),
             sniHostname: 'somewhere-else.invalid',
           ),
         ),
@@ -411,8 +406,7 @@ void main() {
           timeout: const Duration(seconds: 20),
           throwOnStatusCode: false,
           tlsSettings: TlsSettings(
-            rootCaSource: RootCaSource.custom,
-            trustedRootsPem: fixture.caPem,
+            rootCaSource: RootCaSource.custom(fixture.caPem),
           ),
         ),
       );
@@ -429,8 +423,7 @@ void main() {
           timeout: const Duration(seconds: 20),
           throwOnStatusCode: false,
           tlsSettings: TlsSettings(
-            rootCaSource: RootCaSource.custom,
-            trustedRootsPem: fixture.caPem,
+            rootCaSource: RootCaSource.custom(fixture.caPem),
           ),
         ),
       );

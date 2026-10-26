@@ -29,10 +29,11 @@ void main() {
     final client = NitroHttpClient(
       settings: ClientSettings(
         baseUrl: server.baseUrl,
-        cookieSettings: CookieSettings(
-          storeCookies: storeCookies,
-          persistPath: persistPath,
-        ),
+        cookieSettings: persistPath != null
+            ? CookieSettings.persistent(persistPath)
+            : (storeCookies
+                  ? const CookieSettings.inMemory()
+                  : const CookieSettings.none()),
       ),
     );
     addTearDown(client.dispose);
@@ -122,7 +123,7 @@ void main() {
         baseUrl: server.baseUrl,
         // A session cookie is not persisted by design, so ask for one with an
         // expiry far enough out that the jar has to write it down.
-        cookieSettings: CookieSettings(persistPath: jarPath),
+        cookieSettings: CookieSettings.persistent(jarPath),
       ),
     );
     await first.get('/setcookie?name=persisted&value=on-disk&maxAge=3600');

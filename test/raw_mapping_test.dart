@@ -34,7 +34,7 @@ void main() {
         redirectSettings: const RedirectSettings.limited(4),
         throwOnStatusCode: false,
         enableCompression: false,
-        tlsSettings: const TlsSettings(rootCaSource: RootCaSource.bundled),
+        tlsSettings: const TlsSettings(rootCaSource: RootCaSource.bundled()),
         proxySettings: const ProxySettings.socks5(
           'p:1080',
           username: 'u',
@@ -44,10 +44,7 @@ void main() {
         dnsSettings: const DnsSettings.static(<String, List<String>>{
           'a.test': <String>['1.2.3.4'],
         }, port: 8443),
-        cookieSettings: const CookieSettings(
-          storeCookies: false,
-          persistPath: '/tmp/jar',
-        ),
+        cookieSettings: const CookieSettings.persistent('/tmp/jar'),
         poolSettings: const PoolSettings(
           maxConnections: 3,
           maxConnectionsPerHost: 2,
@@ -84,7 +81,7 @@ void main() {
       expect(config.proxy.noProxyHosts, 'localhost');
       expect(config.dns.staticOverrides, <String>['a.test:8443:1.2.3.4']);
       expect(config.dns.dohUrl, '');
-      expect(config.cookies.enabled, isFalse);
+      expect(config.cookies.enabled, isTrue);
       expect(config.cookies.persistPath, '/tmp/jar');
       expect(config.pool.maxConnections, 3);
       expect(config.pool.maxConnectionsPerHost, 2);
@@ -163,14 +160,12 @@ void main() {
 
   group('toRawTls', () {
     test('maps every root CA source to its discriminator', () {
-      const expected = <RootCaSource, int>{
-        RootCaSource.platform: 0,
-        RootCaSource.bundled: 1,
-        RootCaSource.custom: 2,
-        RootCaSource.none: 3,
+      final expected = <RootCaSource, int>{
+        const RootCaSource.platform(): 0,
+        const RootCaSource.bundled(): 1,
+        const RootCaSource.custom('x'): 2,
+        const RootCaSource.none(): 3,
       };
-
-      expect(expected.keys, RootCaSource.values);
       for (final MapEntry(key: source, value: wire) in expected.entries) {
         expect(toRawTls(TlsSettings(rootCaSource: source)).rootCaSource, wire);
       }
@@ -179,8 +174,7 @@ void main() {
     test('carries the custom root bundle', () {
       final tls = toRawTls(
         const TlsSettings(
-          rootCaSource: RootCaSource.custom,
-          trustedRootsPem: '-----BEGIN CERTIFICATE-----',
+          rootCaSource: RootCaSource.custom('-----BEGIN CERTIFICATE-----'),
         ),
       );
 

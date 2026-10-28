@@ -23,6 +23,24 @@ import 'package:nitro_http/nitro_http.dart';
 import 'package:nitro_http/src/internal/native_attach.dart';
 import 'package:nitro_http_example/server/local_server.dart';
 
+/// Waits until the server has logged at least [count] requests for [path].
+///
+/// Replaces a hard-coded delay before a "the request is on the wire" assertion:
+/// a cold simulator's (or CI runner's) first request can take longer than any
+/// fixed wait, so a `150 ms` delay flaked the precondition while the cancel
+/// logic itself was fine. On a fast loopback this returns within a tick.
+Future<void> waitForRequests(
+  LocalServer server,
+  String path,
+  int count, {
+  Duration timeout = const Duration(seconds: 5),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (server.requestsFor(path) < count && DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+  }
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -82,7 +100,7 @@ void main() {
       final token = CancelToken();
       final target = outcome(http.get('/slow/3000', cancelToken: token));
 
-      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await waitForRequests(server, '/slow/3000', 1);
       expect(
         server.requestsFor('/slow/3000'),
         1,
@@ -469,7 +487,7 @@ void main() {
     ) async {
       final http = client();
       final straggler = outcome(http.get('/slow/5000'));
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+      await waitForRequests(server, '/slow/5000', 1);
       expect(server.requestsFor('/slow/5000'), 1);
 
       // A hot restart replaces the isolate, so the handshake guard — an

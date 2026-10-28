@@ -250,22 +250,16 @@ jobs:
           flutter pub get
           flutter test
 
-      # The one CI job that exercises the engine end to end: in-process server,
-      # real transfers, on the SDK's libcurl fallback. The FUNCTIONAL suites
-      # only — integration_test/ also holds the benchmark and profiling
-      # harnesses (stall_soak, size_sweep, chunk_ladder, …), which run for tens
-      # of minutes and measure performance, not correctness.
-      # One `flutter test` invocation per suite: when a single invocation runs
-      # several integration files, the macOS tool loses its log reader on the
-      # second app launch ("The log reader stopped unexpectedly") and every
-      # suite after the first fails to load. A fresh tool process per file
-      # sidesteps it; the rebuild between files is incremental and cheap.
+      # The one correctness job that exercises the engine end to end: in-process
+      # server, real transfers, on the SDK's libcurl fallback. Runs EVERY
+      # functional suite via the shared smoke script — which discovers each
+      # integration_test/*_test.dart that is not tagged `benchmark` (those are
+      # the profiling harnesses: tens of minutes, skip-by-default), one
+      # `flutter test` invocation per file (the macOS tool drops its log reader
+      # on a second app launch in one invocation). The same script runs the iOS
+      # and Android jobs in integration.yml and reproduces a failure locally.
       - name: Integration tests
-        working-directory: example
-        run: |
-          for t in http streaming cache cookies websocket cancellation; do
-            flutter test -d macos "integration_test/${t}_test.dart"
-          done
+        run: bash example/tool/ci_macos_smoke.sh
 
   windows:
     name: example windows (vendored slice)

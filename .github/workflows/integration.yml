@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Cross-platform functional integration: the example's six integration suites
+# (http, streaming, cache, cookies, websocket, cancellation) run on a real
+# macOS desktop, an iOS simulator, and an Android emulator — every one against
+# the native engine and the in-app `shelf` server. One behaviour set, proven on
+# every platform nitro_http ships a native engine for.
+#
+# Separate from ci.yml on purpose: ci.yml gates correctness fast (analyze, unit,
+# codegen, native ctest, desktop + release-build checks); this is the slower
+# device-matrix layer. Each job just calls a dual-use smoke script under
+# example/tool/, so the exact same command reproduces a failure locally:
+#
+#   bash example/tool/ci_macos_smoke.sh
+#   bash example/tool/ci_ios_smoke.sh
+#   bash example/tool/ci_android_smoke.sh      # with an emulator/device on adb
+#
+# Run it from the Actions tab (workflow_dispatch) for an on-demand full sweep, or
+# let it gate pull requests. Action SHAs are pinned (supply-chain hygiene), the
+# pattern this project's sibling nitro_server uses.
+# ─────────────────────────────────────────────────────────────────────────────
+name: integration
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: integration (macOS)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # rhttp (a benchmark comparison dep in the example) builds a Rust crate.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          cache: true
+      - run: bash example/tool/ci_macos_smoke.sh
+
+  ios:
+    name: integration (iOS simulator)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust iOS-simulator targets (rhttp)
+        run: rustup target add aarch64-apple-ios-sim x86_64-apple-ios
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          cache: true
+      - run: bash example/tool/ci_ios_smoke.sh
+
+  android:
+    name: integration (Android emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust Android target (rhttp)
+        run: rustup target add x86_64-linux-android
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+        working-directory: example
+      # Hardware acceleration — a software emulator is minutes-per-boot slower.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: bash example/tool/ci_android_smoke.sh

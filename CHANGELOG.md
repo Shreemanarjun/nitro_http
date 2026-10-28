@@ -1,40 +1,29 @@
 ## 0.0.6
 
+### Breaking
+
+* `RootCaSource` is now a sealed class; `TlsSettings.trustedRootsPem` folded into
+  `RootCaSource.custom(pem)`. Migrate `custom, trustedRootsPem: p` → `custom(p)`;
+  add `()` to `platform`/`bundled`/`none`.
+* `CookieSettings` is now a sealed class: `none()` / `inMemory()` (default) /
+  `persistent(path)`, replacing the `storeCookies` + `persistPath` fields.
+
+### Fixed
+
+* **#3** — iOS/macOS archived builds (TestFlight/App Store) no longer crash with
+  `Failed to lookup symbol 'nitro_http_init_dart_api_dl'`: the 0.8.1 generator
+  marks FFI exports `REFERENCED_DYNAMICALLY` so Xcode's archive strip keeps them.
+
 ### Changed
 
-* **API:** `RootCaSource` is now a sealed class — `RootCaSource.platform()`,
-  `.bundled()`, `.custom(pem)`, `.none()` — and `TlsSettings.trustedRootsPem` is
-  gone: the PEM rides on the `custom(pem)` variant, so a custom source can't be
-  configured without roots and a PEM can't be stranded on a source that ignores
-  it. Migration: `rootCaSource: RootCaSource.custom, trustedRootsPem: pem` →
-  `rootCaSource: RootCaSource.custom(pem)`; the other three sources gain `()`.
-* **API:** `CookieSettings` is now a sealed class — `CookieSettings.none()`,
-  `.inMemory()` (the default) and `.persistent(path)` — replacing the
-  `storeCookies` flag and the optional `persistPath`, so a path can't be
-  stranded on a disabled jar and "persistent" can't be asked for without a path.
-  Migration: `CookieSettings()` / `CookieSettings(storeCookies: true)` →
-  `CookieSettings.inMemory()`; `CookieSettings(storeCookies: false)` →
-  `CookieSettings.none()`; `CookieSettings(persistPath: p)` →
-  `CookieSettings.persistent(p)`.
-* Upgraded the bundled **libcurl to 8.23.0** (from 8.21.0), built against
-  BoringSSL with HTTP/3, brotli and zstd. Prebuilt native slices ship as the
-  `deps-v4` release; no API change.
-* Upgraded to `nitro` 0.8.0 (from 0.7.5): bridge-level completion batching,
-  faster sync calls and string codecs, and an adaptive native-async completion
-  spin that trims lone-request latency (nitro #57) — now isolate-safe, since the
-  spin slot is CAS-claimed per isolate rather than shared process-wide (nitro
-  #58, fixed in 0.7.12, ThreadSanitizer-verified). nitro itself is pure-Dart as
-  of 0.8.0; nitro_http keeps vendoring its headers via `nitrogen link`,
-  unchanged. The regenerated bridge carries a new internal `arm`/`disarm` ABI;
-  no public API change.
-* Removed the hand-rolled completion coalescer — nitro 0.7.6 batches every
-  `@nitroNativeAsync` completion itself, and measured 9–12 % faster. No API change.
-* Small sync bridge calls (capability queries, `releaseCancelToken`) are now
-  `@nitroFast`.
-* `HttpTextResponse.bodyToJson()` decodes straight from `bodyBytes` (fused
-  UTF-8→JSON), ~30 % faster; a non-UTF-8 charset still uses the string path.
-* `CURLOPT_PIPEWAIT` is skipped for `http11Only` (nothing to multiplex); neutral
-  otherwise.
+* Upgraded to **`nitro` 0.8.1**: bridge-level completion batching, `@nitroFast`
+  sync calls, and an isolate-safe native-async completion spin (nitro #57/#58).
+  New internal `arm`/`disarm` ABI; no public API change.
+* Bundled **libcurl → 8.23.0** (BoringSSL, HTTP/3, brotli, zstd; `deps-v4` slices).
+* Removed the hand-rolled completion coalescer — nitro batches
+  `@nitroNativeAsync` completions natively (9–12 % faster).
+* `HttpTextResponse.bodyToJson()` decodes straight from `bodyBytes`, ~30 % faster.
+* `CURLOPT_PIPEWAIT` skipped for `http11Only`.
 
 ## 0.0.5
 

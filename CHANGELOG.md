@@ -22,6 +22,10 @@
 
 ### Fixed
 
+* `onSendProgress` on a buffered request could end short of the full body
+  length: the native terminal tick travels on a different port from the
+  completion and could lose the race. The terminal send tick is now synthesised
+  on completion, as the receive side already was.
 * **#3** — iOS/macOS archived builds (TestFlight/App Store) no longer crash with
   `Failed to lookup symbol 'nitro_http_init_dart_api_dl'`: the 0.8.3 generator
   marks FFI exports `REFERENCED_DYNAMICALLY` so Xcode's archive strip keeps them.

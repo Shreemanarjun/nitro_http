@@ -269,7 +269,12 @@ class RequestRunner {
       // for example). Abandon it rather than waiting: the transfer is over.
       pump?.abandon();
 
-      return _completeBuffered(request, response, reportProgress);
+      return _completeBuffered(
+        request,
+        response,
+        reportProgress,
+        sentBytes: body.contentLength,
+      );
     } finally {
       await eventSub?.cancel();
       _demux.release(requestId);
@@ -296,8 +301,9 @@ class RequestRunner {
   HttpResponse _completeBuffered(
     HttpRequest request,
     RawResponse response,
-    bool reportProgress,
-  ) {
+    bool reportProgress, {
+    int? sentBytes,
+  }) {
     if (response.errorKind != RawErrorKind.none) {
       throw mapError(
         kind: response.errorKind,
@@ -331,9 +337,15 @@ class RequestRunner {
     // large response is the difference between holding it once and twice.
     final bytes = response.body;
 
+    // Progress events are lossy by design, so the terminal values are
+    // synthesized from the completion path. Callers always see 100 %. The send
+    // side needs it too: native does emit a terminal tick, but on a different
+    // port from the completion, so it can lose the race to the `finally` that
+    // cancels the event subscription.
+    if (reportProgress && sentBytes != null && request.onSendProgress != null) {
+      request.onSendProgress!(sentBytes, sentBytes);
+    }
     if (reportProgress && request.onReceiveProgress != null) {
-      // Progress events are lossy by design, so the terminal value is
-      // synthesized from the completion path. Callers always see 100 %.
       request.onReceiveProgress!(bytes.length, bytes.length);
     }
 

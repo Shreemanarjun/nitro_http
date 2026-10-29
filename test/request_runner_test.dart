@@ -912,6 +912,32 @@ void main() {
       expect(received.last, (4, 4));
     });
 
+    test('completion synthesises the terminal send tick for a known body',
+        () async {
+      // Native does emit one, but on a different port from the completion, so
+      // it can lose the race to the subscription being cancelled.
+      final sent = <(int, int?)>[];
+      final held = Completer<RawResponse>();
+      executor.onSendBuffered = (_, _) => held.future;
+
+      final future = runnerWith().sendBuffered(
+        HttpRequest(
+          url: Uri.parse('https://example.com/'),
+          method: HttpMethod.post,
+          body: HttpBody.bytes(_bytes('abcd')),
+          onSendProgress: (t, total) => sent.add((t, total)),
+        ),
+      );
+      await pumpEventQueue();
+      final id = executor.bufferedRequests.single.request.requestId;
+      demux.pushEvent(progressEvent(id, transferred: 1, total: 4, upload: true));
+      await pumpEventQueue();
+
+      held.complete(rawResponse());
+      await future;
+      expect(sent, <(int, int?)>[(1, 4), (4, 4)]);
+    });
+
     test('the streamed path reports bytes as chunks arrive', () async {
       final received = <(int, int?)>[];
       executor.streamedHeads.add(rawHead(contentLength: 3));

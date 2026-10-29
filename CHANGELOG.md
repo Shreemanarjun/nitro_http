@@ -11,12 +11,12 @@
 ### Fixed
 
 * **#3** — iOS/macOS archived builds (TestFlight/App Store) no longer crash with
-  `Failed to lookup symbol 'nitro_http_init_dart_api_dl'`: the 0.8.1 generator
+  `Failed to lookup symbol 'nitro_http_init_dart_api_dl'`: the 0.8.3 generator
   marks FFI exports `REFERENCED_DYNAMICALLY` so Xcode's archive strip keeps them.
 
 ### Changed
 
-* Upgraded to **`nitro` 0.8.1**: bridge-level completion batching, `@nitroFast`
+* Upgraded to **`nitro` 0.8.3**: bridge-level completion batching, `@nitroFast`
   sync calls, and an isolate-safe native-async completion spin (nitro #57/#58).
   New internal `arm`/`disarm` ABI; no public API change.
 * Bundled **libcurl → 8.23.0** (BoringSSL, HTTP/3, brotli, zstd; `deps-v4` slices).

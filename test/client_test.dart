@@ -97,6 +97,58 @@ void main() {
       expect(executor.bufferedRequests.last.request.method, RawMethod.get);
     });
 
+    test('preconnect sends a HEAD and swallows transport failures', () async {
+      final client = clientWith();
+      executor.bufferedResponses
+        ..add(rawResponse())
+        ..add(
+          rawResponse(kind: RawErrorKind.connectionRefused, message: 'refused'),
+        );
+
+      await client.preconnect('https://a.test/');
+      expect(executor.bufferedRequests.last.request.method, RawMethod.head);
+
+      await client.preconnect('https://a.test/');
+      expect(executor.bufferedRequests, hasLength(2));
+    });
+
+    test('cache.match serves a fresh hit synchronously; cache.load falls back '
+        'to the network', () async {
+      final client = clientWith(
+        settings: const ClientSettings(
+          cacheSettings: CacheSettings(enabled: true),
+        ),
+      );
+      executor.cachedResponses.add(
+        rawResponse(body: _bytes('hit'), fromCache: true),
+      );
+
+      final hit = client.cache.match('https://a.test/');
+      expect(hit?.body, 'hit');
+      expect(hit?.fromCache, isTrue);
+      expect(executor.cachedRequests.single.method, RawMethod.get);
+      expect(executor.bufferedRequests, isEmpty);
+
+      executor.cachedResponses.add(
+        rawResponse(body: _bytes('hit'), fromCache: true),
+      );
+      expect(client.cache.load('https://a.test/'), isA<HttpTextResponse>());
+
+      // The fake answers a miss once the queue is drained.
+      expect(client.cache.match('https://a.test/'), isNull);
+      executor.bufferedResponses.add(rawResponse(body: _bytes('net')));
+      final fallback = client.cache.load('https://a.test/');
+      expect(fallback, isA<Future<HttpTextResponse>>());
+      expect((await fallback).body, 'net');
+      expect(executor.bufferedRequests.single.request.method, RawMethod.get);
+    });
+
+    test('cache.match never consults the engine without caching enabled', () {
+      final client = clientWith();
+      expect(client.cache.match('https://a.test/'), isNull);
+      expect(executor.cachedRequests, isEmpty);
+    });
+
     test('requestStream takes the streamed path', () async {
       final client = clientWith();
       executor.streamedHeads.add(rawHead());

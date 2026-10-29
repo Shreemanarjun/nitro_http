@@ -252,6 +252,20 @@ abstract final class NitroHttp {
     List<String> urls, {
     HttpHeaders? headers,
   }) => Future.wait(urls.map((u) => prefetch(u, headers: headers)));
+
+  // ── Preconnect ─────────────────────────────────────────────────────────────
+
+  /// Warms the [defaultClient]'s connection pool for [url] without caching
+  /// anything. See [NitroHttpClient.preconnect].
+  ///
+  /// Pools are per client: this only helps requests made through
+  /// [defaultClient] / [fetch]. A client you construct yourself warms its own
+  /// pool with its own `preconnect`.
+  static Future<void> preconnect(String url) => defaultClient.preconnect(url);
+
+  /// Warms the [defaultClient]'s pool for a batch of origins concurrently.
+  static Future<void> preconnectOnAppStart(List<String> urls) =>
+      Future.wait(urls.map(preconnect));
 }
 
 /// One-liner GET on the default client.

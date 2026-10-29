@@ -825,6 +825,14 @@ abstract class NitroHttpNative extends HybridObject {
     @zeroCopy Uint8List body,
   );
 
+  /// Synchronous fresh-hit lookup in the shared cache, on the calling thread.
+  /// Anything short of a fresh entry answers `errorKind == cacheMiss` and
+  /// counts no miss — the real request the caller issues next counts it.
+  ///
+  /// Deliberately not `@nitroFast`: a hit reads the body file, and a leaf call
+  /// would hold off every GC safepoint in the isolate group for the whole read.
+  RawResponse cachedResponse(RawRequest request);
+
   void cancel(int requestId);
   void cancelAll();
 

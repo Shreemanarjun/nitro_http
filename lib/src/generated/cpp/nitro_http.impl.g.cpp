@@ -100,6 +100,12 @@ public:
         throw std::runtime_error("Not implemented: startStreamed");
     }
 
+    NitroCppBuffer cachedResponse(NitroCppBuffer request) override {
+        // TODO: implement cachedResponse
+        throw std::runtime_error("Not implemented: cachedResponse");
+        // return { nullptr, 0 };
+    }
+
     void cancel(int64_t requestId) override {
         // TODO: implement cancel
         throw std::runtime_error("Not implemented: cancel");

@@ -48,6 +48,9 @@ class _InstantExecutor implements RequestExecutor {
       throw UnimplementedError();
 
   @override
+  RawResponse cachedResponse(RawRequest request) => throw UnimplementedError();
+
+  @override
   void configureClient(RawClientConfig config) {}
   @override
   void cancel(int requestId) {}

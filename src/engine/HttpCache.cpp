@@ -1188,7 +1188,7 @@ std::string HttpCache::keyFor(
 CacheHit HttpCache::lookup(const std::string& key, RawCacheMode mode,
                            const std::string& method,
                            const std::vector<RawHeader>& requestHeaders,
-                           bool afterRevalidation) {
+                           bool afterRevalidation, bool countMisses) {
   using namespace cachefs;
 
   CacheHit hit;
@@ -1203,8 +1203,8 @@ CacheHit HttpCache::lookup(const std::string& key, RawCacheMode mode,
   //   * The re-read that follows a 304 (`afterRevalidation`). It is the same
   //     request asking the same question a second time, and it SERVES the
   //     stored body — counting it again would put one request in two buckets.
-  const auto countMiss = [this, afterRevalidation]() {
-    if (!afterRevalidation) impl_->missCount.fetch_add(1);
+  const auto countMiss = [this, afterRevalidation, countMisses]() {
+    if (!afterRevalidation && countMisses) impl_->missCount.fetch_add(1);
   };
 
   const std::string upper = asciiUpper(method);

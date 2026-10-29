@@ -38,6 +38,10 @@ final class NativeRequestExecutor implements RequestExecutor {
       _native.startStreamed(request, body);
 
   @override
+  RawResponse cachedResponse(RawRequest request) =>
+      _native.cachedResponse(request);
+
+  @override
   void cancel(int requestId) => _native.cancel(requestId);
 
   @override

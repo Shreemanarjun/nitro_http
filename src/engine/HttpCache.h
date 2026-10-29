@@ -112,10 +112,13 @@ class HttpCache {
   /// conditional request and would throw the bytes away), and it leaves the
   /// hit/miss counters alone. One request must move them exactly once, on its
   /// first lookup; the revalidation is already recorded by `revalidationCount`.
+  ///
+  /// `countMisses = false` is a peek: a fresh hit still counts (it is served),
+  /// but a miss is left for the real request the caller issues next.
   CacheHit lookup(const std::string& key, RawCacheMode mode,
                   const std::string& method,
                   const std::vector<RawHeader>& requestHeaders,
-                  bool afterRevalidation = false);
+                  bool afterRevalidation = false, bool countMisses = true);
 
   /// Starts a write-back for a response that policy says is storable. Returns
   /// null when it is not — an unstorable response is the common case and not

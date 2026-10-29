@@ -833,6 +833,27 @@ await NitroHttp.prefetchOnAppStart([
 ]);
 ```
 
+A fresh entry can also be read synchronously — one native call, no Future —
+which is what lets a first frame render from cache without a loading state:
+
+```dart
+final hit = client.cache.match('/feed');          // HttpTextResponse? — null on miss
+final res = client.cache.load('/feed');           // FutureOr: value on a hit, get() otherwise
+final feed = res is HttpTextResponse ? res : await res;
+```
+
+Stale entries never come back this way (they need the network to revalidate),
+and the sync path skips interceptors — it is a cache read, not a request.
+
+When you only want the handshake done — no cached body — use `preconnect`.
+It warms that client's pool (DNS, TCP, TLS) so the first real request skips
+them; pools are per client, so warm the one you will actually use:
+
+```dart
+await NitroHttp.preconnectOnAppStart(['https://api.example.com']);  // default client
+await client.preconnect('https://api.example.com');                 // your own
+```
+
 Warm it before the user asks for anything:
 
 ```dart

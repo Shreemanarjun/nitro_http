@@ -254,6 +254,15 @@ final class FetchRequestExecutor implements RequestExecutor {
     );
   }
 
+  /// The browser's cache is not inspectable, so the sync path is always a miss
+  /// and `cachedOrGet` falls through to `fetch`, which may still hit it.
+  @override
+  RawResponse cachedResponse(RawRequest request) => RawResponse(
+    requestId: request.requestId,
+    errorKind: RawErrorKind.cacheMiss,
+    body: Uint8List(0),
+  );
+
   @override
   Future<RawResponse> sendBuffered(RawRequest request, Uint8List body) async {
     _checkAlive();

@@ -219,6 +219,32 @@ void main() {
     expect(end.hitRate, inClosedOpenRange(0, 1));
   });
 
+  testWidgets(
+      'cache.match serves a fresh entry synchronously and counts it as a hit',
+      (_) async {
+    final start = NitroHttp.cacheStats();
+    expect(client.cache.match(fresh), isNull, reason: 'nothing stored yet');
+
+    final first = await client.get(fresh); // miss + store
+    final hit = client.cache.match(fresh);
+    expect(hit, isNotNull);
+    expect(hit!.fromCache, isTrue);
+    expect(hit.body, first.body);
+    expect(server.requestsFor(fresh), 1, reason: 'a sync hit never reaches the server');
+
+    final direct = client.cache.load(fresh);
+    expect(direct, isA<HttpTextResponse>(), reason: 'a hit is a value, not a Future');
+
+    await client.get(stale); // miss + store
+    expect(client.cache.match(stale), isNull,
+        reason: 'stale is never served without revalidation');
+
+    final end = NitroHttp.cacheStats();
+    expect(end.hitCount - start.hitCount, 2);
+    expect(end.missCount - start.missCount, 2,
+        reason: 'the peeks that missed must not count; the two GETs do');
+  });
+
   testWidgets('a client that did not opt in never reads the cache', (_) async {
     await client.get(fresh);
     expect(server.requestsFor(fresh), 1);

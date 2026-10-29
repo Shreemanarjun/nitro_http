@@ -50,6 +50,9 @@ abstract interface class RequestExecutor {
   Future<RawResponse> sendBuffered(RawRequest request, Uint8List body);
   Future<RawResponseHead> startStreamed(RawRequest request, Uint8List body);
 
+  /// A fresh cache hit, synchronously; `errorKind == cacheMiss` otherwise.
+  RawResponse cachedResponse(RawRequest request);
+
   void cancel(int requestId);
   void cancelAll();
 
@@ -271,6 +274,23 @@ class RequestRunner {
       await eventSub?.cancel();
       _demux.release(requestId);
     }
+  }
+
+  /// A fresh cache hit for [request], served without an engine round trip, or
+  /// `null`. Never stale: a stale entry needs the network to revalidate.
+  HttpResponse? cached(HttpRequest request) {
+    _checkAlive();
+    if (!settings.cacheSettings.enabled) return null;
+    final raw = toRawRequest(
+      requestId: Ids.nextRequest(),
+      request: request,
+      headers: _headersFor(request, EncodedBody.none),
+      body: EncodedBody.none,
+      reportProgress: false,
+    );
+    final response = _executor.cachedResponse(raw);
+    if (response.errorKind == RawErrorKind.cacheMiss) return null;
+    return _completeBuffered(request, response, false);
   }
 
   HttpResponse _completeBuffered(

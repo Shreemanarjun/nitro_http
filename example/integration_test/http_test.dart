@@ -94,6 +94,25 @@ void main() {
           customMethod: 'PURGE');
       expect(server.hits.last.method, 'PURGE');
     });
+
+    testWidgets('preconnect sends a HEAD and the next GET reuses the connection',
+        (_) async {
+      final http = client();
+      await http.preconnect('/status/200');
+      expect(server.hits.last.method, 'HEAD');
+
+      final response = await http.get('/echo');
+      expect(response.statusCode, 200);
+      expect(
+        response.timings.connect,
+        Duration.zero,
+        reason: 'connection was pooled',
+      );
+
+      // A failing origin must not throw.
+      await http.preconnect('/status/500');
+      expect(server.hits.last.method, 'HEAD');
+    });
   });
 
   group('round trips', () {

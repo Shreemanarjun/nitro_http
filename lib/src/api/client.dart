@@ -115,6 +115,25 @@ class NitroHttpClient {
     options: options,
   );
 
+  /// Warms this client's connection pool for [url]: DNS, TCP and TLS are done
+  /// by the time it returns, so the first real request to that origin skips
+  /// them. Nothing is cached — use [NitroHttp.prefetch] to warm the cache too.
+  ///
+  /// Implemented as a `HEAD`, because libcurl only pools a connection once a
+  /// request has completed on it; a bare connect (`CONNECT_ONLY`) would be
+  /// thrown away instead of reused. Completes normally on failure.
+  Future<void> preconnect(String url) async {
+    try {
+      await head(url);
+    } on NitroHttpException {
+      // Best-effort warm-up — see the doc comment.
+    }
+  }
+
+  /// This client's view of the shared cache: [ClientCache.match] for a
+  /// synchronous fresh hit, [ClientCache.load] for hit-or-network.
+  ClientCache get cache => ClientCache._(this);
+
   Future<HttpTextResponse> post(
     String path, {
     HttpBody? body,
@@ -548,5 +567,60 @@ extension NitroHttpClientDownload on NitroHttpClient {
       options: options,
     );
     return res.bodyBytes;
+  }
+}
+
+/// A client's view of the shared cache, from [NitroHttpClient.cache].
+///
+/// Reads here bypass interceptors and the retry policy — a cache read has
+/// nothing for them to do — and need `CacheSettings(enabled: true)`; without
+/// it every [match] is `null`. `throwOnStatusCode` applies as it does for `get`.
+final class ClientCache {
+  ClientCache._(this._client);
+
+  final NitroHttpClient _client;
+
+  /// The fresh cached response for a GET of [path], or `null` — synchronously,
+  /// with no engine round trip. Never a stale entry: stale needs the network
+  /// to revalidate, and that is [NitroHttpClient.get]'s job.
+  HttpTextResponse? match(
+    String path, {
+    Map<String, dynamic>? query,
+    HttpHeaders? headers,
+    RequestOptions options = const RequestOptions(),
+  }) =>
+      _client._runner.cached(
+            _client._build(
+              HttpMethod.get,
+              path,
+              HttpExpectedBody.text,
+              query: query,
+              headers: headers,
+              options: options,
+            ),
+          )
+          as HttpTextResponse?;
+
+  /// A fresh entry as a plain value, the network as a Future.
+  ///
+  /// [match] when it hits, [NitroHttpClient.get] when it does not. `await` it
+  /// and it behaves exactly like `get`; test `is HttpTextResponse` to use a hit
+  /// synchronously, e.g. for a first frame that needs no loading state.
+  FutureOr<HttpTextResponse> load(
+    String path, {
+    Map<String, dynamic>? query,
+    HttpHeaders? headers,
+    CancelToken? cancelToken,
+    RequestOptions options = const RequestOptions(),
+  }) {
+    final hit = match(path, query: query, headers: headers, options: options);
+    if (hit != null) return hit;
+    return _client.get(
+      path,
+      query: query,
+      headers: headers,
+      cancelToken: cancelToken,
+      options: options,
+    );
   }
 }

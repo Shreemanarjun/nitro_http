@@ -232,6 +232,10 @@ class FakeRequestExecutor implements RequestExecutor {
       );
 
   @override
+  RawResponse cachedResponse(RawRequest request) =>
+      throw UnsupportedError('the dio adapter never peeks at the cache');
+
+  @override
   void cancel(int requestId) => cancelled.add(requestId);
 
   @override

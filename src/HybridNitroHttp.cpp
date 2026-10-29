@@ -76,6 +76,35 @@ class HybridNitroHttpImpl final : public HybridNitroHttpNative {
     submit(request, body, body_length, RespMode::Streamed, dartPort);
   }
 
+  NitroCppBuffer cachedResponse(NitroCppBuffer request) override {
+    const RawRequest req = wire::decodeRequest(request);
+    RawResponse response{};
+    response.requestId = req.requestId;
+    response.errorKind = RawErrorKind::RAWERRORKIND_CACHE_MISS;
+
+    const RawCacheMode mode = req.options.cacheMode;
+    const std::shared_ptr<HttpCache> cache = EngineRegistry::cache();
+    // `refresh` means "ask the origin", so a fresh entry is not an answer here.
+    if (cache && mode != RawCacheMode::RAWCACHEMODE_REFRESH) {
+      const std::string method = wire::methodToken(req);
+      CacheHit hit =
+          cache->lookup(cache->keyFor(method, req.url, req.headers), mode,
+                        method, req.headers, /*afterRevalidation=*/false,
+                        /*countMisses=*/false);
+      if (hit.outcome == CacheOutcome::Fresh) {
+        response.errorKind = RawErrorKind::RAWERRORKIND_NONE;
+        response.statusCode = hit.statusCode;
+        response.version = RawHttpVersion::RAWHTTPVERSION_UNKNOWN;
+        response.finalUrl = req.url;
+        response.headers = std::move(hit.headers);
+        response.body = std::move(hit.body);
+        response.fromCache = true;
+        response.timings = wire::zeroTimings();
+      }
+    }
+    return wire::encodeResponse(response).toBuffer();
+  }
+
   void cancel(int64_t requestId) override { role_.engine().cancel(requestId); }
   void cancelAll() override { role_.engine().cancelAll(); }
 

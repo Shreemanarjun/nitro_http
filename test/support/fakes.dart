@@ -62,6 +62,12 @@ final class FakeRequestExecutor implements RequestExecutor {
   /// Every streamed request, in order.
   final List<SentRequest> streamedRequests = <SentRequest>[];
 
+  /// Every `cachedResponse` lookup, in order.
+  final List<RawRequest> cachedRequests = <RawRequest>[];
+
+  /// Answers handed to successive `cachedResponse` calls; a miss when empty.
+  final Queue<RawResponse> cachedResponses = Queue<RawResponse>();
+
   /// Request ids passed to `cancel`, in order.
   final List<int> cancelled = <int>[];
 
@@ -132,6 +138,16 @@ final class FakeRequestExecutor implements RequestExecutor {
       throw StateError('no queued RawResponse for ${request.url}');
     }
     return bufferedResponses.removeFirst();
+  }
+
+  @override
+  RawResponse cachedResponse(RawRequest request) {
+    cachedRequests.add(request);
+    if (cachedResponses.isNotEmpty) return cachedResponses.removeFirst();
+    return rawResponse(
+      requestId: request.requestId,
+      kind: RawErrorKind.cacheMiss,
+    );
   }
 
   @override

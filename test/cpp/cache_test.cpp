@@ -433,6 +433,14 @@ TEST_F(CacheFixture, ALookupForAnUnknownKeyIsAMiss) {
   EXPECT_EQ(hit.outcome, CacheOutcome::Miss);
   EXPECT_TRUE(hit.body.empty());
   EXPECT_EQ(cache->stats().missCount, 1);
+
+  // A peek (`countMisses = false`) leaves the miss for the real request.
+  const CacheHit peek =
+      cache->lookup(cache->keyFor("GET", "http://a/b", {}), RAWCACHEMODE_NORMAL,
+                    "GET", {}, /*afterRevalidation=*/false,
+                    /*countMisses=*/false);
+  EXPECT_EQ(peek.outcome, CacheOutcome::Miss);
+  EXPECT_EQ(cache->stats().missCount, 1);
 }
 
 TEST_F(CacheFixture, EveryCacheModeBehavesAsSpecified) {

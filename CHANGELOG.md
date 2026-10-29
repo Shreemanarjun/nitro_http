@@ -8,6 +8,18 @@
 * `CookieSettings` is now a sealed class: `none()` / `inMemory()` (default) /
   `persistent(path)`, replacing the `storeCookies` + `persistPath` fields.
 
+### Added
+
+* `NitroHttpClient.preconnect(url)`, `NitroHttp.preconnect(url)` and
+  `NitroHttp.preconnectOnAppStart(urls)`: warm DNS + TCP + TLS for an origin
+  at app start without caching a body. A `HEAD` under the hood, since libcurl
+  only pools a connection after a completed request; never throws.
+* `client.cache`: `match(path)` serves a fresh cache entry synchronously from
+  one native call — no engine round trip, no Future; `null` otherwise (stale is
+  never served this way). `load(path)` returns `FutureOr`: the value on a hit,
+  `get`'s Future on a miss. Both bypass interceptors and need
+  `CacheSettings(enabled: true)`.
+
 ### Fixed
 
 * **#3** — iOS/macOS archived builds (TestFlight/App Store) no longer crash with

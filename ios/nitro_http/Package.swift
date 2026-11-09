@@ -2,6 +2,11 @@
 import Foundation
 import PackageDescription
 
+let nitroAppleExportsHeader = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .appendingPathComponent("../../src/nitro_apple_exports.h")
+    .standardizedFileURL.path
+
 // nitro_http has no Swift code any more — the Nitro spec declares
 // `AppleNativeImpl.cpp`, so the entire implementation is the C++ engine.
 // The former `nitro_http` Swift target (Sources/NitroHttp) is gone, and with it
@@ -106,6 +111,7 @@ let usesNitroCurl = curlSource != .sdk
 // SDK's own `usr/include/curl` is already on the default search path.
 var cxxSettings: [CXXSetting] = [
     .headerSearchPath("include"),
+    .unsafeFlags(["-include", nitroAppleExportsHeader]),
     .unsafeFlags(["-std=c++17"]),
     // -O3 for anything that is not a debug build. Xcode's default here was `-Os`
     // — optimise for SIZE — because neither this manifest nor the podspec set a

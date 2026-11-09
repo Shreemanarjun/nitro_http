@@ -222,6 +222,7 @@ overrides and DoH, cookies, a disk cache, and WebSockets.
     'DEFINES_MODULE' => 'YES',
     'CLANG_CXX_LANGUAGE_STANDARD' => 'c++17',
     'CLANG_CXX_LIBRARY' => 'libc++',
+    'OTHER_CPLUSPLUSFLAGS' => '$(inherited) -include "${PODS_TARGET_SRCROOT}/../src/nitro_apple_exports.h"',
     # engine/ContentDecoder inflates `br` and `zstd` itself — libcurl's own
     # content decoding is off — so these must track what is actually linked,
     # not what curl advertises. Only the vendored xcframework carries

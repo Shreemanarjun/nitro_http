@@ -235,5 +235,11 @@ overrides and DoH, cookies, a disk cache, and WebSockets.
     # slice directory name (ios-arm64, ios-arm64_x86_64-simulator, …).
     'HEADER_SEARCH_PATHS' => '$(inherited) "${PODS_ROOT}/../.symlinks/plugins/nitro/src/native" "${PODS_TARGET_SRCROOT}/../src" "${PODS_TARGET_SRCROOT}/../src/engine" "${PODS_TARGET_SRCROOT}/../lib/src/generated/cpp" "${PODS_TARGET_SRCROOT}/nitro_http/Frameworks/NitroCurl.xcframework/**"'
   }
+  # Dart calls the bridge init function through dlsym, and the implementation
+  # registers itself from a constructor. Force both archive members into the
+  # final app link when CocoaPods builds this pod as a static library.
+  s.user_target_xcconfig = {
+    'OTHER_LDFLAGS' => '$(inherited) -Wl,-u,_nitro_http_init_dart_api_dl -Wl,-u,_nitro_http_force_link_registration'
+  }
   s.swift_version = '5.9'
 end

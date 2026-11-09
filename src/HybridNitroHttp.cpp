@@ -274,6 +274,13 @@ void registerEverything() {
 
 }  // namespace
 
+// CocoaPods can package this file in a static archive. The app's final link
+// uses this symbol to pull in the archive member with the registration ctor.
+#if defined(__APPLE__)
+extern "C" __attribute__((used, visibility("default")))
+void nitro_http_force_link_registration() {}
+#endif
+
 // ── Auto-registration on library load ────────────────────────────────────────
 #if defined(_WIN32)
 namespace {

@@ -1,3 +1,11 @@
+## 0.0.7
+
+### Changed
+
+* Upgraded to **`nitro` 0.8.6**: weakly-linked `dart_api_dl` symbols, so two nitro
+  plugins in one iOS/macOS SwiftPM app link again (nitro #61), and an
+  allocation-free `@nitroAsync` worker dispatch. No API change.
+
 ## 0.0.6
 
 ### Breaking

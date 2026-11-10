@@ -1,6 +1,6 @@
 name: nitro_http
 description: A fast HTTP client for Flutter backed by a native libcurl C++ engine over Nitro FFI, with HTTP/1.1, HTTP/2, HTTP/3, streaming and WebSockets.
-version: 0.0.6
+version: 0.0.7
 homepage: https://github.com/Shreemanarjun/nitro_http
 repository: https://github.com/Shreemanarjun/nitro_http
 issue_tracker: https://github.com/Shreemanarjun/nitro_http/issues
@@ -29,7 +29,7 @@ dependencies:
   # Only reached from `package:nitro_http/dio.dart`; the main barrel never
   # imports it, so an app that does not use the adapter tree-shakes it away.
   dio: ^5.7.0
-  nitro: ^0.8.3
+  nitro: ^0.8.6
   # Both are tiny and pure Dart. `http` backs the `package:http` Client
   # adapter and `web_socket` the official WebSocket interface, so consumers
   # can swap nitro_http in without rewriting call sites.
@@ -45,7 +45,7 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   build_runner: ^2.4.0
-  nitro_generator: ^0.8.3
+  nitro_generator: ^0.8.6
   test: ^1.25.0
   # A local HTTP + WebSocket server for the engine's end-to-end tests, so the
   # suite never depends on the public internet.

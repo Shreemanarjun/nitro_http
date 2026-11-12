@@ -1,6 +1,6 @@
 // Standalone runner for the benchmark's `shelf` test server, so NATIVE clients
 // (Swift/URLSession, Kotlin/OkHttp) can hit the exact same server — same routes,
-// same deterministic `/bytes/<n>` generator, same `/upload` hashing — that the
+// same deterministic `/bytes/<n>` generator, same `/upload/sink` byte counter — that the
 // in-app Flutter harness uses. That identity is what makes the native-vs-nitro
 // numbers a fair comparison rather than two different servers.
 //

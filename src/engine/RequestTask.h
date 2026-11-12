@@ -52,6 +52,10 @@ enum class RespMode {
 struct PendingRequest {
   RawRequest req;               ///< owns its strings and header vector
   std::vector<uint8_t> body;    ///< inline body, already copied
+  /// A streamed body's pipe, when the producer opened a direct writer before the
+  /// loop thread picked the request up. The task adopts it rather than making
+  /// its own, so nothing written early is lost.
+  std::shared_ptr<BodyPipe> pipe;
   RespMode mode = RespMode::Buffered;
   int64_t dartPort = 0;
   double submittedAtMs = 0;     ///< for RawTimings::queueMs
@@ -192,6 +196,11 @@ class RequestTask {
   bool readPaused() const { return readPaused_; }
   void clearReadPause() { readPaused_ = false; }
   bool hasUploadPipe() const { return pipe_ != nullptr; }
+  /// Shared so a direct writer can outlive the task — see `CurlEngine::uploadWrite`.
+  const std::shared_ptr<BodyPipe>& uploadPipe() const { return pipe_; }
+  int64_t uploadContentLength() const {
+    return pending_.req.options.uploadContentLength;
+  }
 
  private:
   // curl callback trampolines
@@ -308,6 +317,10 @@ class RequestTask {
   /// neither — curl still reads 16 KiB at a time, and credits still bound how
   /// much is outstanding.
   size_t coalesceTarget_ = 0;
+  /// The client's coalescing settings as they stood when this request started.
+  int64_t streamChunkBytes_ = -1;
+  int64_t streamChunkMinContentLength_ = -1;
+  int64_t streamChunkMaxHoldMs_ = -1;
 
   /// Longest `coalesceBuf_` may be held before it is emitted part-full.
   double coalesceMaxHoldMs_ = 0.0;
@@ -316,7 +329,7 @@ class RequestTask {
   double coalesceStartedMs_ = 0.0;
 
   // Streamed upload bookkeeping.
-  std::unique_ptr<BodyPipe> pipe_;
+  std::shared_ptr<BodyPipe> pipe_;
   bool readPaused_ = false;
 
   // Progress throttling — one event per 100 ms at most, plus a synthesized

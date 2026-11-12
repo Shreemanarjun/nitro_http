@@ -6,7 +6,10 @@
 library;
 
 import 'dart:async';
+import 'dart:ffi';
 import 'dart:typed_data';
+
+import 'package:nitro/nitro.dart' show NitroBuffer;
 
 import '../nitro_http.native.dart';
 import 'instance_keys.dart';
@@ -40,6 +43,10 @@ final class NativeRequestExecutor implements RequestExecutor {
   @override
   RawResponse cachedResponse(RawRequest request) =>
       _native.cachedResponse(request);
+
+  @override
+  UploadWriter? openUploadWriter(int requestId) =>
+      _NativeUploadWriter(this, requestId);
 
   @override
   void cancel(int requestId) => _native.cancel(requestId);
@@ -215,3 +222,72 @@ RequestExecutor defaultExecutor(int clientId, ClientSettings settings) =>
 
 /// The demux a client gets on a platform with `dart:ffi`.
 StreamDemux get defaultDemux => NativeStreamDemux.instance;
+
+/// The FFI half of [UploadWriter]: a view over the region the engine lent out,
+/// filled with one `setRange`, published with one call.
+final class _NativeUploadWriter implements UploadWriter {
+  _NativeUploadWriter(this._owner, this._requestId) {
+    _out.bytes.fillRange(0, _out.bytes.length, 0);
+  }
+
+  /// What is reserved ahead for the next chunk. A larger chunk asks for its
+  /// own room when it arrives; reserving its size ahead of time instead would
+  /// leave a body that fits its pipe exactly asking for room past its own end
+  /// after the last chunk, and the pipe growing to provide it.
+  static const int _minReserve = 64 * 1024;
+
+  final NativeRequestExecutor _owner;
+  final int _requestId;
+
+  /// Where the engine reports back: region address, bytes buffered, pause depth.
+  final NitroBuffer _out = NitroBuffer(24);
+  late final Int64List _reply = Int64List.sublistView(_out.bytes);
+
+  var _address = 0;
+  var _capacity = 0;
+  var _highWaterMark = kUploadHighWaterMark;
+  var _released = false;
+
+  @override
+  int get highWaterMark => _highWaterMark;
+
+  /// Publishes [commit] bytes and asks for [reserve] more. False once the
+  /// upload is closed, after which nothing here may be written to again.
+  bool _exchange(int commit, int reserve) {
+    final open =
+        _owner._native.uploadWrite(
+          _requestId,
+          commit,
+          reserve,
+          _out.pointer.address,
+        ) !=
+        0;
+    _address = open ? _reply[0] : 0;
+    _capacity = open ? reserve : 0;
+    if (open) _highWaterMark = _reply[2];
+    return open;
+  }
+
+  @override
+  int write(List<int> chunk) {
+    // A disposed client's native instance is gone; calling into it hangs.
+    if (_released || _owner._disposed) return -1;
+    final n = chunk.length;
+    if ((_address == 0 || _capacity < n) &&
+        !_exchange(0, n > _minReserve ? n : _minReserve)) {
+      return -1;
+    }
+    if (n > 0) {
+      Pointer<Uint8>.fromAddress(_address).asTypedList(n).setRange(0, n, chunk);
+    }
+    return _exchange(n, _minReserve) ? _reply[1] : -1;
+  }
+
+  @override
+  void release() {
+    if (_released) return;
+    _released = true;
+    if (!_owner._disposed) _owner._native.uploadRelease(_requestId);
+    _out.dispose();
+  }
+}

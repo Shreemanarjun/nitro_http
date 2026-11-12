@@ -18,6 +18,13 @@
 # Why the binary is executed directly rather than through `flutter run`: the
 # tool never exits after the app calls exit(), so a loop built on it deadlocks
 # on the first iteration. Build once, exec many.
+#
+# The two upload scenarios post to a NATIVE sink (tool/bench_native/sink), not
+# to the app's own Dart server. That server takes longer to read 8 MiB than any
+# client takes to send it, and it shares a VM with the client under test, so
+# against it every client lands within noise of the others and the row measures
+# the server. BENCH_UPLOAD_SINK=dart restores it; BENCH_UPLOAD_SINK=<url> uses a
+# sink that is already running.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
@@ -129,7 +136,9 @@ fi
 # after — but only if we can do so without a password prompt, because a
 # benchmark that blocks on sudo is worse than one that runs with Spotlight on.
 SPOTLIGHT_PAUSED=0
+SINK_STARTED=0
 restore_spotlight() {
+  [ "$SINK_STARTED" = 1 ] && tool/bench_native/sink/sink.sh stop macos >/dev/null 2>&1
   [ "$SPOTLIGHT_PAUSED" = 1 ] && sudo -n mdutil -a -i on >/dev/null 2>&1 && echo "  restored Spotlight indexing"
   SPOTLIGHT_PAUSED=0
 }
@@ -155,11 +164,30 @@ if [ "$KEEP" = 1 ] && [ -x "$BIN" ]; then
   echo "==> reusing the existing release build"
 else
   echo "==> building release (this is the only build; the loop re-executes it)"
-  ( cd example && flutter build macos --release \
+  # rhttp (a comparison client) builds Rust with `strip = true`, and on Xcode 27
+  # a stripped proc-macro dylib no longer loads: `can't find crate for
+  # zerofrom_derive`. Unstripped costs nothing measured here.
+  ( cd example && CARGO_PROFILE_RELEASE_STRIP=false flutter build macos --release \
       --dart-define=NITRO_HTTP_BENCHMARK=1 ) >"$OUT/build.log" 2>&1 \
     || { echo "build failed — see $OUT/build.log"; exit 1; }
 fi
 [ -x "$BIN" ] || { echo "no benchmark binary at $BIN"; exit 1; }
+
+# ── Upload sink ──────────────────────────────────────────────────────────────
+SINK_URL=""
+case "${BENCH_UPLOAD_SINK:-native}" in
+  dart) ;;
+  native)
+    if SINK_URL=$(tool/bench_native/sink/sink.sh start macos 2>/dev/null) && [ -n "$SINK_URL" ]; then
+      SINK_STARTED=1  # stopped by the exit handler above
+    else
+      SINK_URL=""
+      echo "  warn    native upload sink did not start — uploads go to the Dart server"
+    fi
+    ;;
+  *) SINK_URL="$BENCH_UPLOAD_SINK" ;;
+esac
+echo "==> upload target: ${SINK_URL:-the Dart server inside the app}"
 
 # ── Run ──────────────────────────────────────────────────────────────────────
 if [ "$ADAPTIVE" = 1 ]; then
@@ -172,7 +200,9 @@ while :; do
   i=$((i + 1))
   printf '  run %2d ... ' "$i"
   f=$(printf '%s/run-%02d.txt' "$OUT" "$i")
-  "$BIN" 2>&1 | grep "NITRO_BENCH" > "$f"
+  # Always set, empty included: the app reads this variable, and an inherited
+  # `dart` or `native` is a mode for this script, not a URL.
+  BENCH_UPLOAD_SINK="$SINK_URL" "$BIN" 2>&1 | grep "NITRO_BENCH" > "$f"
   if grep -q NITRO_BENCH_END "$f"; then
     p50=$(awk -F'|' '/\| small GET \| nitro_http /{print $7}' "$f" | tr -d ' ')
     status="ok (small GET p50 $p50)"

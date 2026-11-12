@@ -6,6 +6,13 @@
 #   tool/bench-android.sh 20
 #   tool/bench-android.sh 10 --keep  # reuse the installed APK, skip the build
 #
+# The two upload scenarios post to a NATIVE sink pushed to the device
+# (tool/bench_native/sink), not to the app's own Dart server: that server reads
+# 8 MiB more slowly than any client sends it and shares a VM with the client
+# under test, so against it the row measures the server. BENCH_UPLOAD_SINK=dart
+# restores it. The target is compiled into the APK, so --keep reuses whichever
+# one the installed build was made with.
+#
 # Everything here that looks paranoid is a bug this project already paid for.
 #
 # THERMALS ARE THE WHOLE GAME. Two measurement sets taken minutes apart differed
@@ -109,6 +116,23 @@ fi
 
 [ "$fail" -eq 1 ] && { echo; echo "Preflight failed."; exit 1; }
 
+# ── Upload sink ──────────────────────────────────────────────────────────────
+SINK_URL=""
+SINK_STARTED=0
+case "${BENCH_UPLOAD_SINK:-native}" in
+  dart) ;;
+  native)
+    if SINK_URL=$(tool/bench_native/sink/sink.sh start android 2>/dev/null) && [ -n "$SINK_URL" ]; then
+      SINK_STARTED=1
+    else
+      SINK_URL=""
+      echo "  warn    native upload sink did not start — uploads go to the Dart server"
+    fi
+    ;;
+  *) SINK_URL="$BENCH_UPLOAD_SINK" ;;
+esac
+echo "==> upload target: ${SINK_URL:-the Dart server inside the app}"
+
 # ── Build and install once ───────────────────────────────────────────────────
 APK="example/build/app/outputs/flutter-apk/app-release.apk"
 if [ "$KEEP" = 1 ] && [ -f "$APK" ]; then
@@ -117,7 +141,8 @@ else
   echo "==> building release APK (arm64 only, matching the vendored slice)"
   ( cd example && flutter build apk --release \
       --target-platform android-arm64 \
-      --dart-define=NITRO_HTTP_BENCHMARK=1 ) >"$OUT/build.log" 2>&1 \
+      --dart-define=NITRO_HTTP_BENCHMARK=1 \
+      --dart-define=BENCH_UPLOAD_SINK="$SINK_URL" ) >"$OUT/build.log" 2>&1 \
     || { echo "build failed — see $OUT/build.log"; exit 1; }
 fi
 # `-r` rather than a clean install: a stale package-manager entry on this device
@@ -138,6 +163,7 @@ ORIG_TIMEOUT=$(adb shell settings get system screen_off_timeout 2>/dev/null | tr
 adb shell dumpsys battery unplug >/dev/null 2>&1 || true
 adb shell settings put system screen_off_timeout 1800000 >/dev/null 2>&1 || true
 restore_device() {
+  [ "$SINK_STARTED" = 1 ] && tool/bench_native/sink/sink.sh stop android >/dev/null 2>&1
   adb shell dumpsys battery reset >/dev/null 2>&1 || true
   case "$ORIG_TIMEOUT" in
     ''|*[!0-9]*) ;;
@@ -159,7 +185,11 @@ for i in $(seq 1 "$RUNS"); do
 
   adb logcat -c >/dev/null 2>&1
   adb shell am force-stop "$APP_ID" >/dev/null 2>&1
-  adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
+  # `monkey` aborts outright on images with no physical system keys (most
+  # emulators: "SYS_KEYS has no physical keys", exit -5) and the run then logs
+  # nothing at all. Fall back to starting the launcher activity directly.
+  adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 \
+    || adb shell am start -n "$APP_ID/.MainActivity" >/dev/null 2>&1
 
   f=$(printf '%s/run-%02d.txt' "$OUT" "$i")
   # Poll rather than stream: `adb logcat` has no clean "stop at this line".

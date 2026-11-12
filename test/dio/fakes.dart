@@ -261,8 +261,11 @@ class FakeRequestExecutor implements RequestExecutor {
       credits.add((requestId, chunkCount, ackedChunks));
 
   @override
+  UploadWriter? openUploadWriter(int requestId) => null;
+
+  @override
   int feedUploadChunk(int requestId, Uint8List chunk) {
-    uploaded.add(chunk);
+    uploaded.add(Uint8List.fromList(chunk));
     // Bytes still buffered natively; zero keeps the pump below its high-water
     // mark so it never pauses the source.
     return 0;

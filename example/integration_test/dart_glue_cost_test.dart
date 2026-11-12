@@ -51,6 +51,9 @@ class _InstantExecutor implements RequestExecutor {
   RawResponse cachedResponse(RawRequest request) => throw UnimplementedError();
 
   @override
+  UploadWriter? openUploadWriter(int requestId) => null;
+
+  @override
   void configureClient(RawClientConfig config) {}
   @override
   void cancel(int requestId) {}

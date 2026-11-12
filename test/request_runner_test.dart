@@ -478,6 +478,144 @@ void main() {
       await pumpEventQueue();
     });
 
+    group('through an upload writer', () {
+      late FakeUploadWriter writer;
+
+      setUp(() {
+        writer = FakeUploadWriter();
+        executor.uploadWriter = writer;
+      });
+
+      Future<int> startSizedUpload(int contentLength) async {
+        unawaited(
+          runnerWith().sendBuffered(
+            fakeRequest(
+              method: HttpMethod.post,
+              body: HttpBody.stream(source.stream, contentLength: contentLength),
+            ),
+          ),
+        );
+        await pumpEventQueue();
+        return executor.bufferedRequests.single.request.requestId;
+      }
+
+      test('chunks are written, not fed, and the writer is released at the end',
+          () async {
+        final id = await startUpload();
+        source
+          ..add(<int>[1, 2])
+          ..add(<int>[3]);
+        await pumpEventQueue();
+
+        expect(writer.written.map((c) => c.toList()), <List<int>>[
+          <int>[1, 2],
+          <int>[3],
+        ]);
+        expect(executor.uploadChunks, isEmpty);
+        expect(writer.releaseCount, 0);
+
+        await source.close();
+        await pumpEventQueue();
+        expect(executor.finishedUploads, <int>[id]);
+        expect(writer.releaseCount, 1);
+
+        response.complete(rawResponse());
+        await pumpEventQueue();
+        expect(writer.releaseCount, 1, reason: 'released exactly once');
+      });
+
+      test('pauses at the depth the engine names, not the default', () async {
+        final id = await startUpload();
+        writer
+          ..highWaterMark = 8
+          ..buffered = 4;
+        source.add(<int>[1]);
+        await pumpEventQueue();
+        expect(transitions, isEmpty, reason: '4 buffered is under a mark of 8');
+
+        writer.buffered = 8;
+        source.add(<int>[2]);
+        await pumpEventQueue();
+        expect(transitions, <String>['pause']);
+
+        demux.pushEvent(
+          RawEvent(
+            requestId: id,
+            kind: RawEventKind.uploadDrain,
+            a: 3,
+            b: 8,
+            message: '',
+          ),
+        );
+        await pumpEventQueue();
+        expect(transitions, <String>['pause', 'resume']);
+        response.complete(rawResponse());
+        await pumpEventQueue();
+      });
+
+      test('the final chunk of a sized body never pauses the source', () async {
+        // The next thing the source says is "done"; pausing here would hold
+        // that back until a drain event that has nothing left to announce.
+        final id = await startSizedUpload(3);
+        writer
+          ..highWaterMark = 2
+          ..buffered = 3;
+        source.add(<int>[1, 2, 3]);
+        await pumpEventQueue();
+        expect(transitions, isEmpty);
+
+        await source.close();
+        await pumpEventQueue();
+        expect(executor.finishedUploads, <int>[id]);
+        response.complete(rawResponse());
+        await pumpEventQueue();
+      });
+
+      test('a writer that never opens hands the upload back to feeding', () async {
+        // Refused on the very first chunk means there was no direct path for
+        // this request; the body must still go out, the ordinary way.
+        final id = await startUpload();
+        writer.closed = true;
+        source
+          ..add(<int>[1, 2])
+          ..add(<int>[3]);
+        await pumpEventQueue();
+
+        expect(writer.written, isEmpty);
+        expect(writer.releaseCount, 1, reason: 'the dead writer is let go');
+        expect(executor.uploadChunks.map((c) => c.bytes.toList()), <List<int>>[
+          <int>[1, 2],
+          <int>[3],
+        ]);
+
+        await source.close();
+        await pumpEventQueue();
+        expect(executor.finishedUploads, <int>[id]);
+        expect(writer.releaseCount, 1, reason: 'and not released twice');
+        response.complete(rawResponse());
+        await pumpEventQueue();
+      });
+
+      test('stops writing once the engine can take no more', () async {
+        await startUpload();
+        source.add(<int>[1]);
+        await pumpEventQueue();
+        writer.closed = true;
+        source
+          ..add(<int>[2])
+          ..add(<int>[3]);
+        await pumpEventQueue();
+        expect(writer.written.map((c) => c.toList()), <List<int>>[
+          <int>[1],
+        ]);
+        expect(executor.uploadChunks, isEmpty, reason: 'no fallback to feeding');
+
+        response.complete(rawResponse());
+        await pumpEventQueue();
+        expect(writer.releaseCount, 1, reason: 'abandoning the pump releases');
+      });
+    });
+
     test('pauses above the high-water mark and resumes on a drain event', () async {
       final id = await startUpload();
       executor.onFeedUploadChunk = (_, chunk) =>

@@ -31,6 +31,7 @@ library;
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:nitro/nitro.dart' show NitroBuffer;
 
 import '../api/cancel_token.dart';
 import '../api/exceptions.dart';
@@ -65,6 +66,11 @@ abstract interface class RequestExecutor {
   void grantCredit(int requestId, int chunkCount, int ackedChunks);
 
   int feedUploadChunk(int requestId, Uint8List chunk);
+
+  /// A writer that fills native memory directly, or `null` where there is none
+  /// (the web, a fake) and [feedUploadChunk] is the only way in.
+  UploadWriter? openUploadWriter(int requestId);
+
   void finishUpload(int requestId);
   void failUpload(int requestId, String message);
 
@@ -74,6 +80,27 @@ abstract interface class RequestExecutor {
   void flushCookies();
 
   void dispose();
+}
+
+/// Writes a streamed request body straight into the engine's upload buffer.
+///
+/// The alternative, [RequestExecutor.feedUploadChunk], copies every chunk twice
+/// on the way in — once to get it out of the Dart heap, once into the engine's
+/// pipe — and makes buffering deep expensive. A writer copies it once, into its
+/// final place, which is what lets the engine take a whole body of known length
+/// up front instead of stopping the source every megabyte to wait for a drain
+/// event.
+abstract interface class UploadWriter {
+  /// Depth at which the source should pause. Decided by the engine from the
+  /// body's declared length; meaningful after the first [write].
+  int get highWaterMark;
+
+  /// Publishes [chunk]. Returns the bytes now buffered, or a negative number
+  /// once the upload can take no more — finished, failed, or its transfer gone.
+  int write(List<int> chunk);
+
+  /// Must be called exactly once, after the last [write].
+  void release();
 }
 
 /// A body chunk that has already been copied out of native memory.
@@ -156,7 +183,9 @@ abstract interface class StreamDemux {
 const int kInitialCredits = 64;
 const int kCreditBatch = 16;
 
-/// Bytes buffered in the native upload ring before the Dart source is paused.
+/// Bytes buffered in the native upload ring before the Dart source is paused,
+/// on the copying `feedUploadChunk` path. An [UploadWriter] reports its own
+/// depth, which the engine sets from the body's declared length.
 const int kUploadHighWaterMark = 1 << 20;
 
 class RequestRunner {
@@ -261,7 +290,7 @@ class RequestRunner {
       // Streamed request bodies are pumped while the response future is
       // outstanding — the engine returns immediately and reads from its ring.
       final pump = body.kind == RawBodyKind.streamed
-          ? _pumpUpload(requestId, body.stream!)
+          ? _pumpUpload(requestId, body.stream!, body.contentLength)
           : null;
 
       final response = await future;
@@ -403,7 +432,7 @@ class RequestRunner {
     try {
       final future = _executor.startStreamed(raw, body.bytes);
       if (body.kind == RawBodyKind.streamed) {
-        pump = _pumpUpload(requestId, body.stream!);
+        pump = _pumpUpload(requestId, body.stream!, body.contentLength);
       }
       head = await future;
     } on Object {
@@ -590,11 +619,16 @@ class RequestRunner {
 
   // ── Upload pump ────────────────────────────────────────────────────────────
 
-  _UploadPump _pumpUpload(int requestId, Stream<List<int>> source) {
+  _UploadPump _pumpUpload(
+    int requestId,
+    Stream<List<int>> source,
+    int? contentLength,
+  ) {
     final pump = _UploadPump(
       requestId: requestId,
       executor: _executor,
       events: _demux.events(requestId),
+      contentLength: contentLength,
     );
     pump.start(source);
     return pump;
@@ -684,27 +718,40 @@ class RequestRunner {
   }
 }
 
-/// Feeds a streamed request body into the native ring, pausing above the
-/// high-water mark and resuming on `uploadDrain`.
+/// Feeds a streamed request body into the engine, pausing above the high-water
+/// mark and resuming on `uploadDrain`.
+///
+/// Through an [UploadWriter] where the executor has one, so each chunk is
+/// written once, straight into native memory; through `feedUploadChunk`
+/// otherwise.
 class _UploadPump {
   _UploadPump({
     required this.requestId,
     required this._executor,
     required this._events,
+    required this._contentLength,
   });
 
   final int requestId;
   final RequestExecutor _executor;
   final Stream<RawEvent> _events;
 
+  /// The body's declared length, or null. Used only to avoid pausing on the
+  /// very last chunk, where the next thing the source has to say is "done".
+  final int? _contentLength;
+
   StreamSubscription<List<int>>? _sub;
   StreamSubscription<RawEvent>? _drainSub;
+  UploadWriter? _writer;
+  var _fed = 0;
   var _abandoned = false;
+  var _closed = false;
+  int get _highWaterMark => _writer?.highWaterMark ?? kUploadHighWaterMark;
 
   void start(Stream<List<int>> source) {
+    _writer = _executor.openUploadWriter(requestId);
     _drainSub = _events.listen((event) {
-      if (event.kind == RawEventKind.uploadDrain &&
-          event.a < kUploadHighWaterMark) {
+      if (event.kind == RawEventKind.uploadDrain && event.a < _highWaterMark) {
         final sub = _sub;
         if (sub != null && sub.isPaused) sub.resume();
       }
@@ -712,21 +759,44 @@ class _UploadPump {
 
     _sub = source.listen(
       (data) {
-        if (_abandoned) return;
-        final bytes = data is Uint8List ? data : Uint8List.fromList(data);
+        if (_abandoned || _closed) return;
         // Forwarded immediately, NOT coalesced. Batching source events into
         // larger feeds was measured on an 8 MiB streamed upload and made it
         // slower (122 ms -> 140 ms): the engine drains the ring the moment
         // anything lands, so any delay before feeding is time curl spends parked,
         // and one event-loop turn of accumulation costs more than the wake-up it
         // saves.
-        final buffered = _executor.feedUploadChunk(requestId, bytes);
-        if (buffered >= kUploadHighWaterMark) _sub?.pause();
+        var buffered = _writer?.write(data) ?? -1;
+        if (buffered < 0 && _writer != null) {
+          if (_fed > 0) {
+            // The upload can take no more: its transfer finished, failed or was
+            // cancelled. Whatever the source still has is not going anywhere.
+            _closed = true;
+            return;
+          }
+          // It never opened. Feed the ordinary way instead; if the request is
+          // already gone the engine simply drops the bytes.
+          _writer!.release();
+          _writer = null;
+        }
+        if (_writer == null) {
+          // Staged in native memory the pump owns and reuses, so the chunk
+          // crosses the bridge by pointer: no per-chunk arena malloc, copy and
+          // free. Safe to reuse at once — the engine copies into its pipe
+          // before the call returns.
+          buffered = _executor.feedUploadChunk(requestId, _stage(data));
+        }
+        _fed += data.length;
+        final total = _contentLength;
+        if (buffered >= _highWaterMark && (total == null || _fed < total)) {
+          _sub?.pause();
+        }
       },
       onDone: () {
         if (_abandoned) return;
         _executor.finishUpload(requestId);
         _drainSub?.cancel();
+        _release();
       },
       onError: (Object e, StackTrace _) {
         if (_abandoned) return;
@@ -734,9 +804,35 @@ class _UploadPump {
         // body into a server-visible short write.
         _executor.failUpload(requestId, e.toString());
         _drainSub?.cancel();
+        _release();
       },
       cancelOnError: true,
     );
+  }
+
+  NitroBuffer? _scratch;
+  Uint8List? _view;
+
+  Uint8List _stage(List<int> data) {
+    final n = data.length;
+    var view = _view;
+    // A source nearly always yields equal-sized chunks, so the view is reused
+    // and only the odd-sized tail (or a growing chunk) takes a fresh one.
+    if (view == null || view.length != n) {
+      final scratch = _scratch ??= NitroBuffer(n);
+      scratch.ensureCapacity(n);
+      view = _view = scratch.view(n);
+    }
+    view.setRange(0, n, data);
+    return view;
+  }
+
+  void _release() {
+    _writer?.release();
+    _writer = null;
+    _scratch?.dispose();
+    _scratch = null;
+    _view = null;
   }
 
   void abandon() {
@@ -744,5 +840,6 @@ class _UploadPump {
     _abandoned = true;
     _sub?.cancel();
     _drainSub?.cancel();
+    _release();
   }
 }

@@ -192,6 +192,50 @@ void main() {
     expect(server.lastUploadBytes, size);
   });
 
+  // The upload is written straight into the engine's buffer, one region at a
+  // time. These are the source shapes that exercise its edges: a body that
+  // fits the buffer and one that does not, chunks that do not divide it, a
+  // single chunk larger than all of it, thousands of tiny ones, and nothing.
+  for (final shape in const <({String name, int total, int chunk, bool sized})>[
+    (name: 'ragged chunks', total: 3 * 1024 * 1024 + 11, chunk: 10007, sized: true),
+    (name: 'one chunk larger than the buffer', total: 12 * 1024 * 1024, chunk: 12 * 1024 * 1024, sized: true),
+    (name: 'a body past the buffer ceiling', total: 20 * 1024 * 1024, chunk: 64 * 1024, sized: true),
+    (name: 'thousands of tiny chunks', total: 40000, chunk: 7, sized: true),
+    (name: 'tiny chunks, no declared length', total: 30000, chunk: 5, sized: false),
+    (name: 'an empty body', total: 0, chunk: 1024, sized: true),
+  ]) {
+    testWidgets('a streamed upload arrives intact: ${shape.name}', (_) async {
+      final bytes = Uint8List(shape.total);
+      for (var i = 0; i < bytes.length; i++) {
+        bytes[i] = (i * 31 + shape.chunk) & 0xff;
+      }
+      Stream<List<int>> source() async* {
+        for (var offset = 0; offset < bytes.length; offset += shape.chunk) {
+          final end = offset + shape.chunk;
+          yield Uint8List.sublistView(
+            bytes,
+            offset,
+            end > bytes.length ? bytes.length : end,
+          );
+        }
+      }
+
+      final response = await client.post(
+        '/upload',
+        body: HttpBody.stream(
+          source(),
+          contentLength: shape.sized ? shape.total : null,
+          contentType: 'application/octet-stream',
+        ),
+      );
+
+      final decoded = response.bodyToJson() as Map<String, Object?>;
+      expect(decoded['bytes'], shape.total);
+      expect(decoded['sha256'], sha256.convert(bytes).toString());
+      expect(server.lastUploadTruncated, isFalse);
+    }, timeout: const Timeout(Duration(minutes: 2)));
+  }
+
   testWidgets('a source that errors mid-upload fails the request', (_) async {
     const declared = tenMegabytes;
     const sentBeforeFailure = 4 * deterministicPageBytes;

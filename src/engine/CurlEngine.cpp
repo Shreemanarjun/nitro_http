@@ -13,9 +13,12 @@
 //      inline once shutdown has begun, why the loop drains leftover ops after
 //      exiting, and why `completeAllWith` runs before the thread returns.
 //
-// `inboxMtx_` is the engine's general mutex: it guards the inbox, `tasks_`,
-// `config_` and `cookies_`. The Dart thread only ever holds it for a map lookup
-// or a ring-buffer append, so contention with the loop thread is negligible.
+// `inboxMtx_` guards the inbox, `tasks_` and `uploadWriters_`. Both sides hold
+// it only for a queue operation or a map lookup — never across a transfer's
+// setup — because the Dart isolate takes it on every submit and every upload
+// write, and an isolate that has to sleep on a mutex pays a thread wake-up to
+// get going again (see `drainInbox`). `configMtx_` guards `config_` and
+// `cookies_`, which only `configure` changes from outside the loop thread.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include "CurlEngine.h"
@@ -236,6 +239,9 @@ void CurlEngine::loop() {
     // it lapse, which is what stops an idle engine from spinning forever.
     if (hadOps || running > 0 || numfds > 0) {
       spinUntil = std::chrono::steady_clock::now() + kSpinWindow;
+    } else if (!spinning) {
+      // Idle. Free the upload buffer kept warm between requests, if it aged.
+      releaseIdleUploadSpare();
     }
 
     for (;;) {
@@ -283,7 +289,7 @@ void CurlEngine::loop() {
   }
 
   {
-    std::lock_guard<std::mutex> lock(inboxMtx_);
+    std::lock_guard<std::mutex> lock(configMtx_);
     if (cookies_) cookies_->flush();
   }
 }
@@ -391,6 +397,8 @@ bool CurlEngine::drainInbox() {
     int64_t submitId = 0;
     bool uploadFinished = false;
     bool uploadFailed = false;
+    RequestTask* admitted = nullptr;
+    std::unique_ptr<RequestTask> duplicate;
 
     {
       std::unique_lock<std::mutex> lock(inboxMtx_);
@@ -404,15 +412,30 @@ bool CurlEngine::drainInbox() {
           uploadFinished = op.a != 0;
           uploadFailed = op.b != 0;
           submitted = true;
-          // THE LOCK IS DELIBERATELY STILL HELD. `feedUpload` looks for a queued
-          // submit and then for a live task; if the op left the inbox before its
-          // task was registered, an upload chunk landing in between would find
-          // neither and be dropped silently. One critical section covering both
-          // makes that state unobservable.
+          // The task enters `tasks_` in the critical section that took its op
+          // out of the inbox. `feedUpload` and `uploadWrite` look for a queued
+          // submit and then for a live task; a request that was in neither
+          // place, even for a moment, would have its upload bytes dropped
+          // silently.
+          //
+          // Only the registration happens here. Setting the transfer up runs
+          // in `startTask` with the lock released, so a writer on the Dart
+          // thread never sleeps behind it. A task is safe to find this early
+          // because everything another thread may do to it — cancel it, feed,
+          // finish or fail its pipe — is ready when the constructor returns.
           try {
-            startTask(std::move(op.pending));
+            std::unique_ptr<RequestTask> task(
+                new RequestTask(*this, std::move(*op.pending)));
+            op.pending.reset();
+            if (tasks_.count(submitId) != 0) {
+              duplicate = std::move(task);
+            } else {
+              admitted = task.get();
+              tasks_.emplace(submitId, std::move(task));
+            }
           } catch (...) {
-            // A throwing submit must not strand the loop thread with the lock.
+            // Out of memory. Nothing was registered; the op's promise, if any,
+            // is answered below.
           }
         }
       }
@@ -421,6 +444,21 @@ bool CurlEngine::drainInbox() {
     didWork = true;
 
     try {
+      if (duplicate) {
+        duplicate->completeWithError(
+            EngineError::make(RawErrorKind::RAWERRORKIND_BAD_REQUEST,
+                              "a request with this id is already in flight"));
+        duplicate.reset();
+      } else if (admitted != nullptr) {
+        try {
+          startTask(admitted);
+        } catch (...) {
+          // Half-started and unusable. Retiring it completes the request with
+          // an error from the destructor rather than leaving its Future hung.
+          retire(admitted);
+        }
+      }
+
       if (submitted) {
         if (uploadFinished || uploadFailed) {
           // Upload lifecycle signals that arrived while the submit was still
@@ -533,7 +571,7 @@ bool CurlEngine::drainInbox() {
         case OpKind::CookieRead: {
           std::vector<RawCookie> jar;
           {
-            std::lock_guard<std::mutex> lock(inboxMtx_);
+            std::lock_guard<std::mutex> lock(configMtx_);
             if (cookies_) jar = cookies_->all();
           }
           // Moved out so the fallback below cannot answer a second time.
@@ -543,19 +581,19 @@ bool CurlEngine::drainInbox() {
         }
 
         case OpKind::CookieWrite: {
-          std::lock_guard<std::mutex> lock(inboxMtx_);
+          std::lock_guard<std::mutex> lock(configMtx_);
           if (cookies_) cookies_->set(op.cookie);
           break;
         }
 
         case OpKind::CookieClear: {
-          std::lock_guard<std::mutex> lock(inboxMtx_);
+          std::lock_guard<std::mutex> lock(configMtx_);
           if (cookies_) cookies_->clearAll();
           break;
         }
 
         case OpKind::CookieFlush: {
-          std::lock_guard<std::mutex> lock(inboxMtx_);
+          std::lock_guard<std::mutex> lock(configMtx_);
           if (cookies_) cookies_->flush();
           break;
         }
@@ -580,16 +618,14 @@ bool CurlEngine::drainInbox() {
   return didWork;
 }
 
-/// PRECONDITION: the caller holds `inboxMtx_`. `drainInbox` keeps it across the
-/// inbox pop and this whole call so that `feedUpload`, which consults the inbox
-/// and then `tasks_`, can never observe a submitted request that belongs to
-/// neither. Nothing here reaches back for the mutex.
-void CurlEngine::startTask(std::unique_ptr<PendingRequest> pending) {
+/// Sets up a task `drainInbox` has already registered, and hands it to curl.
+///
+/// Runs WITHOUT `inboxMtx_`: see the note in `drainInbox`. Every way out that
+/// does not leave a running transfer goes through `retire`, which takes the
+/// task back out of `tasks_`.
+void CurlEngine::startTask(RequestTask* task) {
   NITRO_HTTP_ASSERT_THREAD(loopGuard_);
-  if (!pending) return;
-
-  const int64_t requestId = pending->req.requestId;
-  std::unique_ptr<RequestTask> task(new RequestTask(*this, std::move(*pending)));
+  const int64_t requestId = task->id();
 
   // A token cancelled before this request was drained. Checked before anything
   // touches curl, so the transfer never opens a socket, never consumes a pool
@@ -601,6 +637,7 @@ void CurlEngine::startTask(std::unique_ptr<PendingRequest> pending) {
   // irrelevant however far apart they are.
   if (task->cancelRequested()) {
     task->completeWithError(cancelledError(task->cancelReason()));
+    retire(task);
     return;
   }
 
@@ -610,26 +647,24 @@ void CurlEngine::startTask(std::unique_ptr<PendingRequest> pending) {
     preCancelled_.erase(cancelled);
     task->requestCancel();
     task->completeWithError(cancelledError());
+    retire(task);
     return;
   }
 
-  if (tasks_.count(requestId) != 0) {
-    task->completeWithError(
-        EngineError::make(RawErrorKind::RAWERRORKIND_BAD_REQUEST,
-                          "a request with this id is already in flight"));
-    return;
-  }
-
-  // Pool limits live on the multi handle, which only this thread may touch, so a
-  // reconfigure takes effect here rather than on the Dart thread.
-  config_.applyToMulti(multi_);
-  const EngineError err = task->prepare(
-      config_, config_.cookiesEnabled() ? cookies_.get() : nullptr, cache_);
+  const EngineError err = [&] {
+    // `configure` replaces both of these from the Dart thread.
+    std::lock_guard<std::mutex> lock(configMtx_);
+    // Pool limits live on the multi handle, which only this thread may touch,
+    // so a reconfigure takes effect here rather than on the Dart thread.
+    config_.applyToMulti(multi_);
+    return task->prepare(
+        config_, config_.cookiesEnabled() ? cookies_.get() : nullptr, cache_);
+  }();
   if (!err.ok()) {
     task->completeWithError(err);
     // `prepare` may have acquired a handle before failing, and a half-configured
-    // handle is still reusable once reset.
-    recycleEasy(task->detachEasy());
+    // handle is still reusable once reset; `retire` recycles it.
+    retire(task);
     return;
   }
 
@@ -637,7 +672,7 @@ void CurlEngine::startTask(std::unique_ptr<PendingRequest> pending) {
     // A fresh cache hit never reached the network, so its handle is untouched.
     // Recycling matters here: on a cache-heavy workload this is the hot path, and
     // leaving it to the destructor would pay a full init/cleanup pair per hit.
-    recycleEasy(task->detachEasy());
+    retire(task);
     return;
   }
 
@@ -647,10 +682,10 @@ void CurlEngine::startTask(std::unique_ptr<PendingRequest> pending) {
         RawErrorKind::RAWERRORKIND_ENGINE_ERROR,
         std::string("curl_multi_add_handle: ") + curl_multi_strerror(added),
         added));
+    retire(task);
     return;
   }
   task->markAttached();
-  tasks_.emplace(requestId, std::move(task));
 }
 
 void CurlEngine::unpauseTransfer(RequestTask* task, bool write, bool read) {
@@ -707,9 +742,13 @@ void CurlEngine::recycleEasy(CURL* easy) {
   // The cost is one `curl_easy_init` per request for clients that use either
   // cache. Connection reuse is untouched — connections live in the multi
   // handle, not in the easy one.
-  if (easyPool_.size() >= kMaxPooledEasyHandles ||
-      !config_.raw().hstsCachePath.empty() ||
-      !config_.raw().altSvcCachePath.empty()) {
+  bool persistsOnCleanup = false;
+  {
+    std::lock_guard<std::mutex> lock(configMtx_);
+    persistsOnCleanup = !config_.raw().hstsCachePath.empty() ||
+                        !config_.raw().altSvcCachePath.empty();
+  }
+  if (easyPool_.size() >= kMaxPooledEasyHandles || persistsOnCleanup) {
     curl_easy_cleanup(easy);
     return;
   }
@@ -827,7 +866,7 @@ void CurlEngine::pushAndWait(Op op) {
 // ── Dart-thread API ──────────────────────────────────────────────────────────
 
 void CurlEngine::configure(const RawClientConfig& cfg) {
-  std::lock_guard<std::mutex> lock(inboxMtx_);
+  std::lock_guard<std::mutex> lock(configMtx_);
 
   const bool hadCookies = config_.cookiesEnabled();
   const std::string previousJar = config_.cookieJarPath();
@@ -915,6 +954,71 @@ int64_t CurlEngine::feedUpload(int64_t requestId, const uint8_t* data,
   }
   if (live) push(makeOp<Op>(OpKind::UploadFed, requestId));
   return buffered;
+}
+
+bool CurlEngine::uploadWrite(int64_t requestId, size_t commitBytes,
+                             size_t reserveBytes, int64_t* out) {
+  std::shared_ptr<BodyPipe> pipe;
+  bool live = false;
+  {
+    std::lock_guard<std::mutex> lock(inboxMtx_);
+    const auto task = tasks_.find(requestId);
+    live = task != tasks_.end();
+
+    const auto pinned = uploadWriters_.find(requestId);
+    if (pinned != uploadWriters_.end()) {
+      pipe = pinned->second;
+    } else {
+      int64_t contentLength = -1;
+      if (live) {
+        pipe = task->second->uploadPipe();
+        contentLength = task->second->uploadContentLength();
+      } else if (Op* queued = findPendingSubmit(inbox_, requestId);
+                 queued != nullptr &&
+                 queued->pending->req.bodyKind ==
+                     RawBodyKind::RAWBODYKIND_STREAMED) {
+        // The submit has not reached the loop thread yet. Make the pipe here
+        // and leave it on the pending request; the task adopts it.
+        if (!queued->pending->pipe) {
+          queued->pending->pipe =
+              std::make_shared<BodyPipe>(kUploadPipeSoftCapBytes);
+        }
+        pipe = queued->pending->pipe;
+        contentLength = queued->pending->req.options.uploadContentLength;
+      }
+      if (!pipe) return false;  // not a streamed upload, or already gone
+      // A writer buffers cheaply, so the pipe may run deeper than the megabyte
+      // the copying path is held to.
+      pipe->setSoftCapacity(uploadPipeCapacityFor(contentLength));
+      uploadWriters_.emplace(requestId, pipe);
+    }
+  }
+
+  const BodyPipe::Exchange step = pipe->exchange(commitBytes, reserveBytes);
+  out[0] = static_cast<int64_t>(reinterpret_cast<uintptr_t>(step.region));
+  out[1] = static_cast<int64_t>(step.buffered);
+  out[2] = static_cast<int64_t>(step.softCapacity);
+
+  // Only a transfer parked in CURL_READFUNC_PAUSE needs the loop thread, and
+  // the pipe knows whether one is: a read that came up empty says so. A writer
+  // that keeps ahead of curl — the usual case — skips the inbox op and the
+  // `curl_multi_wakeup` syscall entirely.
+  if (live && step.readerStarved) {
+    push(makeOp<Op>(OpKind::UploadFed, requestId));
+  }
+  return step.region != nullptr;
+}
+
+void CurlEngine::uploadRelease(int64_t requestId) {
+  std::shared_ptr<BodyPipe> released;
+  {
+    std::lock_guard<std::mutex> lock(inboxMtx_);
+    const auto it = uploadWriters_.find(requestId);
+    if (it == uploadWriters_.end()) return;
+    released = std::move(it->second);
+    uploadWriters_.erase(it);
+  }
+  // Freed outside the lock, and only if the task has let go of it too.
 }
 
 void CurlEngine::finishUpload(int64_t requestId) {

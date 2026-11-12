@@ -876,6 +876,30 @@ abstract class NitroHttpNative extends HybridObject {
   /// ring, so the runner can pause its Dart source above a high-water mark.
   int feedUploadChunk(int requestId, @zeroCopy Uint8List chunk);
 
+  /// Direct-write upload: Dart fills native memory itself instead of handing
+  /// bytes across to be copied — see `CurlEngine::uploadWrite`.
+  ///
+  /// Publishes [commitBytes] of the region the previous call lent, lends
+  /// [reserveBytes] more, and writes three `Int64`s to [outAddress]: where that
+  /// region starts, how many bytes are now buffered, and the depth at which to
+  /// pause the source. Returns 0 once the upload can take no more.
+  ///
+  /// Every request that calls this must end with [uploadRelease]: the buffer is
+  /// pinned for the writer's sake, and nothing else unpins it.
+  ///
+  /// Not `@nitroFast`: it takes the engine's inbox lock and may grow the
+  /// buffer.
+  int uploadWrite(
+    int requestId,
+    int commitBytes,
+    int reserveBytes,
+    int outAddress,
+  );
+
+  /// Unpins the buffer [uploadWrite] lent out. The address it returned is dead
+  /// after this.
+  void uploadRelease(int requestId);
+
   void finishUpload(int requestId);
 
   /// Aborts a streamed upload with an error instead of a clean EOF.

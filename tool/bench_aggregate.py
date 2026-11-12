@@ -59,7 +59,8 @@ MS = re.compile(r"([\d.]+)\s*ms")
 ENV = re.compile(r"#\s*NITRO_BENCH_ENV\s+(.+)")
 KV = re.compile(r"(\w+)=([\d.]+)")
 
-SCENARIOS = ["small GET", "burst GET", "download", "upload", "mixed"]
+SCENARIOS = ["small GET", "burst GET", "download", "upload", "upload file",
+             "mixed"]
 NITRO = "nitro_http"
 
 

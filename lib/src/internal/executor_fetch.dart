@@ -263,6 +263,10 @@ final class FetchRequestExecutor implements RequestExecutor {
     body: Uint8List(0),
   );
 
+  /// `fetch` owns the upload; there is no native buffer to write into.
+  @override
+  UploadWriter? openUploadWriter(int requestId) => null;
+
   @override
   Future<RawResponse> sendBuffered(RawRequest request, Uint8List body) async {
     _checkAlive();

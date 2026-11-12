@@ -126,7 +126,7 @@ func download() async throws {
 
 func upload() async throws {
     let body = Data(count: uploadBytes)
-    var req = URLRequest(url: url("/upload"))
+    var req = URLRequest(url: url("/upload/sink"))
     req.httpMethod = "POST"
     req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
     req.httpBody = body

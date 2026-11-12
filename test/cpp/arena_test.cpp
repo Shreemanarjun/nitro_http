@@ -262,6 +262,371 @@ TEST(BodyPipe, FailStopsDeliveryAndReportsTheMessage) {
   EXPECT_EQ(pipe.buffered(), 0u);
 }
 
+TEST(BodyPipe, AReservationIsWrittenInPlaceAndOnlyCommittedBytesAreRead) {
+  BodyPipe pipe(1024);
+  uint8_t* region = pipe.reserve(8);
+  ASSERT_NE(region, nullptr);
+  std::memcpy(region, "abcdefgh", 8);
+  EXPECT_EQ(pipe.buffered(), 0u) << "nothing is visible until it is committed";
+
+  EXPECT_EQ(pipe.commit(5), 5u);
+  uint8_t out[16] = {0};
+  EXPECT_EQ(pipe.pull(out, sizeof out), 5u);
+  EXPECT_EQ(std::string(reinterpret_cast<char*>(out), 5), "abcde");
+}
+
+TEST(BodyPipe, CommitNeverPublishesMoreThanWasLent) {
+  BodyPipe pipe(1024);
+  ASSERT_NE(pipe.reserve(4), nullptr);
+  EXPECT_EQ(pipe.commit(400), 4u);
+  // A commit with no reservation open publishes nothing at all.
+  EXPECT_EQ(pipe.commit(8), 4u);
+}
+
+TEST(BodyPipe, TheReaderNeverMovesTheBufferUnderAnOpenReservation) {
+  // The producer holds a raw pointer between `reserve` and `commit`, with no
+  // lock, while curl drains on another thread. Draining everything must leave
+  // that pointer exactly where it was.
+  BodyPipe pipe(1024);
+  const std::string first(300, 'a');
+  pipe.push(reinterpret_cast<const uint8_t*>(first.data()), first.size());
+
+  uint8_t* region = pipe.reserve(200);
+  ASSERT_NE(region, nullptr);
+  std::vector<uint8_t> sink(1024);
+  EXPECT_EQ(pipe.pull(sink.data(), sink.size()), 300u);  // emptied
+
+  std::memset(region, 'b', 200);
+  EXPECT_EQ(pipe.commit(200), 200u);
+  EXPECT_EQ(pipe.pull(sink.data(), sink.size()), 200u);
+  EXPECT_EQ(std::string(reinterpret_cast<char*>(sink.data()), 200),
+            std::string(200, 'b'));
+}
+
+TEST(BodyPipe, ReservingKeepsWhatIsUnreadWhenItHasToMakeRoom) {
+  // Room is made by reclaiming the consumed prefix, then by growing; either
+  // way the bytes curl has not taken yet must come out intact and in order.
+  BodyPipe pipe(64);
+  std::string expected;
+  std::string taken;
+  std::vector<uint8_t> sink(4096);
+  for (int round = 0; round < 200; ++round) {
+    const size_t n = 17 + static_cast<size_t>(round % 23) * 31;  // up to ~700
+    uint8_t* region = pipe.reserve(n);
+    ASSERT_NE(region, nullptr);
+    for (size_t i = 0; i < n; ++i) {
+      region[i] = static_cast<uint8_t>((round * 7 + i) & 0xff);
+      expected.push_back(static_cast<char>(region[i]));
+    }
+    pipe.commit(n);
+    // Drain an awkward amount so a tail is usually left behind.
+    const size_t got = pipe.pull(sink.data(), 1 + static_cast<size_t>(round % 5) * 97);
+    taken.append(reinterpret_cast<char*>(sink.data()), got);
+  }
+  for (;;) {
+    const size_t got = pipe.pull(sink.data(), sink.size());
+    if (got == 0) break;
+    taken.append(reinterpret_cast<char*>(sink.data()), got);
+  }
+  EXPECT_EQ(taken, expected);
+}
+
+TEST(BodyPipe, AChunkLargerThanTheSoftCapacityIsStillTaken) {
+  // The capacity is advisory: a source is free to produce one enormous chunk,
+  // and the pipe takes it whole rather than splitting it across drain events.
+  BodyPipe pipe(1024);
+  const size_t n = 256 * 1024;
+  uint8_t* region = pipe.reserve(n);
+  ASSERT_NE(region, nullptr);
+  std::memset(region, 0x5a, n);
+  EXPECT_EQ(pipe.commit(n), n);
+}
+
+TEST(BodyPipe, ReserveIsRefusedOnceTheStreamCanTakeNoMore) {
+  {
+    BodyPipe pipe(1024);
+    pipe.finish();
+    EXPECT_EQ(pipe.reserve(8), nullptr);
+  }
+  {
+    BodyPipe pipe(1024);
+    pipe.fail("boom");
+    EXPECT_EQ(pipe.reserve(8), nullptr);
+  }
+  {
+    // The transfer ended while the producer was still going.
+    BodyPipe pipe(1024);
+    uint8_t* region = pipe.reserve(8);
+    ASSERT_NE(region, nullptr);
+    pipe.closeProducer();
+    std::memset(region, 1, 8);  // still valid memory: must not crash under ASan
+    pipe.commit(8);
+    EXPECT_EQ(pipe.reserve(8), nullptr);
+  }
+}
+
+TEST(BodyPipe, FailingUnderAnOpenReservationLeavesItsMemoryAlone) {
+  BodyPipe pipe(1024);
+  uint8_t* region = pipe.reserve(64);
+  ASSERT_NE(region, nullptr);
+  pipe.fail("aborted");
+  std::memset(region, 2, 64);  // the producer may be mid-write: ASan checks this
+  EXPECT_EQ(pipe.commit(64), 0u);
+  uint8_t out[8];
+  EXPECT_EQ(pipe.pull(out, sizeof out), 0u);
+}
+
+TEST(BodyPipe, ExchangeReportsAStarvedReaderExactlyOnce) {
+  BodyPipe pipe(1024);
+  uint8_t sink[64];
+
+  BodyPipe::Exchange step = pipe.exchange(0, 16);
+  ASSERT_NE(step.region, nullptr);
+  EXPECT_FALSE(step.readerStarved) << "nobody has asked for data yet";
+
+  EXPECT_EQ(pipe.pull(sink, sizeof sink), 0u);  // curl comes up empty
+  std::memset(step.region, 1, 16);
+  step = pipe.exchange(16, 16);
+  EXPECT_TRUE(step.readerStarved) << "this commit has to wake the reader";
+  EXPECT_EQ(step.buffered, 16u);
+  EXPECT_EQ(step.softCapacity, 1024u);
+
+  step = pipe.exchange(0, 16);
+  EXPECT_FALSE(step.readerStarved) << "reported once, not on every step";
+
+  // A read that found something is not a starvation.
+  EXPECT_EQ(pipe.pull(sink, sizeof sink), 16u);
+  step = pipe.exchange(0, 16);
+  EXPECT_FALSE(step.readerStarved);
+}
+
+TEST(BodyPipe, APullLargerThanOneSliceStillReturnsEverythingInOrder) {
+  // The copy is done a slice at a time so the lock is never held for long;
+  // the caller must not be able to tell.
+  BodyPipe pipe(4 * 1024 * 1024);
+  std::string expected;
+  for (int i = 0; i < 700 * 1024; ++i) {
+    expected.push_back(static_cast<char>((i * 13 + 5) & 0xff));
+  }
+  pipe.push(reinterpret_cast<const uint8_t*>(expected.data()), expected.size());
+  std::vector<uint8_t> sink(1024 * 1024);
+  ASSERT_EQ(pipe.pull(sink.data(), sink.size()), expected.size());
+  EXPECT_EQ(std::string(reinterpret_cast<char*>(sink.data()), expected.size()),
+            expected);
+}
+
+TEST(BodyPipe, TwoThreadsNeverSeeATornOrReorderedByte) {
+  // Neither side copies under the lock, so the producer may make room while a
+  // read is still copying. This drives both producer APIs against a reader on
+  // another thread, with a buffer small enough that relocation is constant,
+  // and checks every byte arrives once and in order. Under ASan it is also the
+  // test for the buffer hand-over: nothing freed while it is being read.
+  constexpr size_t kTotal = 24 * 1024 * 1024;
+  BodyPipe pipe(64 * 1024);
+
+  std::thread reader([&pipe] {
+    std::vector<uint8_t> sink(300 * 1024);
+    size_t seen = 0;
+    unsigned step = 1;
+    while (seen < kTotal) {
+      step = step * 1103515245u + 12345u;
+      const size_t want = 1 + (step >> 8) % sink.size();
+      const size_t got = pipe.pull(sink.data(), want);
+      for (size_t i = 0; i < got; ++i) {
+        if (sink[i] != static_cast<uint8_t>((seen + i) * 131u >> 3)) {
+          ADD_FAILURE() << "byte " << (seen + i) << " is wrong";
+          seen = kTotal;  // stop
+          return;
+        }
+      }
+      seen += got;
+      if (got == 0) std::this_thread::yield();
+    }
+  });
+
+  size_t sent = 0;
+  unsigned step = 7;
+  while (sent < kTotal) {
+    step = step * 1664525u + 1013904223u;
+    const size_t n = std::min<size_t>(kTotal - sent, 1 + (step >> 9) % (90 * 1024));
+    if ((step >> 4) % 3 == 0) {
+      std::vector<uint8_t> block(n);
+      for (size_t i = 0; i < n; ++i) {
+        block[i] = static_cast<uint8_t>((sent + i) * 131u >> 3);
+      }
+      pipe.push(block.data(), n);
+    } else {
+      uint8_t* region = pipe.reserve(n);
+      ASSERT_NE(region, nullptr);
+      for (size_t i = 0; i < n; ++i) {
+        region[i] = static_cast<uint8_t>((sent + i) * 131u >> 3);
+      }
+      pipe.commit(n);
+    }
+    sent += n;
+    // Keep the depth bounded the way the runner does, so the buffer cycles.
+    while (pipe.buffered() > 256 * 1024) std::this_thread::yield();
+  }
+  reader.join();
+  EXPECT_EQ(pipe.buffered(), 0u);
+}
+
+TEST(BodyPipe, FailingWhileAReadIsInFlightHandsNothingOver) {
+  // `fail` releases the buffer, and a read may be copying out of it on the
+  // other thread at that moment.
+  for (int round = 0; round < 200; ++round) {
+    BodyPipe pipe(1024 * 1024);
+    std::vector<uint8_t> block(512 * 1024, 0x33);
+    pipe.push(block.data(), block.size());
+    std::thread reader([&pipe] {
+      std::vector<uint8_t> sink(512 * 1024);
+      (void)pipe.pull(sink.data(), sink.size());
+    });
+    pipe.fail("aborted mid-read");
+    reader.join();
+    uint8_t out[8];
+    EXPECT_EQ(pipe.pull(out, sizeof out), 0u);
+  }
+}
+
+TEST(BodyPipe, LandingExactlyOnTheWatermarkIsADrain) {
+  // curl reads half the pipe at a time. If "half gone" only counted once the
+  // depth was strictly below half, a reader taking exact halves would not be
+  // heard until it had taken the second half too — with nothing left to send
+  // while Dart wakes up.
+  BodyPipe pipe(1024);
+  std::vector<uint8_t> block(1024, 0xab);
+  pipe.push(block.data(), 1024);  // full
+  uint8_t sink[512];
+  EXPECT_EQ(pipe.pull(sink, 512), 512u);  // exactly half left
+  EXPECT_TRUE(pipe.consumeDrainSignal());
+  EXPECT_FALSE(pipe.consumeDrainSignal()) << "once per crossing";
+
+  // Sitting at the mark without having been above it is not a crossing.
+  EXPECT_EQ(pipe.pull(sink, 512), 512u);
+  EXPECT_FALSE(pipe.consumeDrainSignal());
+  pipe.push(block.data(), 512);  // back up to the mark, not past it
+  EXPECT_EQ(pipe.pull(sink, 100), 100u);
+  EXPECT_FALSE(pipe.consumeDrainSignal());
+}
+
+TEST(BodyPipe, ABufferIsHandedOnToTheNextPipe) {
+  // Not observable through the API by design; this pins the behaviour that
+  // matters — a pipe built after another was destroyed still works, repeatedly,
+  // and under ASan nothing is freed twice or used after the hand-over.
+  for (int round = 0; round < 8; ++round) {
+    BodyPipe pipe(64 * 1024);
+    std::vector<uint8_t> block(48 * 1024, static_cast<uint8_t>(round));
+    pipe.push(block.data(), block.size());
+    std::vector<uint8_t> sink(block.size());
+    ASSERT_EQ(pipe.pull(sink.data(), sink.size()), block.size());
+    EXPECT_EQ(sink, block);
+    if (round % 2 == 1) pipe.fail("exercise the release-on-failure path");
+  }
+}
+
+TEST(BodyPipe, ABodyThatFitsItsPipeIsNeverMoved) {
+  // The case the depth policy exists for: a body no longer than the pipe is
+  // written into one buffer from start to finish, while curl reads behind it.
+  // Each region must follow straight on from the last. If the buffer were
+  // compacted, relocated or regrown on the way, it would not — and the upload
+  // would be paying for a copy of itself.
+  constexpr size_t kChunk = 64 * 1024;
+  constexpr size_t kTotal = 2 * 1024 * 1024;
+  BodyPipe pipe(kTotal);
+
+  std::thread reader([&pipe] {
+    std::vector<uint8_t> sink(256 * 1024);
+    while (!pipe.atEof() && !pipe.failed()) {
+      if (pipe.pull(sink.data(), sink.size()) == 0) std::this_thread::yield();
+    }
+  });
+
+  BodyPipe::Exchange step = pipe.exchange(0, kChunk);
+  const uint8_t* const base = step.region;
+  bool contiguous = base != nullptr;
+  for (size_t written = 0; contiguous && written < kTotal; written += kChunk) {
+    contiguous = step.region == base + written;
+    if (!contiguous) break;
+    std::memset(step.region, 0x5a, kChunk);
+    step = pipe.exchange(kChunk, kChunk);
+  }
+  // Ended either way, so a failure cannot leave the reader spinning.
+  pipe.finish();
+  reader.join();
+  ASSERT_TRUE(contiguous);
+}
+
+TEST(BodyPipe, OvershootingTheDepthByAChunkGrowsByThatChunk) {
+  // The runner stops once the depth is reached, which leaves it one chunk past
+  // the mark with the next reservation still to come. The buffer grows by
+  // that chunk rather than doubling, so it stays small enough to recycle.
+  constexpr size_t kChunk = 64 * 1024;
+  constexpr size_t kDepth = 1024 * 1024;
+  releaseIdleUploadSpare(true);
+  {
+    BodyPipe pipe(kDepth);
+    BodyPipe::Exchange step = pipe.exchange(0, kChunk);
+    for (size_t written = 0; written < kDepth + kChunk; written += kChunk) {
+      ASSERT_NE(step.region, nullptr);
+      std::memset(step.region, 1, kChunk);
+      step = pipe.exchange(kChunk, kChunk);  // nobody is reading
+    }
+    EXPECT_EQ(step.buffered, kDepth + kChunk);
+  }
+  // What the pipe left behind is the buffer it ended up with.
+  EXPECT_EQ(uploadSpareBytes(), kDepth + 2 * kChunk);
+  releaseIdleUploadSpare(true);
+}
+
+TEST(BodyPipe, TheSpareBufferIsReusedAndThenLetGo) {
+  releaseIdleUploadSpare(true);
+  ASSERT_EQ(uploadSpareBytes(), 0u);
+  std::vector<uint8_t> block(48 * 1024, 7);
+  {
+    BodyPipe pipe(64 * 1024);
+    pipe.push(block.data(), block.size());
+  }
+  const size_t kept = uploadSpareBytes();
+  EXPECT_GT(kept, 0u);
+  {
+    BodyPipe pipe(64 * 1024);
+    pipe.push(block.data(), block.size());
+    EXPECT_EQ(uploadSpareBytes(), 0u) << "taken over, not allocated again";
+  }
+  EXPECT_EQ(uploadSpareBytes(), kept);
+
+  // Parked a moment ago: an idle sweep leaves it for the next upload...
+  releaseIdleUploadSpare();
+  EXPECT_EQ(uploadSpareBytes(), kept);
+  // ...and frees it once that upload is not coming.
+  releaseIdleUploadSpare(true);
+  EXPECT_EQ(uploadSpareBytes(), 0u);
+}
+
+TEST(BodyPipe, ADirectWritersDepthFollowsTheDeclaredLength) {
+  EXPECT_EQ(uploadPipeCapacityFor(-1), kUploadPipeSoftCapBytes);
+  EXPECT_EQ(uploadPipeCapacityFor(10), kUploadPipeSoftCapBytes);
+  EXPECT_EQ(uploadPipeCapacityFor(3 * 1024 * 1024), 3u * 1024 * 1024);
+  EXPECT_EQ(uploadPipeCapacityFor(int64_t{1} << 40), kUploadPipeMaxCapBytes);
+}
+
+TEST(BodyPipe, RaisingTheDepthMovesTheDrainMarkWithIt) {
+  // A writer raises the depth after the pipe exists. The drain signal has to
+  // follow, or the runner — which now pauses at the new depth — would wait for
+  // a signal armed for the old one.
+  BodyPipe pipe(1024);
+  pipe.setSoftCapacity(4096);
+  std::vector<uint8_t> block(4096, 1);
+  pipe.push(block.data(), block.size());
+  std::vector<uint8_t> sink(4096);
+  EXPECT_EQ(pipe.pull(sink.data(), 1024), 1024u);  // 3072 left: above half
+  EXPECT_FALSE(pipe.consumeDrainSignal());
+  EXPECT_EQ(pipe.pull(sink.data(), 1024), 1024u);  // 2048 left: on the mark
+  EXPECT_TRUE(pipe.consumeDrainSignal());
+  EXPECT_EQ(pipe.softCapacity(), 4096u);
+}
+
 TEST(BodyPipe, DepthStaysBoundedOverAMegabyteOfTraffic) {
   // The buffer compacts its consumed prefix, so pushing far more than the soft
   // capacity through a small window must never let the live depth grow past

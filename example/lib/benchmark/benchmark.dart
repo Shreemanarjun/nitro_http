@@ -21,6 +21,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart' as dio;
 import 'package:http/http.dart' as http;
@@ -55,6 +56,7 @@ final class BenchmarkConfig {
     this.libraries = HttpLibrary.values,
     this.httpVersionPref = HttpVersionPref.auto,
     this.includeScenarios,
+    this.uploadSinkUrl,
   });
 
   /// A configuration small enough to run interactively.
@@ -72,7 +74,8 @@ final class BenchmarkConfig {
       concurrency = 16,
       libraries = HttpLibrary.values,
       httpVersionPref = HttpVersionPref.auto,
-      includeScenarios = null;
+      includeScenarios = null,
+      uploadSinkUrl = null;
 
   /// Requests discarded before measuring, so connection setup and JIT warm-up
   /// do not land in the p50.
@@ -144,6 +147,16 @@ final class BenchmarkConfig {
   /// benchmark's HTTP/2 server mode sets `http2Only` so nitro reaches the
   /// cleartext-h2 server by prior knowledge.
   final HttpVersionPref httpVersionPref;
+
+  /// Root URL of an external upload sink, or null to post to the bench server.
+  ///
+  /// The bench server is `dart:io` and reads a large body more slowly than the
+  /// clients send it, so against it the upload rows measure the server. A sink
+  /// that only calls `recv` (see `tool/bench_native/sink`) does not.
+  final String? uploadSinkUrl;
+
+  /// Where the upload scenarios post: absolute when a sink is configured.
+  String get uploadTarget => '${uploadSinkUrl ?? ''}/upload/sink';
 
   /// When non-null, only these scenario names run. HTTP/2 mode drops `mixed` —
   /// its redirect/slow/echo routes are not served by the h2 test server.
@@ -452,7 +465,10 @@ final class BenchmarkReport {
           '${config.smallBodyBytes} B GET in flight, '
           '${config.burstRepeats} bursts, pool primed to burst width first')
       ..writeln('* download: ${_mib(config.downloadBytes)} streamed')
-      ..writeln('* upload: ${_mib(config.uploadBytes)} streamed')
+      ..writeln('* upload: ${_mib(config.uploadBytes)} streamed to '
+          '${config.uploadSinkUrl ?? 'the bench server\'s counting sink'}')
+      ..writeln('* upload file: ${_mib(config.uploadBytes)} from a file on disk, '
+          'to the same sink')
       ..writeln('* mixed: ${config.mixedRequests} interleaved requests');
     for (final note in notes) {
       out.writeln('* $note');
@@ -670,6 +686,8 @@ final class BenchmarkRunner {
       }
     }
 
+    await _deleteUploadFiles();
+
     return BenchmarkReport(
       baseUrl: baseUrl,
       startedAt: startedAt,
@@ -832,6 +850,11 @@ final class BenchmarkRunner {
     _Scenario('download', (BenchmarkConfig c) => c.transferRepeats, _runDownload),
     _Scenario('upload', (BenchmarkConfig c) => c.transferRepeats, _runUpload),
     _Scenario(
+      'upload file',
+      (BenchmarkConfig c) => c.transferRepeats,
+      _runUploadFile,
+    ),
+    _Scenario(
       'mixed',
       (BenchmarkConfig c) => c.mixedRequests,
       _runMixed,
@@ -972,10 +995,16 @@ final class BenchmarkRunner {
     final latencies = <Duration>[];
     var bytes = 0;
 
+    // Generated before the clock starts — see [_uploadSource].
+    await _prepareUploadBody(ctx.config.uploadBytes);
+
     final wall = Stopwatch()..start();
     for (var i = 0; i < repeats; i++) {
       final clock = Stopwatch()..start();
-      bytes = await subject.upload('/upload', ctx.config.uploadBytes);
+      bytes = await subject.upload(
+        ctx.config.uploadTarget,
+        ctx.config.uploadBytes,
+      );
       latencies.add(clock.elapsed);
       ctx.onIteration();
     }
@@ -983,6 +1012,40 @@ final class BenchmarkRunner {
 
     return BenchmarkResult(
       scenario: 'upload',
+      library: subject.library,
+      iterations: repeats,
+      latencies: latencies,
+      wallClock: wall.elapsed,
+      bytes: bytes,
+    );
+  }
+
+  static Future<BenchmarkResult> _runUploadFile(
+    _Subject subject,
+    _Context ctx,
+  ) async {
+    final repeats = ctx.config.transferRepeats;
+    final latencies = <Duration>[];
+    var bytes = 0;
+
+    // Written before the clock starts — see [_prepareUploadFile].
+    final filePath = await _prepareUploadFile(ctx.config.uploadBytes);
+
+    final wall = Stopwatch()..start();
+    for (var i = 0; i < repeats; i++) {
+      final clock = Stopwatch()..start();
+      bytes = await subject.uploadFile(
+        ctx.config.uploadTarget,
+        filePath,
+        ctx.config.uploadBytes,
+      );
+      latencies.add(clock.elapsed);
+      ctx.onIteration();
+    }
+    wall.stop();
+
+    return BenchmarkResult(
+      scenario: 'upload file',
       library: subject.library,
       iterations: repeats,
       latencies: latencies,
@@ -1149,6 +1212,10 @@ abstract interface class _Subject {
   /// Streams [byteCount] bytes to [path], returning the bytes sent.
   Future<int> upload(String path, int byteCount);
 
+  /// Uploads the [byteCount]-byte file at [filePath] to [path], the way this
+  /// client's API sends a file, returning the bytes sent.
+  Future<int> uploadFile(String path, String filePath, int byteCount);
+
   /// Issues and discards `config.warmupRequests` small GETs.
   Future<void> warmup(BenchmarkConfig config);
 
@@ -1163,6 +1230,55 @@ mixin _WarmupMixin implements _Subject {
       await getBytes('/bytes/${config.smallBodyBytes}');
     }
   }
+}
+
+/// [path] against [baseUrl], unless it is already absolute — which it is when
+/// the upload scenarios are pointed at an external sink.
+Uri _target(String baseUrl, String path) =>
+    Uri.parse(path.startsWith('http') ? path : '$baseUrl$path');
+
+/// The upload body, generated once and replayed to every client, so that
+/// generating it stays outside the timed region. No client mutates the pages,
+/// so one set serves all of them.
+final Map<int, List<Uint8List>> _uploadBodies = <int, List<Uint8List>>{};
+
+Future<void> _prepareUploadBody(int byteCount) async {
+  _uploadBodies[byteCount] ??= await deterministicByteStream(byteCount).toList();
+}
+
+Stream<Uint8List> _uploadSource(int byteCount) =>
+    Stream<Uint8List>.fromIterable(_uploadBodies[byteCount]!);
+
+/// The same body as a file on disk, written once before the clock starts.
+///
+/// This is the upload an app actually performs — a photo, a video, a document —
+/// and each client sends it the way its API offers: the pure-Dart clients and
+/// rhttp stream `File.openRead()`, which is the only route they have, while
+/// `nitro_http` hands curl the path so the bytes never enter the Dart heap.
+final Map<int, String> _uploadFiles = <int, String>{};
+
+Future<String> _prepareUploadFile(int byteCount) async {
+  final existing = _uploadFiles[byteCount];
+  if (existing != null) return existing;
+  await _prepareUploadBody(byteCount);
+  final file = File(
+    '${Directory.systemTemp.path}/nitro_http_bench_upload_$byteCount.bin',
+  );
+  final sink = file.openWrite();
+  _uploadBodies[byteCount]!.forEach(sink.add);
+  await sink.close();
+  return _uploadFiles[byteCount] = file.path;
+}
+
+Future<void> _deleteUploadFiles() async {
+  for (final path in _uploadFiles.values) {
+    try {
+      await File(path).delete();
+    } on FileSystemException {
+      // Already gone; nothing to clean up.
+    }
+  }
+  _uploadFiles.clear();
 }
 
 final class _NitroSubject with _WarmupMixin implements _Subject {
@@ -1207,10 +1323,19 @@ final class _NitroSubject with _WarmupMixin implements _Subject {
     await _client.post(
       path,
       body: HttpBody.stream(
-        deterministicByteStream(byteCount),
+        _uploadSource(byteCount),
         contentLength: byteCount,
         contentType: 'application/octet-stream',
       ),
+    );
+    return byteCount;
+  }
+
+  @override
+  Future<int> uploadFile(String path, String filePath, int byteCount) async {
+    await _client.post(
+      path,
+      body: HttpBody.file(filePath, contentType: 'application/octet-stream'),
     );
     return byteCount;
   }
@@ -1233,7 +1358,7 @@ final class _DartIoSubject with _WarmupMixin implements _Subject {
 
   @override
   Future<int> getBytes(String path) async {
-    final request = await _client.getUrl(Uri.parse('$baseUrl$path'));
+    final request = await _client.getUrl(_target(baseUrl, path));
     final response = await request.close();
     return response.fold<int>(0, (sum, chunk) => sum + chunk.length);
   }
@@ -1241,7 +1366,7 @@ final class _DartIoSubject with _WarmupMixin implements _Subject {
   @override
   Future<(int, Duration)> download(String path) async {
     final clock = Stopwatch()..start();
-    final request = await _client.getUrl(Uri.parse('$baseUrl$path'));
+    final request = await _client.getUrl(_target(baseUrl, path));
     final response = await request.close();
     Duration? ttfb;
     var total = 0;
@@ -1254,10 +1379,21 @@ final class _DartIoSubject with _WarmupMixin implements _Subject {
 
   @override
   Future<int> upload(String path, int byteCount) async {
-    final request = await _client.postUrl(Uri.parse('$baseUrl$path'));
+    final request = await _client.postUrl(_target(baseUrl, path));
     request.headers.contentType = ContentType('application', 'octet-stream');
     request.contentLength = byteCount;
-    await request.addStream(deterministicByteStream(byteCount));
+    await request.addStream(_uploadSource(byteCount));
+    final response = await request.close();
+    await response.drain<void>();
+    return byteCount;
+  }
+
+  @override
+  Future<int> uploadFile(String path, String filePath, int byteCount) async {
+    final request = await _client.postUrl(_target(baseUrl, path));
+    request.headers.contentType = ContentType('application', 'octet-stream');
+    request.contentLength = byteCount;
+    await request.addStream(File(filePath).openRead());
     final response = await request.close();
     await response.drain<void>();
     return byteCount;
@@ -1278,7 +1414,7 @@ final class _PackageHttpSubject with _WarmupMixin implements _Subject {
 
   @override
   Future<int> getBytes(String path) async {
-    final response = await _client.get(Uri.parse('$baseUrl$path'));
+    final response = await _client.get(_target(baseUrl, path));
     return response.bodyBytes.length;
   }
 
@@ -1286,7 +1422,7 @@ final class _PackageHttpSubject with _WarmupMixin implements _Subject {
   Future<(int, Duration)> download(String path) async {
     final clock = Stopwatch()..start();
     final response = await _client.send(
-      http.Request('GET', Uri.parse('$baseUrl$path')),
+      http.Request('GET', _target(baseUrl, path)),
     );
     Duration? ttfb;
     var total = 0;
@@ -1299,12 +1435,27 @@ final class _PackageHttpSubject with _WarmupMixin implements _Subject {
 
   @override
   Future<int> upload(String path, int byteCount) async {
-    final request = http.StreamedRequest('POST', Uri.parse('$baseUrl$path'))
+    final request = http.StreamedRequest('POST', _target(baseUrl, path))
       ..contentLength = byteCount
       ..headers['content-type'] = 'application/octet-stream';
     // `StreamedRequest` exposes a sink rather than accepting a stream, so the
     // pump has to run alongside `send` instead of before it.
-    final pump = deterministicByteStream(byteCount)
+    final pump = _uploadSource(byteCount)
+        .forEach(request.sink.add)
+        .whenComplete(request.sink.close);
+    final response = await _client.send(request);
+    await response.stream.drain<void>();
+    await pump;
+    return byteCount;
+  }
+
+  @override
+  Future<int> uploadFile(String path, String filePath, int byteCount) async {
+    final request = http.StreamedRequest('POST', _target(baseUrl, path))
+      ..contentLength = byteCount
+      ..headers['content-type'] = 'application/octet-stream';
+    final pump = File(filePath)
+        .openRead()
         .forEach(request.sink.add)
         .whenComplete(request.sink.close);
     final response = await _client.send(request);
@@ -1362,7 +1513,20 @@ final class _DioSubject with _WarmupMixin implements _Subject {
   Future<int> upload(String path, int byteCount) async {
     await _dio.post<void>(
       path,
-      data: deterministicByteStream(byteCount),
+      data: _uploadSource(byteCount),
+      options: dio.Options(
+        contentType: 'application/octet-stream',
+        headers: <String, Object>{dio.Headers.contentLengthHeader: byteCount},
+      ),
+    );
+    return byteCount;
+  }
+
+  @override
+  Future<int> uploadFile(String path, String filePath, int byteCount) async {
+    await _dio.post<void>(
+      path,
+      data: File(filePath).openRead(),
       options: dio.Options(
         contentType: 'application/octet-stream',
         headers: <String, Object>{dio.Headers.contentLengthHeader: byteCount},
@@ -1380,8 +1544,12 @@ final class _RhttpSubject implements _Subject {
 
   final String baseUrl;
   rhttp.RhttpClient? _client;
+  rhttp.RhttpClient? _absolute;
 
   rhttp.RhttpClient get _c => _client!;
+
+  rhttp.RhttpClient _for(String path) =>
+      path.startsWith('http') ? _absolute! : _c;
 
   @override
   HttpLibrary get library => HttpLibrary.rhttp;
@@ -1411,6 +1579,16 @@ final class _RhttpSubject implements _Subject {
         httpVersionPref: rhttp.HttpVersionPref.http1_1,
       ),
     );
+    if (config.uploadSinkUrl != null) {
+      // rhttp prefixes `baseUrl` to whatever it is given, so an absolute target
+      // needs a client that has none. Built here, outside the measured window.
+      _absolute = await rhttp.RhttpClient.create(
+        settings: const rhttp.ClientSettings(
+          throwOnStatusCode: false,
+          httpVersionPref: rhttp.HttpVersionPref.http1_1,
+        ),
+      );
+    }
     for (var i = 0; i < config.warmupRequests; i++) {
       await getBytes('/bytes/${config.smallBodyBytes}');
     }
@@ -1437,10 +1615,10 @@ final class _RhttpSubject implements _Subject {
 
   @override
   Future<int> upload(String path, int byteCount) async {
-    await _c.post(
+    await _for(path).post(
       path,
       body: rhttp.HttpBody.stream(
-        deterministicByteStream(byteCount),
+        _uploadSource(byteCount),
         length: byteCount,
       ),
       headers: const rhttp.HttpHeaders.rawMap(<String, String>{
@@ -1451,7 +1629,25 @@ final class _RhttpSubject implements _Subject {
   }
 
   @override
-  Future<void> close() async => _client?.dispose();
+  Future<int> uploadFile(String path, String filePath, int byteCount) async {
+    await _for(path).post(
+      path,
+      body: rhttp.HttpBody.stream(
+        File(filePath).openRead(),
+        length: byteCount,
+      ),
+      headers: const rhttp.HttpHeaders.rawMap(<String, String>{
+        'content-type': 'application/octet-stream',
+      }),
+    );
+    return byteCount;
+  }
+
+  @override
+  Future<void> close() async {
+    _absolute?.dispose();
+    _client?.dispose();
+  }
 }
 
 String _ms(Duration d) => '${(d.inMicroseconds / 1000).toStringAsFixed(2)} ms';

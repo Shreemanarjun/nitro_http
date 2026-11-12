@@ -133,6 +133,21 @@ class HybridNitroHttpImpl final : public HybridNitroHttpNative {
     return role_.engine().feedUpload(requestId, chunk, chunk_length);
   }
 
+  int64_t uploadWrite(int64_t requestId, int64_t commitBytes,
+                      int64_t reserveBytes, int64_t outAddress) override {
+    if (outAddress == 0 || commitBytes < 0 || reserveBytes < 0) return 0;
+    return role_.engine().uploadWrite(
+               requestId, static_cast<size_t>(commitBytes),
+               static_cast<size_t>(reserveBytes),
+               reinterpret_cast<int64_t*>(static_cast<uintptr_t>(outAddress)))
+               ? 1
+               : 0;
+  }
+
+  void uploadRelease(int64_t requestId) override {
+    role_.engine().uploadRelease(requestId);
+  }
+
   void finishUpload(int64_t requestId) override {
     role_.engine().finishUpload(requestId);
   }

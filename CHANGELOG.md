@@ -5,6 +5,18 @@
 * Upgraded to **`nitro` 0.8.6**: weakly-linked `dart_api_dl` symbols, so two nitro
   plugins in one iOS/macOS SwiftPM app link again (nitro #61), and an
   allocation-free `@nitroAsync` worker dispatch. No API change.
+* **Faster uploads**, no API change. Streamed bodies are written straight into
+  the engine's buffer (one copy per chunk, not two) and buffered whole up to
+  8 MiB, curl's send buffer is sized to the body, and two locks no longer make
+  the isolate wait. 8 MiB, p50: `HttpBody.file` is 2.3–18× faster than the next
+  client on macOS, the Android emulator and an iPhone 12. A stream leads on
+  macOS (1.54 ms against 1.86) and the emulator (2.38 against 2.95) but is
+  **behind on the iPhone 12** (5.20 against 3.23). Details:
+  [ADVANCED.md](doc/ADVANCED.md#benchmarks).
+* A `NitroBuffer` passed to `HttpBody.bytes` or a WebSocket send crosses the
+  bridge by pointer, with no copy.
+* Benchmark: uploads go to a sink that only counts bytes, and there is a new
+  `upload file` scenario.
 
 ## 0.0.6
 

@@ -181,11 +181,17 @@ sequenceDiagram
     Note over Run: close controller, demux.release(id)
 ```
 
-Upload streaming is the mirror image: `feedUploadChunk(id, bytes)` copies into
-`BodyPipe`'s bounded ring and returns the currently buffered byte count;
-`READFUNCTION` drains the ring and returns `CURL_READFUNC_PAUSE` when it is empty
-and the stream has not ended. The runner pauses its Dart source above
-`kUploadHighWaterMark` (1 MiB) and resumes on an `uploadDrain` event.
+Upload streaming is the mirror image, and it does not copy across the bridge
+either. `uploadWrite(id, commit, reserve, out)` lends the runner a region at the
+tail of `BodyPipe`'s buffer; Dart fills it with one `setRange`, and the next
+call publishes those bytes and lends the next region. `READFUNCTION` drains the
+buffer up to a megabyte at a time and returns `CURL_READFUNC_PAUSE` when it is
+empty and the stream has not ended. The runner pauses its Dart source at the
+depth the engine reports back and resumes on an `uploadDrain` event. That depth
+is the body's declared length up to 8 MiB — so a body that fits is never paused
+at all — and 1 MiB when the length is unknown. `feedUploadChunk(id, bytes)`,
+which copies, remains for executors with no native memory to write into, and
+always pauses at `kUploadHighWaterMark` (1 MiB).
 
 ---
 
@@ -458,7 +464,15 @@ Constants live in `request_runner.dart`:
 |---|---|---|
 | `kInitialCredits` | 16 | Size of the outstanding-chunk window |
 | `kCreditBatch` | 8 | Top up once the window has drained by this much |
-| `kUploadHighWaterMark` | 1 MiB | Pause the Dart upload source above this |
+| `kUploadHighWaterMark` | 1 MiB | Pause the Dart upload source above this, on the copying `feedUploadChunk` path |
+
+And on the native side, in `BodyPipe.h` and `RequestTask.cpp`:
+
+| Constant | Value | Role |
+|---|---|---|
+| `kUploadPipeSoftCapBytes` | 1 MiB | Pause depth for a streamed body of unknown length, and for the copying path |
+| `kUploadPipeMaxCapBytes` | 8 MiB | Ceiling on the pause depth of a direct-written body. `uploadPipeCapacityFor(length)` is the declared length up to this, so a body that fits is buffered whole |
+| `kUploadBufferMaxBytes` | 1 MiB | Cap on `CURLOPT_UPLOAD_BUFFERSIZE`, which is sized to the request body (64 KiB floor) and, for a streamed body, to at most half the pipe so a drain signal always leaves the other half as runway |
 
 The window is deliberately small. The point of credits is that a slow consumer
 closes the TCP window; a large window would just relocate the buffer into the
@@ -482,16 +496,40 @@ miniature: grant the window, ack one per chunk, terminal-ack on the way out.
 
 ### 6.2 Upload
 
-`_UploadPump` feeds `feedUploadChunk`, which returns the bytes currently buffered
-in `BodyPipe`. Above `kUploadHighWaterMark` the pump pauses its Dart source and
-waits for an `uploadDrain` event on the `events` stream. `finishUpload` closes
-the pipe at end of stream; `failUpload` propagates a source error so the transfer
-aborts instead of hanging with a half-sent body.
+`_UploadPump` writes each chunk through an `UploadWriter` — `uploadWrite` under
+the hood — which returns the bytes currently buffered in `BodyPipe` and the
+depth to pause at. At that depth the pump pauses its Dart source and waits for
+an `uploadDrain` event on the `events` stream; a sized body no longer than the
+pipe never reaches it. `finishUpload` closes the pipe at
+end of stream; `failUpload` propagates a source error so the transfer aborts
+instead of hanging with a half-sent body. The pump releases its writer exactly
+once, on whichever of finish, failure or abandonment comes first.
 
 `BodyPipe` is the only object touched by two threads without going through the
-engine inbox: `feedUpload` runs on the Dart isolate thread while
-`READFUNCTION` drains on the loop thread. It carries its own mutex for exactly
-that reason.
+engine inbox: the writer runs on the Dart isolate thread while `READFUNCTION`
+drains on the loop thread. Three rules keep that safe, and all three are
+load-bearing:
+
+- **The mutex guards positions, not bytes.** Neither side copies under it. The
+  writer fills its region with the lock released; `pull` marks a read in flight
+  and copies out with the lock released.
+- **Only the producer moves the buffer.** If it has to make room while a read is
+  in flight it does not shift bytes under the reader: it moves the unread part
+  to another buffer and the old one stays alive until the read lets go.
+- **A writer pins the pipe.** Between calls Dart holds a raw pointer into the
+  buffer, so `CurlEngine` keeps the pipe in `uploadWriters_` until
+  `uploadRelease`. A transfer that is cancelled, fails or gets an early response
+  mid-upload destroys its task without taking that memory away; the writer's
+  next call is simply refused.
+
+The pipe is created with the task, not when the transfer is set up, because the
+task is findable before it is set up (§7): the runner's first write lands a few
+microseconds after its submit, and must find a pipe whichever side of that line
+it falls on.
+
+One buffer is kept between uploads, so the next one does not page-fault its way
+through fresh memory, and the loop thread frees it once no upload has used it
+for five seconds.
 
 ---
 
@@ -511,6 +549,15 @@ cross-thread request — submit, cancel, credit grant, unpause, cookie op,
 shutdown — is pushed onto a mutex-guarded deque and woken with
 `curl_multi_wakeup`, then executed on the loop thread. A debug-build thread-id
 assertion guards every curl-touching method.
+
+**Neither thread holds the inbox mutex across work.** The Dart isolate takes it
+on every submit and every upload write, and an isolate that has to sleep on a
+mutex pays a thread wake-up to get going again. So the loop thread pops a
+submit, constructs its task and registers it in one short critical section —
+which is what keeps a request from ever being in neither the inbox nor the task
+table — and then sets the transfer up with the mutex released. Setup reads the
+client config and cookie state, which `configure` replaces from the Dart thread;
+those have a mutex of their own, never held together with the inbox's.
 
 Cookie operations need a handle bound to the client's `curl_share` but not
 attached to a transfer, so each engine keeps one **parked easy handle** and runs
@@ -546,7 +593,8 @@ threads keep running. Two mechanisms cover it:
 | C++ → Dart | zero-copy struct **shell** | generated bridge per emit | Dart `NativeFinalizer` → `nitro_http_release_RawChunk` | Shell only. Says nothing about the payload. |
 | C++ → Dart | zero-copy struct **payload** | `malloc` in the engine | `ChunkArena::ack` on the credit ack, or `DeferredPayloads` after teardown | §5. Native must not touch the buffer after emit. |
 | C++ internal | curl-owned strings (`CURLINFO_*`) | libcurl | libcurl | Copy into the record **before** `curl_easy_cleanup`. |
-| C++ internal | `BodyPipe` ring | engine | engine on task teardown | Bounded; back-pressures via `CURL_READFUNC_PAUSE`. |
+| Dart → C++ | region lent by `uploadWrite` | engine (`BodyPipe`) | engine, once both the task and the writer (`uploadRelease`) have let go | Dart writes only between two `uploadWrite` calls and never after release or after the client is disposed. |
+| C++ internal | `BodyPipe` buffer | engine | as above; one spare buffer is kept for the next upload and freed after five idle seconds | Bounded; back-pressures via `CURL_READFUNC_PAUSE`. |
 
 The arena rule in rows one and two is a hard native contract: Nitro releases the
 parameter arena when the registering call returns, so `sendBuffered`,
@@ -568,7 +616,7 @@ verifies the copies.
 | `ClientConfig.{h,cpp}` | Decoded `RawClientConfig`; applies options to each easy handle |
 | `ContentDecoder.{h,cpp}` | Streaming gzip / deflate / br / zstd, chained right-to-left, with a 512 MiB output ceiling. `CURLOPT_HTTP_CONTENT_DECODING` is off and this owns the job instead, because curl aborts an unknown coding with `CURLE_BAD_CONTENT_ENCODING` where `dart:io` passes it through — and because "which codings work" must not depend on how the local libcurl was built |
 | `RequestTask.{h,cpp}` | One transfer: handle setup, the four curl callbacks, buffered vs streamed vs prefetch modes, cache read/write-back, exactly-once completion |
-| `BodyPipe.{h,cpp}` | Bounded upload ring with the pause/resume protocol; the one two-thread object outside the inbox |
+| `BodyPipe.{h,cpp}` | Bounded upload buffer with the pause/resume protocol and the direct-write (`reserve`/`commit`) producer API; the one two-thread object outside the inbox |
 | `ChunkArena.{h,cpp}` | Zero-copy payload lifetime: `track` / `ack` / `drain` / `releaseAll` (§5) |
 | `DeferredPayloads.{h,cpp}` | Process-global registry holding un-acked payloads after a task dies, with byte and bucket caps (§5.4, §5.5) |
 | `Wire.{h,cpp}` | The record encode/decode work the generator does not hand us |

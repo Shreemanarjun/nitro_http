@@ -76,6 +76,24 @@ class CurlEngine {
 
   /// Returns bytes buffered in the upload ring, or 0 when the request is gone.
   int64_t feedUpload(int64_t requestId, const uint8_t* data, size_t n);
+
+  /// Direct-write upload: the producer fills native memory itself instead of
+  /// handing bytes over to be copied.
+  ///
+  /// Publishes `commitBytes` of the region the previous call lent out, lends
+  /// `reserveBytes` more, and reports through `out` where that region starts
+  /// (`out[0]`), how much is now buffered (`out[1]`) and the depth at which the
+  /// producer should pause (`out[2]`). Returns false once the upload can take
+  /// no more — finished, failed, or its transfer gone.
+  ///
+  /// The first call pins the pipe in `uploadWriters_`, and it stays pinned until
+  /// `uploadRelease`: the caller holds a raw pointer into the pipe's buffer
+  /// between calls, so the buffer has to outlive a transfer that ends — is
+  /// cancelled, fails, gets an early response — while the producer is still
+  /// mid-write. Every opened writer must therefore be released.
+  bool uploadWrite(int64_t requestId, size_t commitBytes, size_t reserveBytes,
+                   int64_t* out);
+  void uploadRelease(int64_t requestId);
   void finishUpload(int64_t requestId);
   void failUpload(int64_t requestId, const std::string& message);
 
@@ -95,7 +113,6 @@ class CurlEngine {
   void shutdown();
 
   // ── Loop-thread internals, used by RequestTask ─────────────────────────────
-  const ClientConfig& config() const { return config_; }
   const std::shared_ptr<HttpCache>& cache() const { return cache_; }
 
   /// The `curl_share` carrying `CURL_LOCK_DATA_COOKIE`, `_DNS` and
@@ -161,7 +178,7 @@ class CurlEngine {
   bool drainInbox();
   void push(Op op);
   void pushAndWait(Op op);
-  void startTask(std::unique_ptr<PendingRequest> pending);
+  void startTask(RequestTask* task);
   void completeAllWith(const EngineError& err);
   RequestTask* find(int64_t requestId);
 
@@ -225,8 +242,17 @@ class CurlEngine {
   std::mutex inboxMtx_;
   std::deque<Op> inbox_;
 
-  /// Owned by the loop thread after startup.
+  /// Guards `config_` and `cookies_`. Separate from `inboxMtx_` so that setting
+  /// a transfer up, which reads both, does not hold the mutex the Dart isolate
+  /// needs for every submit and upload write. Never held together with it.
+  std::mutex configMtx_;
+
+  /// Changed only by the loop thread, under `inboxMtx_`; other threads look
+  /// tasks up under the same mutex. A task is registered before it is set up —
+  /// see `drainInbox`.
   std::unordered_map<int64_t, std::unique_ptr<RequestTask>> tasks_;
+  /// Pipes a direct writer holds a pointer into. Guarded by `inboxMtx_`.
+  std::unordered_map<int64_t, std::shared_ptr<BodyPipe>> uploadWriters_;
 
   /// Spare easy handles, loop-thread owned. See `acquireEasy`.
   ///

@@ -36,9 +36,25 @@ namespace {
 /// become one 40 MB `RawChunk`.
 constexpr size_t kReplayChunkBytes = 64 * 1024;
 
-/// Soft high-water mark for streamed request bodies. The Dart runner throttles
-/// its source above this depth and resumes on the `uploadDrain` event.
-constexpr size_t kUploadPipeSoftCapBytes = 1024 * 1024;
+/// Bounds for `CURLOPT_UPLOAD_BUFFERSIZE`, which is sized to the request body.
+///
+/// curl sends one upload buffer per trip round its transfer loop, so a large
+/// body wants a large buffer: fewer trips, and fewer, larger sends. Sizing to
+/// the body rather than always asking for the maximum keeps a 200-byte JSON
+/// POST on curl's 64 KiB default.
+constexpr int64_t kUploadBufferMinBytes = 64 * 1024;
+constexpr int64_t kUploadBufferMaxBytes = 1024 * 1024;
+
+/// `bodyBytes < 0` means the length is unknown (a chunked streamed upload).
+long uploadBufferBytesFor(int64_t bodyBytes) {
+  if (bodyBytes < 0) return static_cast<long>(kUploadBufferMaxBytes);
+  if (bodyBytes < kUploadBufferMinBytes) {
+    return static_cast<long>(kUploadBufferMinBytes);
+  }
+  return static_cast<long>(bodyBytes < kUploadBufferMaxBytes
+                               ? bodyBytes
+                               : kUploadBufferMaxBytes);
+}
 
 /// One progress event per this many milliseconds, at most.
 constexpr double kProgressIntervalMs = 100.0;
@@ -297,6 +313,22 @@ RequestTask::RequestTask(CurlEngine& engine, PendingRequest pending)
   // without ever opening a socket. `obtain` creates the state when this request
   // is the first mention of the token, which is the ordinary case.
   token_ = CancelRegistry::instance().obtain(pending_.req.options.cancelTokenId);
+
+  // The pipe exists from construction: the engine registers a task
+  // before setting it up, and from that moment the Dart thread may feed, finish
+  // or fail its upload. A direct writer that got in while the request was still
+  // queued has already made the pipe (and written to it); adopt that one.
+  if (pending_.req.bodyKind == RawBodyKind::RAWBODYKIND_STREAMED) {
+    pipe_ = pending_.pipe
+                ? std::move(pending_.pipe)
+                : std::make_shared<BodyPipe>(kUploadPipeSoftCapBytes);
+    // Bytes `CurlEngine::feedUpload` parked while the submit was queued. They
+    // go in now, under the lock that makes this task findable, so nothing fed
+    // afterwards can land ahead of them.
+    if (!pending_.body.empty()) {
+      pipe_->push(pending_.body.data(), pending_.body.size());
+    }
+  }
 }
 
 /// Points the request at its URL, honouring an SNI override.
@@ -358,6 +390,10 @@ void RequestTask::applyUrl(const RawRequest& req, const ClientConfig& config) {
 }
 
 RequestTask::~RequestTask() {
+  // The transfer is over, so nobody will drain the pipe again. A direct writer
+  // that is still running finds out on its next reserve and stops.
+  if (pipe_) pipe_->closeProducer();
+
   // Last line of defence for exactly-once completion. Reaching here uncompleted
   // is an engine bug, but a hung Dart Future is worse than a wrong error kind.
   if (!completed_) {
@@ -413,6 +449,12 @@ EngineError RequestTask::prepare(const ClientConfig& config,
                              "custom method requested without a method token");
   }
   maxResponseBytes_ = config.raw().maxResponseBytes;
+  // Copied now, while the engine holds the config still. The response head
+  // needs them much later, and reading the engine's config then would race a
+  // `configure` on the Dart thread.
+  streamChunkBytes_ = config.raw().streamChunkBytes;
+  streamChunkMinContentLength_ = config.raw().streamChunkMinContentLength;
+  streamChunkMaxHoldMs_ = config.raw().streamChunkMaxHoldMs;
   if (!req.responseFilePath.empty()) {
     if (pending_.mode != RespMode::Buffered) {
       return EngineError::make(
@@ -493,10 +535,13 @@ EngineError RequestTask::prepare(const ClientConfig& config,
     curl_easy_setopt(easy_, CURLOPT_NOBODY, 1L);
   }
 
+  // Zero for a bodyless request, -1 when a streamed body's length is unknown.
+  int64_t uploadBytes = 0;
   switch (strategy) {
     case BodyStrategy::NoBody:
       break;
     case BodyStrategy::Fields:
+      uploadBytes = static_cast<int64_t>(pending_.body.size());
       // `CURLOPT_POSTFIELDS` does not copy. `pending_.body` was deep-copied out
       // of Nitro's arena and lives exactly as long as this task, so pointing
       // curl at it directly is safe and avoids a second copy of every payload.
@@ -518,28 +563,41 @@ EngineError RequestTask::prepare(const ClientConfig& config,
               "cannot open request body file: " + req.bodyFilePath);
         }
         curl_off_t size = 0;
+        uploadBytes = -1;
         if (fileSize(uploadFile_, &size)) {
           curl_easy_setopt(easy_, CURLOPT_INFILESIZE_LARGE, size);
+          uploadBytes = static_cast<int64_t>(size);
         }
       } else if (req.bodyKind == RawBodyKind::RAWBODYKIND_STREAMED) {
-        pipe_.reset(new BodyPipe(kUploadPipeSoftCapBytes));
-        // Dart may start pumping before the submit op reaches the loop thread;
-        // `CurlEngine::feedUpload` parks those early bytes here.
-        if (!pending_.body.empty()) {
-          pipe_->push(pending_.body.data(), pending_.body.size());
-        }
+        // The pipe was made, and seeded, by the constructor.
+        uploadBytes = options.uploadContentLength >= 0
+                          ? static_cast<int64_t>(options.uploadContentLength)
+                          : -1;
         if (options.uploadContentLength >= 0) {
           curl_easy_setopt(
               easy_, CURLOPT_INFILESIZE_LARGE,
               static_cast<curl_off_t>(options.uploadContentLength));
         }
       } else {
+        uploadBytes = static_cast<int64_t>(pending_.body.size());
         curl_easy_setopt(easy_, CURLOPT_INFILESIZE_LARGE,
                          static_cast<curl_off_t>(pending_.body.size()));
       }
       break;
     }
   }
+  // Set on every request, bodyless ones included: handles are recycled, and a
+  // GET must not inherit the megabyte buffer of the upload that ran before it.
+  long uploadBuffer = uploadBufferBytesFor(uploadBytes);
+  if (pipe_) {
+    // At most half the pipe per read. A read that emptied the pipe would raise
+    // the drain signal only once nothing was left, and the transfer would idle
+    // for the round trip to the Dart isolate.
+    const long halfPipe = static_cast<long>(
+        uploadPipeCapacityFor(options.uploadContentLength) / 2);
+    if (uploadBuffer > halfPipe) uploadBuffer = halfPipe;
+  }
+  curl_easy_setopt(easy_, CURLOPT_UPLOAD_BUFFERSIZE, uploadBuffer);
 
   // Client defaults first, then request headers, which win by name.
   for (const std::string& line : config.defaultHeaderLines()) {
@@ -967,16 +1025,15 @@ void RequestTask::emitHeadIfNeeded() {
   // Decided once, here, because it needs the final headers and must not change
   // mid-body. A decoded body reports `-1` above and so never coalesces, which is
   // the conservative answer: its inflated size is unknown until the last byte.
-  const RawClientConfig& cfg = engine_.config().raw();
-  const int64_t requested = cfg.streamChunkBytes;
+  const int64_t requested = streamChunkBytes_;
   if (requested < 0) {
     coalesceTarget_ = 0;  // explicitly disabled by the caller
   } else {
     // `>= 0`, not `> 0`: zero is a real setting — "batch every response
     // whatever its size" — and Dart always sends an explicit value, so only a
     // negative can mean "unset".
-    const int64_t minLength = cfg.streamChunkMinContentLength >= 0
-                                  ? cfg.streamChunkMinContentLength
+    const int64_t minLength = streamChunkMinContentLength_ >= 0
+                                  ? streamChunkMinContentLength_
                                   : kDefaultCoalesceMinContentLength;
     if (contentLength_ >= minLength) {
       coalesceTarget_ = requested > 0
@@ -984,8 +1041,8 @@ void RequestTask::emitHeadIfNeeded() {
                             : adaptiveCoalesceBytes(contentLength_);
     }
   }
-  coalesceMaxHoldMs_ = cfg.streamChunkMaxHoldMs >= 0
-                           ? static_cast<double>(cfg.streamChunkMaxHoldMs)
+  coalesceMaxHoldMs_ = streamChunkMaxHoldMs_ >= 0
+                           ? static_cast<double>(streamChunkMaxHoldMs_)
                            : kDefaultCoalesceMaxHoldMs;
   if (coalesceTarget_ > 0) coalesceBuf_.reserve(coalesceTarget_);
 

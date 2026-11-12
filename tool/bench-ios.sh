@@ -23,6 +23,12 @@
 # aggregator can read them, which is also why the run files here look like log
 # output despite never having been logged.
 #
+# The two upload scenarios post to a sink inside the app
+# (example/lib/server/in_app_sink.dart), not to its Dart server: that server
+# reads 8 MiB more slowly than any client sends it, so against it the row
+# measures the server. BENCH_UPLOAD_SINK=dart restores it. The target is
+# compiled in, so --keep reuses whichever one the existing build was made with.
+#
 # What is missing compared to the Android harness, honestly: iOS exposes no
 # thermal zones to the host, so there is no gate equivalent to /sys/class/
 # thermal. A fixed settle between runs is the best available substitute, and the
@@ -37,7 +43,9 @@ KEEP=0
 case "$RUNS" in ''|*[!0-9]*) echo "usage: $0 [runs] [--keep]" >&2; exit 2 ;; esac
 
 BUNDLE_ID="dev.shreeman.nitroHttpExample"
-APP="example/build/ios/iphoneos/Runner.app"
+# Where Xcode puts the bundle. Flutter's copy under build/ios/iphoneos is not
+# made on every toolchain.
+APP="example/build/ios/Release-iphoneos/Runner.app"
 SETTLE=25              # seconds between runs, standing in for a thermal gate
 OUT="build/bench/ios-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$OUT"
@@ -47,11 +55,13 @@ fail=0
 # Match the identifier by SHAPE, not by column position: `devicectl` prints a
 # Model column containing spaces ("iPhone 12 (iPhone13,2)"), so counting fields
 # from the right picks up the model and hands you "iPhone" as a device id.
-# NITRO_IOS_DEVICE overrides the pick when more than one device is paired.
+# The list includes simulators, and an identifier is either a CoreDevice UUID or
+# a hardware UDID (8-16). NITRO_IOS_DEVICE overrides the pick when more than
+# one device is paired.
 DEVICE="${NITRO_IOS_DEVICE:-}"
 if [ -z "$DEVICE" ]; then
-  DEVICE=$(xcrun devicectl list devices 2>/dev/null | grep -i "iPhone" |
-           grep -oE '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}' |
+  DEVICE=$(xcrun devicectl list devices 2>/dev/null | grep -i "iPhone" | grep -v simulated |
+           grep -oE '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}' |
            head -1)
 fi
 if [ -z "$DEVICE" ]; then
@@ -69,8 +79,14 @@ if [ "$KEEP" = 1 ] && [ -d "$APP" ]; then
   echo "==> reusing the existing build"
 else
   echo "==> building release (device build, signed)"
-  ( cd example && flutter build ios --release \
-      --dart-define=NITRO_HTTP_BENCHMARK=1 ) >"$OUT/build.log" 2>&1 \
+  # rhttp (a comparison client) builds Rust with `strip = true`, and on Xcode 27
+  # a stripped proc-macro dylib no longer loads: `can't find crate for
+  # zerofrom_derive`. Unstripped costs nothing measured here.
+  SINK=inapp
+  [ "${BENCH_UPLOAD_SINK:-}" = dart ] && SINK=
+  ( cd example && CARGO_PROFILE_RELEASE_STRIP=false flutter build ios --release \
+      --dart-define=NITRO_HTTP_BENCHMARK=1 \
+      --dart-define=BENCH_UPLOAD_SINK="$SINK" ) >"$OUT/build.log" 2>&1 \
     || { echo "build failed — see $OUT/build.log"; exit 1; }
 fi
 [ -d "$APP" ] || { echo "no app bundle at $APP"; exit 1; }

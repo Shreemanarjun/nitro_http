@@ -358,6 +358,11 @@ final class LocalServer {
     router.put('/upload', _upload);
     router.patch('/upload', _upload);
 
+    // The benchmark's upload target. `/upload` hashes the body so a test can
+    // prove what arrived, and that hash would dominate a timed upload. This one
+    // only counts the bytes.
+    router.post('/upload/sink', _uploadSink);
+
     // `/ws/close` is registered first: `Router` matches in registration order
     // and `/ws` would otherwise never see a more specific sibling.
     router.get('/ws/close', webSocketHandler(_wsClose));
@@ -590,6 +595,23 @@ final class LocalServer {
       'sha256': sink.value,
       'contentType': request.headers['content-type'],
     });
+  }
+
+  Future<Response> _uploadSink(Request request) async {
+    var received = 0;
+    await for (final chunk in request.read()) {
+      received += chunk.length;
+    }
+    final declared = int.tryParse(request.headers['content-length'] ?? '');
+    if (declared != null && declared != received) {
+      // Still a correctness gate: a short body must fail the run, not time it.
+      return Response(
+        400,
+        body: jsonEncode({'bytes': received, 'declared': declared}),
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
+    return _json({'bytes': received});
   }
 
   void _wsEcho(WebSocketChannel socket, String? protocol) {

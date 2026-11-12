@@ -550,7 +550,8 @@ This section is the part the charts cannot show.
 - **The Android device wins every scenario; the two Apple targets share a
   different shape.** On the OnePlus it is fastest in all five. On both the iPhone
   and the M1 it wins mixed and concurrency, sits inside the noise of rhttp on the
-  download, trails `dart:io` by 0.01 ms on a small GET, and is 4th on the upload.
+  download, trails `dart:io` by 0.01 ms on a small GET, and is 4th on the upload
+  (measured before 0.0.7 — see the upload note below).
   So the split is **not** phone-versus-desktop — an iPhone 12 is a phone and it
   patterns with the laptop. What those two share is fast cores, which leave less
   for a native engine to take back. That is a plausible reading of the pattern,
@@ -561,12 +562,101 @@ This section is the part the charts cannot show.
   that changes direction between two machines is not a ranking. On Android it is
   not close — 208 ms against 280 for the next-best client, **25 % clear**, in 9
   of 9 runs.
-- **Streamed upload is the weak row, consistently.** 4th of 5 on both Apple
-  targets, 2.7 % behind the leader on each, and fastest in only 6 of 9 runs on
-  Android. Two optimisation attempts were measured and both made it slower or did
-  nothing; they are written up in `src/engine/BodyPipe.h` and
-  `src/engine/ClientConfig.cpp` rather than shipped. The cause is still not fully
-  explained, and this row is the honest gap in the set.
+- **Streamed upload was the weak row, and the charts above still show it that
+  way.** 4th of 5 on both Apple targets, 2.7 % behind the leader on each. Two
+  things were wrong. 0.0.7 fixes the harness and, on macOS and the Android
+  emulator, the engine; on the iPhone 12 the stream is still fourth (see the
+  table below). The charts have not been redrawn, so read that row as history:
+  - *The scenario was measuring the harness.* The bench server hashed every
+    upload (SHA-256, ~70 ms for 8 MiB) and each client generated its body inside
+    the timed region (~28 ms), so ~87 % of every client's "upload time" was
+    identical work no client could influence. That is why all five sat within a
+    few percent. The scenario now posts a pre-generated body to a counting sink,
+    and an 8 MiB upload takes 3–4 ms instead of ~80.
+  - *With the harness out of the way, the real gap was 44 %, not 2.7 %*, and
+    five things in the engine were behind it, all fixed in 0.0.7:
+    - curl sends one upload buffer per trip round its transfer loop, and at the
+      64 KiB default an 8 MiB body is 128 trips. The buffer is now sized to the
+      body (up to 1 MiB). As a ratio to the best Dart client: 1.34 at 64 KiB,
+      1.16 at 256 KiB, 1.03–1.11 at 1 MiB, 1.08 at 2 MiB.
+    - Every streamed chunk was copied twice on the Dart isolate's thread — out of
+      the Dart heap, then into the engine's buffer. Dart now writes each chunk
+      straight into that buffer.
+    - The buffer's lock was held across the engine's copy into curl, so the
+      isolate queued behind it on almost every chunk (1.8 ms per upload on
+      Android, in a call that does a few additions). Neither side copies under
+      the lock any more.
+    - The buffer was shallower than the body. At a 4 MiB depth every 8 MiB
+      upload either moved 7–8 MiB inside the buffer to make room — a second copy
+      of the body, under the lock — or regrew past what is kept between uploads
+      and page-faulted a fresh 8 MiB each time (0.8–1.3 ms on Android). A body
+      of up to 8 MiB with a declared length is now taken whole: no pauses, no
+      room to make. The buffer is reused between uploads and freed after five
+      idle seconds.
+    - The engine held its queue lock while it configured each transfer. A
+      streamed upload's first write arrives about 20 µs after its request, found
+      the lock held and put the isolate to sleep; by the time it woke, curl had
+      asked for the body, found none and paused. 100–450 µs per upload on
+      Android, before a byte moved. A request is now registered under the lock
+      and configured outside it.
+
+    To a sink that only reads, as fast as a client can send:
+
+    | 8 MiB, p50 | nitro_http | dart:io | package:http | dio | rhttp | nitro fastest |
+    |---|---|---|---|---|---|---|
+    | macOS, stream | **1.54 ms** | 1.86 | 1.89 | 1.98 | 7.96 | 7 of 8 |
+    | macOS, file | **2.63 ms** | 8.73 | 8.77 | 8.86 | 13.40 | 8 of 8 |
+    | Android emulator, stream | **2.38 ms** | 3.38 | 2.95 | 3.61 | 15.73 | 4 of 4 |
+    | Android emulator, file | **2.91 ms** | 53.64 | 53.89 | 54.28 | 58.34 | 4 of 4 |
+    | iPhone 12, stream | 5.20 ms | 4.46 | 4.46 | **3.23** | 11.78 | 0 of 9 |
+    | iPhone 12, file | **5.62 ms** | 12.92 | 12.99 | 13.01 | 20.56 | 9 of 9 |
+
+  - *The server was the last thing in the way.* The example app's Dart server
+    needs 2.5–3 ms to read 8 MiB on the M1 and about 8 ms on the emulator —
+    longer than any client needs to send it — and it runs in the same VM as the
+    client under test. Against it the stream row is a tie on macOS (3.00 ms,
+    best other 3.09) and on the iPhone 12 (7.56 against 7.48), and slightly
+    behind on the emulator (9.1 against 8.5), whatever the client does.
+    `tool/bench_native/sink` is a few dozen lines of C that only counts bytes;
+    `bench-macos.sh` and `bench-android.sh` point the upload scenarios at it,
+    and `bench-ios.sh` at the same loop built into the example app, since a
+    phone cannot run a second process (`BENCH_UPLOAD_SINK=dart` for the old
+    target).
+  - *Uploading a file is where the engine is furthest ahead.* The `upload file`
+    scenario sends the same 8 MiB from disk, each client using the file API it
+    has: the pure-Dart clients and rhttp stream `File.openRead()`, `nitro_http`
+    hands curl the path, so the bytes never enter the Dart heap. 3.3× faster
+    than the next client on macOS, 2.3× on the iPhone 12 and about 18× on the
+    Android emulator, fastest in every run on all three. This is the upload an
+    app usually performs (a photo, a video), so it is the row to read first.
+  - *A stream from memory is in front on macOS and the Android emulator*, by
+    16–19 % over the best other client, and it was fastest in 14 of 14 emulator
+    runs across three sessions. It still makes one copy `dart:io` does not —
+    into curl's send buffer, which libcurl's read-callback API does not let the
+    engine skip — and wins there anyway on fewer, larger sends.
+  - *On the iPhone 12 it is not in front.* Fourth of five, 17 % behind `dart:io`
+    and `package:http` and further behind dio, in all nine runs. The cause is
+    not established. Two things differ from the other targets: the phone has
+    two fast cores, and a streamed upload here keeps three threads busy (the
+    isolate filling the buffer, the engine thread sending, the sink reading)
+    where a Dart client keeps two; and the extra copy costs more where memory
+    is slower. Raising the engine thread's scheduling class to user-initiated
+    changed nothing (4.91 ms).
+  - *What the last two engine changes were worth:* against the build without
+    them the stream went from 1.67 to 1.51 ms on macOS (12 interleaved rounds)
+    and from 3.48 to 2.38 ms on the Android emulator, where it had been behind
+    `dart:io` and `package:http` in every run.
+  - *One side effect of the request-start change:* inside a 64-wide burst the
+    per-request median reads about 10 % higher on macOS in two sessions of
+    three, at unchanged throughput. Requests used to be submitted one lock-wait
+    apart, so each one's clock started later; they are now submitted together.
+  - The iPhone rows are a real device, over a cable. The Android rows are an
+    emulator's: direction, not device numbers.
+  - Measured and *not* shipped, because they changed nothing or made it worse:
+    skipping the loop wake-up on the copying path, a short spin before pausing a
+    starved transfer, a 2 MiB curl buffer, a cap on how many requests the loop
+    starts before it lets curl run, and letting the loop sleep while a transfer
+    is merely in flight.
 - **A small GET is a microbenchmark, and on Apple silicon it is the FFI hop.**
   0.01 ms behind `dart:io` — in every run on the M1, in 7 of 9 on the iPhone.
   Any real network erases it.

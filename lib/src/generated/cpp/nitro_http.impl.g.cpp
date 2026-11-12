@@ -137,6 +137,17 @@ public:
         // return 0;
     }
 
+    int64_t uploadWrite(int64_t requestId, int64_t commitBytes, int64_t reserveBytes, int64_t outAddress) override {
+        // TODO: implement uploadWrite
+        throw std::runtime_error("Not implemented: uploadWrite");
+        // return 0;
+    }
+
+    void uploadRelease(int64_t requestId) override {
+        // TODO: implement uploadRelease
+        throw std::runtime_error("Not implemented: uploadRelease");
+    }
+
     void finishUpload(int64_t requestId) override {
         // TODO: implement finishUpload
         throw std::runtime_error("Not implemented: finishUpload");

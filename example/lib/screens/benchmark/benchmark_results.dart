@@ -213,7 +213,9 @@ class ScenarioCard extends StatelessWidget {
       if (fastest == Duration.zero || row.p50 < fastest) fastest = row.p50;
       if (row.max > slowestLatency) slowestLatency = row.max;
     }
-    final transfer = scenario == 'download' || scenario == 'upload';
+    final transfer = scenario == 'download' ||
+        scenario == 'upload' ||
+        scenario == 'upload file';
 
     return SectionCard(
       title: scenario,

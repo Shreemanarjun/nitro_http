@@ -49,6 +49,35 @@ typedef FrameCredit = ({int frameCount, int ackedFrames});
 /// A [RequestExecutor] that records every call and hands out programmed
 /// answers.
 ///
+/// An [UploadWriter] that records what the pump writes into it.
+final class FakeUploadWriter implements UploadWriter {
+  /// Every chunk written, in order.
+  final List<Uint8List> written = <Uint8List>[];
+
+  /// The pause depth the "engine" asks for.
+  @override
+  int highWaterMark = 1 << 20;
+
+  /// What [write] reports as buffered.
+  int buffered = 0;
+
+  /// Once true, [write] refuses — the upload can take no more.
+  bool closed = false;
+
+  /// How many times [release] was called.
+  int releaseCount = 0;
+
+  @override
+  int write(List<int> chunk) {
+    if (closed) return -1;
+    written.add(Uint8List.fromList(chunk));
+    return buffered;
+  }
+
+  @override
+  void release() => releaseCount++;
+}
+
 /// Responses come from [bufferedResponses] / [streamedHeads], or — when a test
 /// needs to inspect the request first, or to control *when* the answer arrives
 /// — from the [onSendBuffered] / [onStartStreamed] hooks.
@@ -195,9 +224,17 @@ final class FakeRequestExecutor implements RequestExecutor {
 
   @override
   int feedUploadChunk(int requestId, Uint8List chunk) {
-    uploadChunks.add((requestId: requestId, bytes: chunk));
+    // Copied, as the engine does: the pump reuses the chunk's memory.
+    uploadChunks.add((requestId: requestId, bytes: Uint8List.fromList(chunk)));
     return onFeedUploadChunk?.call(requestId, chunk) ?? bufferedUploadBytes;
   }
+
+  /// The writer `openUploadWriter` hands out; null leaves the pump on
+  /// `feedUploadChunk`, which is what most tests want to observe.
+  UploadWriter? uploadWriter;
+
+  @override
+  UploadWriter? openUploadWriter(int requestId) => uploadWriter;
 
   @override
   void finishUpload(int requestId) => finishedUploads.add(requestId);

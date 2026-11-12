@@ -16,6 +16,8 @@
 /// `HttpClient` request with a 400, which would break both baselines.
 library;
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nitro_http_example/benchmark/benchmark.dart';
 import 'package:nitro_http_example/benchmark/execution.dart';
@@ -160,11 +162,11 @@ void main() {
       ),
     ).run();
 
-    expect(report.scenarios, hasLength(5));
+    expect(report.scenarios, hasLength(6));
     expect(report.cancelled, isFalse);
     expect(
       report.results,
-      hasLength(5 * HttpLibrary.values.length),
+      hasLength(6 * HttpLibrary.values.length),
       reason: 'every scenario × client pair yields a row, failures included',
     );
 
@@ -184,7 +186,7 @@ void main() {
     final baselines = report.results.where(
       (BenchmarkResult r) => !native.contains(r.library),
     );
-    expect(baselines, hasLength(5 * (HttpLibrary.values.length - 2)));
+    expect(baselines, hasLength(6 * (HttpLibrary.values.length - 2)));
     for (final result in baselines) {
       final label = '${result.scenario}/${result.library.label}';
       expect(result.error, isNull, reason: label);
@@ -234,6 +236,55 @@ void main() {
     )) {
       expect(line.split('|'), hasLength(16), reason: line);
     }
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('the upload scenarios post to a configured sink', () async {
+    final server = await LocalServer.start();
+    addTearDown(server.stop);
+
+    // Stands in for `tool/bench_native/sink`, and counts what reaches it.
+    final sink = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => sink.close(force: true));
+    final received = <int>[];
+    sink.listen((HttpRequest request) async {
+      final bytes = await request.fold<int>(
+        0,
+        (int sum, List<int> chunk) => sum + chunk.length,
+      );
+      if (request.uri.path == '/upload/sink') received.add(bytes);
+      request.response.write('{"bytes":$bytes}');
+      await request.response.close();
+    });
+
+    const pureDart = [
+      HttpLibrary.dartIo,
+      HttpLibrary.packageHttp,
+      HttpLibrary.dio,
+    ];
+    final report = await BenchmarkRunner(
+      baseUrl: server.baseUrl,
+      config: BenchmarkConfig(
+        warmupRequests: 1,
+        transferRepeats: 2,
+        uploadBytes: 256 * 1024,
+        libraries: pureDart,
+        includeScenarios: const ['upload', 'upload file'],
+        uploadSinkUrl: 'http://127.0.0.1:${sink.port}',
+      ),
+    ).run();
+
+    expect(report.results, hasLength(2 * pureDart.length));
+    for (final result in report.results) {
+      final label = '${result.scenario}/${result.library.label}';
+      expect(result.error, isNull, reason: label);
+    }
+    expect(
+      received,
+      hasLength(2 * pureDart.length * 2),
+      reason: 'two scenarios, three clients, two repeats each: an upload that '
+          'went to the bench server instead is missing here',
+    );
+    expect(received, everyElement(256 * 1024));
   }, timeout: const Timeout(Duration(minutes: 3)));
 
   test('overlapped dispatch measures the same work as serial', () async {
@@ -286,7 +337,7 @@ void main() {
     }
 
     // Guard the guard: the counts compared above must not all be zero.
-    expect(serial, hasLength(5 * baselines.length));
+    expect(serial, hasLength(6 * baselines.length));
     expect(serial.values, everyElement(greaterThan(0)));
   }, timeout: const Timeout(Duration(minutes: 3)));
 

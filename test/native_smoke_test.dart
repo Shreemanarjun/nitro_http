@@ -739,6 +739,33 @@ void main() {
       expect(response.bodyToJson(), {'received': 131072});
     }, skip: skipReason);
 
+    test('a streamed upload stopped at the engine\'s depth is resumed', () async {
+      // A first chunk larger than the engine buffers at once (a megabyte of a
+      // body whose length it was not told, eight of one it was) stops the
+      // source there, and the rest is only sent once the engine asks for more.
+      Stream<Uint8List> body(int first, int rest) async* {
+        yield Uint8List(first);
+        for (var left = rest; left > 0; left -= 65536) {
+          yield Uint8List(left < 65536 ? left : 65536);
+        }
+      }
+
+      const mib = 1024 * 1024;
+      for (final (first, rest, sized) in const [
+        (mib + mib ~/ 2, mib + mib ~/ 2 + 5, false),
+        (9 * mib, 3 * mib, true),
+      ]) {
+        final response = await client.post(
+          '/upload',
+          body: HttpBody.stream(
+            body(first, rest),
+            contentLength: sized ? first + rest : null,
+          ),
+        );
+        expect(response.bodyToJson(), {'received': first + rest});
+      }
+    }, skip: skipReason);
+
     test('uploads a file without buffering it in Dart', () async {
       final temp = File(
         '${Directory.systemTemp.path}/nitro_http_upload_${DateTime.now().microsecondsSinceEpoch}.bin',

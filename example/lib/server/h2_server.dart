@@ -119,7 +119,7 @@ final class H2TestServer {
         }
         return;
       }
-      if (method == 'POST' && path == '/upload') {
+      if (method == 'POST' && (path == '/upload' || path == '/upload/sink')) {
         final body = utf8.encode('{"received":$received}');
         stream.sendHeaders(<Header>[
           Header.ascii(':status', '200'),

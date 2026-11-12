@@ -120,9 +120,9 @@ fun main(args: Array<String>) {
     run {
         val body = ByteArray(uploadBytes)
         fun post(): Int {
-            val req = Request.Builder().url("$base/upload").post(body.toRequestBody(octet)).build()
+            val req = Request.Builder().url("$base/upload/sink").post(body.toRequestBody(octet)).build()
             client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code} /upload")
+                if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code} /upload/sink")
                 return resp.body!!.bytes().size
             }
         }

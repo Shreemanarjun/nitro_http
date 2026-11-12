@@ -49,6 +49,7 @@ import 'package:nitro_http/nitro_http.dart';
 
 import '../core/http_library.dart';
 import '../server/h2_server.dart';
+import '../server/in_app_sink.dart';
 import '../server/local_server.dart';
 import 'benchmark.dart';
 import 'execution.dart';
@@ -143,6 +144,19 @@ const int _concurrency =
 const String _serverMode =
     String.fromEnvironment('BENCH_SERVER', defaultValue: 'h1');
 const bool _useH2 = _serverMode == 'h2';
+
+/// Where the upload scenarios post: the URL of an external sink
+/// (`tool/bench_native/sink`), `inapp` for the one in `in_app_sink.dart`, or
+/// unset for the bench server's own. A `--dart-define` for a device build, or
+/// the environment variable of the same name on a desktop, where the binary is
+/// executed directly and the sink can change between runs.
+const String _uploadSinkDefine = String.fromEnvironment('BENCH_UPLOAD_SINK');
+
+Future<String?> _uploadSink() async {
+  final value = Platform.environment['BENCH_UPLOAD_SINK'] ?? _uploadSinkDefine;
+  if (value == 'inapp') return startInAppSink();
+  return value.isEmpty ? null : value;
+}
 
 /// The scenarios the h2 test server can serve (everything but `mixed`).
 const List<String> _h2Scenarios = <String>[
@@ -270,6 +284,7 @@ Future<void> runReleaseBenchmark() async {
         httpVersionPref:
             _useH2 ? HttpVersionPref.http2Only : HttpVersionPref.auto,
         includeScenarios: _useH2 ? _h2Scenarios : null,
+        uploadSinkUrl: await _uploadSink(),
       ),
     ).run(onProgress: _heartbeat(started));
 

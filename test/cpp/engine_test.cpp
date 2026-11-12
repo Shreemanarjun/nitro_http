@@ -15,6 +15,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -1503,6 +1504,319 @@ TEST_F(EngineTest, AStreamedUploadArrivesIntact) {
       << bodyOf(r);
   EXPECT_TRUE(contains(bodyOf(r), hexSha256(payload.data(), payload.size())))
       << bodyOf(r);
+}
+
+TEST_F(EngineTest, ABodyLargerThanTheUploadBufferArrivesIntactOnBothPaths) {
+  // The upload buffer is sized to the body and capped at 1 MiB, so 3 MiB is
+  // the case where curl comes back to the read side several times with the
+  // large buffer — once from memory, once through the pipe.
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  std::string payload;
+  payload.reserve(3 * 1024 * 1024);
+  for (size_t i = 0; i < 3 * 1024 * 1024; ++i) {
+    payload.push_back(static_cast<char>((i * 31 + 5) & 0xff));
+  }
+  const std::string digest = hexSha256(payload.data(), payload.size());
+
+  PendingRequest buffered = request(1, "/upload");
+  buffered.req.method = RAWMETHOD_POST;
+  buffered.req.bodyKind = RAWBODYKIND_BYTES;
+  // Without this curl labels the body form-urlencoded, which the test server
+  // caps at 8 KiB and answers with a 413.
+  buffered.req.headers = {hdr("Content-Type", "application/octet-stream")};
+  buffered.body.assign(payload.begin(), payload.end());
+  const RawResponse a = sendBuffered(engine, std::move(buffered));
+  ASSERT_EQ(a.errorKind, RAWERRORKIND_NONE) << a.errorMessage;
+  EXPECT_EQ(a.statusCode, 200);
+  EXPECT_TRUE(contains(bodyOf(a), digest)) << bodyOf(a);
+
+  PendingRequest streamed = request(2, "/upload");
+  streamed.req.method = RAWMETHOD_POST;
+  streamed.req.bodyKind = RAWBODYKIND_STREAMED;
+  streamed.req.headers = {hdr("Content-Type", "application/octet-stream")};
+  streamed.req.options.uploadContentLength =
+      static_cast<int64_t>(payload.size());
+  const size_t before = Captures::instance().posts().size();
+  engine.submit(std::move(streamed));
+  constexpr size_t kBlock = 64 * 1024;
+  for (size_t offset = 0; offset < payload.size(); offset += kBlock) {
+    engine.feedUpload(2,
+                      reinterpret_cast<const uint8_t*>(payload.data() + offset),
+                      std::min(kBlock, payload.size() - offset));
+  }
+  engine.finishUpload(2);
+  ASSERT_TRUE(Captures::instance().waitForPosts(before + 1));
+  const std::vector<nitrohttp::test::CapturedPost> posts =
+      Captures::instance().posts();
+  const RawResponse b = RawResponse::fromNative(NitroCppBuffer{
+      posts[before].payload.data(), posts[before].payload.size()});
+  ASSERT_EQ(b.errorKind, RAWERRORKIND_NONE) << b.errorMessage;
+  EXPECT_TRUE(contains(bodyOf(b), digest)) << bodyOf(b);
+
+  // A recycled handle must not keep the megabyte buffer for a bodyless GET.
+  const RawResponse get = sendBuffered(engine, request(3, "/echo"));
+  EXPECT_EQ(get.errorKind, RAWERRORKIND_NONE);
+  EXPECT_EQ(get.statusCode, 200);
+}
+
+namespace {
+
+/// Feeds `payload` through the direct-write path the way the Dart runner does:
+/// fill the region the engine lent, publish it, take the next one.
+bool writeDirect(CurlEngine& engine, int64_t id, const std::string& payload,
+                 size_t block) {
+  // `_minReserve` in executor_native.dart: what the runner asks for ahead of
+  // the next chunk. A larger chunk requests its own room when it arrives.
+  constexpr size_t kAhead = 64 * 1024;
+  int64_t reply[3] = {0, 0, 0};
+  size_t lent = 0;
+  for (size_t offset = 0; offset < payload.size(); offset += block) {
+    const size_t n = std::min(block, payload.size() - offset);
+    if (lent < n) {
+      if (!engine.uploadWrite(id, 0, std::max(n, kAhead), reply)) return false;
+    }
+    std::memcpy(reinterpret_cast<void*>(static_cast<uintptr_t>(reply[0])),
+                payload.data() + offset, n);
+    if (!engine.uploadWrite(id, n, kAhead, reply)) return false;
+    lent = kAhead;
+  }
+  return true;
+}
+
+std::string patterned(size_t n, int salt) {
+  std::string out;
+  out.reserve(n);
+  for (size_t i = 0; i < n; ++i) {
+    out.push_back(static_cast<char>((i * 31 + static_cast<size_t>(salt)) & 0xff));
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST_F(EngineTest, ADirectlyWrittenUploadArrivesIntact) {
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  // Chunk shapes that exercise the pipe's edges: aligned, ragged, tiny, and a
+  // single chunk bigger than the whole pipe.
+  struct Shape { size_t total; size_t block; };
+  const Shape shapes[] = {
+      {3 * 1024 * 1024, 64 * 1024},
+      {1024 * 1024 + 7, 10007},
+      {40000, 3},
+      {5 * 1024 * 1024, 5 * 1024 * 1024},
+  };
+  int64_t id = 0;
+  for (const Shape& shape : shapes) {
+    ++id;
+    const std::string payload = patterned(shape.total, static_cast<int>(id));
+    PendingRequest pending = request(id, "/upload");
+    pending.req.method = RAWMETHOD_POST;
+    pending.req.bodyKind = RAWBODYKIND_STREAMED;
+    pending.req.headers = {hdr("Content-Type", "application/octet-stream")};
+    pending.req.options.uploadContentLength =
+        static_cast<int64_t>(payload.size());
+    const size_t before = Captures::instance().posts().size();
+    // Written in the same breath as the submit, so most of it lands before the
+    // loop thread has even built the transfer.
+    engine.submit(std::move(pending));
+    ASSERT_TRUE(writeDirect(engine, id, payload, shape.block));
+    engine.finishUpload(id);
+
+    ASSERT_TRUE(Captures::instance().waitForPosts(before + 1));
+    const std::vector<nitrohttp::test::CapturedPost> posts =
+        Captures::instance().posts();
+    const RawResponse r = RawResponse::fromNative(NitroCppBuffer{
+        posts[before].payload.data(), posts[before].payload.size()});
+    ASSERT_EQ(r.errorKind, RAWERRORKIND_NONE) << r.errorMessage;
+    EXPECT_EQ(r.statusCode, 200);
+    EXPECT_TRUE(contains(bodyOf(r), hexSha256(payload.data(), payload.size())))
+        << "total " << shape.total << " block " << shape.block << ": "
+        << bodyOf(r);
+    engine.uploadRelease(id);
+  }
+}
+
+TEST_F(EngineTest, AWriterStoppedAtThePipesDepthIsToldWhenToGoOn) {
+  // The runner's half of backpressure: stop once a write reports the pipe at
+  // its depth, go on when an `uploadDrain` event reports less. A first chunk
+  // larger than the pipe puts the writer at that depth whatever the reader is
+  // doing, and the rest of the body is only written once the event has come.
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  struct Shape { size_t total; size_t first; bool sized; };
+  const Shape shapes[] = {
+      // A declared length past the ceiling.
+      {kUploadPipeMaxCapBytes + 4 * 1024 * 1024,
+       kUploadPipeMaxCapBytes + 1024 * 1024, true},
+      // No declared length: the default megabyte.
+      {3 * 1024 * 1024 + 5, kUploadPipeSoftCapBytes + 512 * 1024, false},
+  };
+  int64_t id = 0;
+  for (const Shape& shape : shapes) {
+    ++id;
+    const std::string payload = patterned(shape.total, static_cast<int>(id));
+    PendingRequest pending = request(id, "/upload");
+    pending.req.method = RAWMETHOD_POST;
+    pending.req.bodyKind = RAWBODYKIND_STREAMED;
+    pending.req.headers = {hdr("Content-Type", "application/octet-stream")};
+    if (shape.sized) {
+      pending.req.options.uploadContentLength =
+          static_cast<int64_t>(payload.size());
+    }
+    const size_t before = Captures::instance().posts().size();
+    engine.submit(std::move(pending));
+
+    int64_t reply[3] = {0, 0, 0};
+    ASSERT_TRUE(engine.uploadWrite(id, 0, shape.first, reply));
+    std::memcpy(reinterpret_cast<void*>(static_cast<uintptr_t>(reply[0])),
+                payload.data(), shape.first);
+    ASSERT_TRUE(engine.uploadWrite(id, shape.first, 64 * 1024, reply));
+    const int64_t depth = reply[2];
+    const int64_t declared =
+        shape.sized ? static_cast<int64_t>(shape.total) : -1;
+    EXPECT_EQ(depth, static_cast<int64_t>(uploadPipeCapacityFor(declared)));
+    ASSERT_GE(reply[1], depth) << "the first chunk alone is past the depth";
+
+    ASSERT_TRUE(waitFor([&] {
+      const std::vector<RawEvent> drains =
+          eventsFor(id, RAWEVENTKIND_UPLOAD_DRAIN);
+      return !drains.empty() && drains.back().a < depth;
+    })) << "no drain for a writer stopped at " << depth;
+
+    ASSERT_TRUE(
+        writeDirect(engine, id, payload.substr(shape.first), 64 * 1024));
+    engine.finishUpload(id);
+
+    ASSERT_TRUE(Captures::instance().waitForPosts(before + 1));
+    const std::vector<nitrohttp::test::CapturedPost> posts =
+        Captures::instance().posts();
+    const RawResponse r = RawResponse::fromNative(NitroCppBuffer{
+        posts[before].payload.data(), posts[before].payload.size()});
+    ASSERT_EQ(r.errorKind, RAWERRORKIND_NONE) << r.errorMessage;
+    EXPECT_EQ(r.statusCode, 200);
+    EXPECT_TRUE(contains(bodyOf(r), hexSha256(payload.data(), payload.size())))
+        << "total " << shape.total << ": " << bodyOf(r);
+    engine.uploadRelease(id);
+  }
+}
+
+TEST_F(EngineTest, AWriterRacingTheStartOfItsOwnTransferLosesNothing) {
+  // A task is registered before it is set up, and set up without the inbox
+  // lock, so a writer can reach the pipe at any moment from "still queued" to
+  // "curl is already reading". Whichever it hits, every byte must arrive, in
+  // order. Short uploads back to back, started at varying offsets from their
+  // submit, sweep that whole window; under TSan this is the test that would
+  // catch setup racing the writer.
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  for (int64_t id = 1; id <= 40; ++id) {
+    const std::string payload =
+        patterned(200 * 1024 + static_cast<size_t>(id) * 37,
+                  static_cast<int>(id));
+    PendingRequest pending = request(id, "/upload");
+    pending.req.method = RAWMETHOD_POST;
+    pending.req.bodyKind = RAWBODYKIND_STREAMED;
+    pending.req.headers = {hdr("Content-Type", "application/octet-stream")};
+    pending.req.options.uploadContentLength =
+        static_cast<int64_t>(payload.size());
+    const size_t before = Captures::instance().posts().size();
+    engine.submit(std::move(pending));
+    if (id % 4 != 0) {
+      std::this_thread::sleep_for(std::chrono::microseconds((id % 4) * 15));
+    }
+    ASSERT_TRUE(writeDirect(engine, id, payload, 16 * 1024)) << "upload " << id;
+    engine.finishUpload(id);
+
+    ASSERT_TRUE(Captures::instance().waitForPosts(before + 1));
+    const std::vector<nitrohttp::test::CapturedPost> posts =
+        Captures::instance().posts();
+    const RawResponse r = RawResponse::fromNative(NitroCppBuffer{
+        posts[before].payload.data(), posts[before].payload.size()});
+    ASSERT_EQ(r.errorKind, RAWERRORKIND_NONE) << r.errorMessage;
+    EXPECT_TRUE(contains(bodyOf(r), hexSha256(payload.data(), payload.size())))
+        << "upload " << id << ": " << bodyOf(r);
+    engine.uploadRelease(id);
+  }
+}
+
+TEST_F(EngineTest, ReconfiguringWhileRequestsStartIsSafe) {
+  // `configure` runs on the caller's thread and replaces the config and cookie
+  // state that setting a transfer up reads. `configMtx_` serialises the two;
+  // under TSan this is what checks it.
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  std::atomic<bool> stop{false};
+  std::thread reconfigurer([&] {
+    while (!stop.load(std::memory_order_acquire)) {
+      engine.configure(nitrohttp::test::defaultClientConfig());
+      std::this_thread::yield();
+    }
+  });
+  for (int64_t id = 1; id <= 60; ++id) {
+    const RawResponse r = sendBuffered(engine, request(id, "/echo"));
+    EXPECT_EQ(r.errorKind, RAWERRORKIND_NONE) << r.errorMessage;
+    EXPECT_EQ(r.statusCode, 200);
+  }
+  stop.store(true, std::memory_order_release);
+  reconfigurer.join();
+}
+
+TEST_F(EngineTest, ADirectWriterOutlivesATransferThatEndsUnderIt) {
+  // The writer holds a raw pointer into the pipe between calls. Cancelling the
+  // transfer destroys the task on the loop thread; the buffer must stay valid
+  // until the writer releases it, and further writes must be refused rather
+  // than accepted into a pipe nobody drains. Run under ASan this is the test
+  // that catches a use-after-free.
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+
+  PendingRequest pending = request(1, "/upload");
+  pending.req.method = RAWMETHOD_POST;
+  pending.req.bodyKind = RAWBODYKIND_STREAMED;
+  pending.req.headers = {hdr("Content-Type", "application/octet-stream")};
+  pending.req.options.uploadContentLength = 64 * 1024 * 1024;
+  const size_t before = Captures::instance().posts().size();
+  engine.submit(std::move(pending));
+
+  int64_t reply[3] = {0, 0, 0};
+  ASSERT_TRUE(engine.uploadWrite(1, 0, 64 * 1024, reply));
+  auto* region = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(reply[0]));
+  std::memset(region, 7, 64 * 1024);
+  ASSERT_TRUE(engine.uploadWrite(1, 64 * 1024, 64 * 1024, reply));
+  region = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(reply[0]));
+
+  engine.cancel(1);
+  ASSERT_TRUE(Captures::instance().waitForPosts(before + 1));
+
+  // The task is gone. The region lent before the cancel is still ours.
+  std::memset(region, 9, 64 * 1024);
+  EXPECT_FALSE(engine.uploadWrite(1, 64 * 1024, 64 * 1024, reply));
+  EXPECT_EQ(reply[0], 0);
+  engine.uploadRelease(1);
+  engine.uploadRelease(1);  // idempotent
+}
+
+TEST_F(EngineTest, ADirectWriteToAnUnknownOrBodylessRequestIsRefused) {
+  CurlEngine engine(1);
+  engine.configure(nitrohttp::test::defaultClientConfig());
+  int64_t reply[3] = {1, 1, 1};
+  EXPECT_FALSE(engine.uploadWrite(999, 0, 1024, reply));
+  engine.uploadRelease(999);
+
+  // A GET has no pipe to write into — neither while it is still queued nor
+  // once it is running.
+  const size_t before = Captures::instance().posts().size();
+  engine.submit(request(5, "/echo"));
+  EXPECT_FALSE(engine.uploadWrite(5, 0, 1024, reply));
+  ASSERT_TRUE(Captures::instance().waitForPosts(before + 1));
+  EXPECT_FALSE(engine.uploadWrite(5, 0, 1024, reply));
 }
 
 TEST_F(EngineTest, BytesFedInTheSameBreathAsSubmitAreNotDropped) {

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -18,6 +19,17 @@ Future<List<int>> _collect(Stream<List<int>> stream) async {
 }
 
 void main() {
+  test('the package version is the same wherever it is written', () {
+    // `tool/set-version.sh` sets both; this is what fails when one is edited
+    // by hand.
+    final version = RegExp(r'^version: (\S+)$', multiLine: true)
+        .firstMatch(File('pubspec.yaml').readAsStringSync())?[1];
+
+    expect(version, isNotNull);
+    expect(defaultUserAgent, 'nitro_http/$version');
+    expect(File('CHANGELOG.md').readAsStringSync(), startsWith('## $version\n'));
+  });
+
   group('toRawClientConfig', () {
     test('carries every field of a fully populated ClientSettings', () {
       final headers = HttpHeaders()

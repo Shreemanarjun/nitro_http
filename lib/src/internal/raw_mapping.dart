@@ -156,7 +156,7 @@ RawClientConfig toRawClientConfig(ClientSettings s) {
 
 /// Sent unless the caller overrides it. Naming the engine makes server-side
 /// debugging of a native-transport client dramatically easier.
-const String defaultUserAgent = 'nitro_http/0.0.1';
+const String defaultUserAgent = 'nitro_http/0.0.7';
 
 RawCacheConfig toRawCacheConfig(HttpCacheConfig c) => RawCacheConfig(
   enabled: c.enabled,

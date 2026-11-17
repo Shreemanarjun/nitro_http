@@ -46,12 +46,14 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.5
           cache: true
 
       - name: Pub get (all packages)
         run: |
           flutter pub get
           (cd example && flutter pub get)
+          (cd example_minimal && flutter pub get)
 
       # The conformance suite, the native smoke test and the compression probe
       # all run only when the engine library exists — and together they carry
@@ -91,6 +93,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.5
           cache: true
 
       - run: flutter pub get
@@ -202,6 +205,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.5
           cache: true
 
       - name: Build
@@ -222,6 +226,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.5
           cache: true
 
       - name: Build
@@ -301,6 +306,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.5
           cache: true
 
       - name: Build
@@ -351,6 +357,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.5
           cache: true
 
       - name: Build release APK
@@ -402,6 +409,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.5
           cache: true
 
       - name: Build iOS (no codesign)

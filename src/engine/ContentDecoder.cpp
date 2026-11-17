@@ -13,7 +13,7 @@
 // zlib is present on every platform this plugin supports: the Apple SDK and the
 // Android NDK both ship it, the vendored slices build it, and the Windows and
 // Linux system paths link it alongside libcurl. The default keeps the Apple
-// podspec/SwiftPM path — which never runs src/deps.cmake — working unchanged.
+// SwiftPM path — which never runs src/deps.cmake — working unchanged.
 #ifndef NITRO_HTTP_HAS_ZLIB
 #define NITRO_HTTP_HAS_ZLIB 1
 #endif

@@ -77,7 +77,7 @@ jobs:
   # run from a cold cache, because its incremental cache keys on the spec hash
   # alone and would otherwise skip a changed generator (nitro_ecosystem#42).
   # `nitrogen link` rewrites the managed sections of src/CMakeLists.txt, the
-  # podspecs, the SPM manifests and the Gradle wiring; our own logic lives
+  # SPM manifests and the Gradle wiring; our own logic lives
   # outside those sections (src/deps.cmake, src/engine.cmake) and this job is
   # the proof. If either half leaves a diff, a hand edit landed somewhere a
   # regeneration will silently destroy.
@@ -97,7 +97,7 @@ jobs:
 
       - name: Install the nitrogen CLI
         run: |
-          dart pub global activate nitrogen_cli 0.8.6
+          dart pub global activate nitrogen_cli 0.8.8
           echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
 
       # nitrogen unconditionally runs `pod install` for the example's Apple
@@ -387,7 +387,7 @@ jobs:
         if: steps.deps.outputs.cache-hit != 'true'
         run: tool/build-curl.sh apple
 
-      # With SwiftPM enabled (the Flutter default) the podspec never runs, so
+      # The plugin is SwiftPM-only on Apple, so
       # Package.swift must find the xcframework by path — merge_apple.sh vendors
       # it INSIDE the SwiftPM package (ios/nitro_http/Frameworks/), because a
       # binary target's path may not escape the package root through Flutter's

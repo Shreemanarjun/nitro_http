@@ -20,8 +20,8 @@
 
 // Spelled relative rather than as a bare `"nitro_http.native.g.h"`: the CMake
 // builds put `lib/src/generated/cpp` on the include path, but the SwiftPM target
-// cannot — a header search path may not escape the package root — and CocoaPods
-// would need the entry duplicated in every podspec. A relative include resolves
+// cannot — a header search path may not escape the package root. A relative
+// include resolves
 // against this file on every one of the five platforms with no configuration.
 #include "../../lib/src/generated/cpp/nitro_http.native.g.h"
 

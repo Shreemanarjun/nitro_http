@@ -5,8 +5,8 @@
 # manages, so regeneration cannot clobber it. CI proves that by running
 # `nitrogen link` followed by `git diff --exit-code`.
 #
-# Apple platforms never reach this file: CocoaPods and SwiftPM glob
-# `Classes/` / `Sources/`, which forward to `src/HybridNitroHttp.cpp`, which
+# Apple platforms never reach this file: SwiftPM globs `Sources/`, which
+# forwards to `src/HybridNitroHttp.cpp`, which
 # `#include`s `engine/EngineUnity.cpp` unless NITRO_HTTP_ENGINE_SEPARATE_TUS
 # is defined. Defining it here gives the CMake platforms one translation unit
 # per source — better incremental builds and parallelism — while Apple gets a

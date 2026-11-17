@@ -124,7 +124,7 @@ endif()
 set(NH_COMMON_ARGS
   "-DCMAKE_INSTALL_PREFIX=${NH_PREFIX}"
   # Some distributions default GNUInstallDirs to lib64; every consumer of a
-  # slice (src/deps.cmake, the podspecs, the SPM manifests) hardcodes `lib`.
+  # slice (src/deps.cmake, the SPM manifests) hardcodes `lib`.
   "-DCMAKE_INSTALL_LIBDIR=lib"
   "-DCMAKE_BUILD_TYPE=Release"
   "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"
@@ -206,8 +206,8 @@ nh_lib(NH_LIB_ZSTD     zstd)
 # Runs immediately after each dependency installs, and does two things:
 #
 #  1. Canonicalises names. MSVC builds decorate static archives (zlib emits
-#     `zs.lib`, zstd `zstd_static.lib`), while src/deps.cmake, the podspecs and
-#     the SPM manifests all look for the undecorated name. It has to happen
+#     `zs.lib`, zstd `zstd_static.lib`), while src/deps.cmake and
+#     the SPM manifests look for the undecorated name. It has to happen
 #     per-project rather than once at the end, because curl is handed
 #     -DZLIB_LIBRARY=<prefix>/lib/z.lib and -DZSTD_LIBRARY=<prefix>/lib/zstd.lib
 #     — paths that must already exist when curl configures.

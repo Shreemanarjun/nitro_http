@@ -88,9 +88,9 @@ set(NH_SLICE_apple-xcframework_SHA256   "d72577c80e7ee456870714a105054bf91dd27d7
 #
 #   nitro-curl-apple-xcframework.tar.gz   → NH_SLICE_apple-xcframework_SHA256,
 #                                           downloaded by src/deps.cmake
-#   NitroCurl.xcframework.zip             → the pin below, downloaded by the
-#                                           CocoaPods podspecs
+#   NitroCurl.xcframework.zip             → the pin below, downloaded by
+#                                           SwiftPM (Package.swift)
 #
-# Verifying the .zip against the .tar.gz pin is a guaranteed mismatch, and the
-# podspecs treat a mismatch as tampering and fail the install outright.
+# Verifying the .zip against the .tar.gz pin is a guaranteed mismatch, and
+# SwiftPM treats a mismatch as tampering and fails resolution outright.
 set(NH_APPLE_XCFRAMEWORK_ZIP_SHA256     "2fc1d062a79bad979f62f40b2f60ba1d58e22e9b0a00816e1c34f9cbd7aa63ba")

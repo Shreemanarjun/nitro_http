@@ -12,8 +12,8 @@
 #   ./publish.sh --check                # verify pins match, change nothing
 #
 # NitroCurl.xcframework.zip is pinned too, in NH_APPLE_XCFRAMEWORK_ZIP_SHA256
-# rather than an NH_SLICE_ slot: CMake never downloads it, the CocoaPods
-# podspecs do, and it is a different packing of the Apple objects than
+# rather than an NH_SLICE_ slot: CMake never downloads it, SwiftPM does,
+# and it is a different packing of the Apple objects than
 # nitro-curl-apple-xcframework.tar.gz, so the two checksums differ.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -124,9 +124,8 @@ if [ "$found_any" = "no" ]; then
 fi
 
 # The .zip is a SECOND packing of the same Apple objects, so its checksum is not
-# the .tar.gz's. It gets its own variable for exactly that reason: the podspecs
-# used to verify the .zip against NH_SLICE_apple-xcframework_SHA256, which can
-# only ever mismatch, and a mismatch there is a hard `pod install` failure.
+# the .tar.gz's. It gets its own variable for exactly that reason: verifying
+# the .zip against NH_SLICE_apple-xcframework_SHA256 can only ever mismatch.
 XCF_ZIP="$DIR/NitroCurl.xcframework.zip"
 if [ -f "$XCF_ZIP" ]; then
   hash="$(sha256 "$XCF_ZIP")"

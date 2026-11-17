@@ -259,8 +259,7 @@ jobs:
           name: Native dependencies ${{ github.ref_name }}
           body: |
             Prebuilt libcurl + BoringSSL + nghttp2/ngtcp2/nghttp3 + brotli + zstd,
-            consumed by `src/deps.cmake`, the CocoaPods podspecs and the SwiftPM
-            manifests.
+            consumed by `src/deps.cmake` and the SwiftPM manifests.
 
             Each archive carries a `manifest.json` recording the exact component
             versions, compile flags and build timestamp. Attach it to bug reports.

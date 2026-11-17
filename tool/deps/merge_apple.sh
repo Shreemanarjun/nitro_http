@@ -11,15 +11,13 @@
 #
 # Output (both are needed — they serve different consumers):
 #
-#   NitroCurl.xcframework.zip             CocoaPods `vendored_frameworks` and
-#                                         SwiftPM `.binaryTarget`. Contains one
+#   NitroCurl.xcframework.zip             SwiftPM `.binaryTarget`. Contains one
 #                                         merged libNitroCurl.a per platform
 #                                         slice plus the headers.
 #   nitro-curl-apple-xcframework.tar.gz   the `apple-xcframework` slice that
 #                                         src/deps.cmake downloads when CMake
 #                                         drives an Apple build (the C++ test
-#                                         suite, and macOS desktop builds that
-#                                         bypass CocoaPods). Keeps the archives
+#                                         suite). Keeps the archives
 #                                         separate because deps.cmake resolves
 #                                         them one find_library at a time.
 #
@@ -125,32 +123,20 @@ rm -f "$ZIP"
 ditto -c -k --sequesterRsrc --keepParent "$XCF" "$ZIP"
 [ -s "$ZIP" ] || die "produced an empty $ZIP"
 
-# Also place the framework inside the stage tree. The podspecs accept
-# NITRO_HTTP_DEPS_DIR/NitroCurl.xcframework, and `export
-# NITRO_HTTP_DEPS_DIR=<...>/out/stage` is the one line every doc prints — that
-# single export must serve iOS/macOS exactly like it serves every CMake
-# platform, or the first `flutter build ios` after a from-source build dies on
-# 'curl/curl.h' file not found.
+# Also place the framework inside the stage tree, next to the slices
+# `NITRO_HTTP_DEPS_DIR=<...>/out/stage` serves to every CMake platform.
 rm -rf "$STAGE/NitroCurl.xcframework"
 cp -R "$XCF" "$STAGE/NitroCurl.xcframework"
 
-# And vendor it into the plugin's own platform directories. With Swift Package
-# Manager enabled (the Flutter default now), nitro_http builds through
-# Package.swift and the podspec — with all its fetch logic — NEVER RUNS; the
-# manifest can only resolve <platform>/Frameworks/NitroCurl.xcframework by
-# path. Copying here is what makes a from-source build work for SPM and
-# CocoaPods alike, in-repo and in the pub cache.
+# And vendor it into the plugin's own platform directories. nitro_http builds
+# through Package.swift, which can only resolve
+# <platform>/nitro_http/Frameworks/NitroCurl.xcframework by path. Copying here
+# is what makes a from-source build work, in-repo and in the pub cache.
 ROOT="$(cd "$HERE/../.." && pwd)"
 for platform in ios macos; do
   mkdir -p "$ROOT/$platform/nitro_http/Frameworks"
   rm -rf "$ROOT/$platform/nitro_http/Frameworks/NitroCurl.xcframework"
   cp -R "$XCF" "$ROOT/$platform/nitro_http/Frameworks/NitroCurl.xcframework"
-  # Record that this build put it here. The podspecs replace a framework they
-  # installed themselves when the pin moves, but must never delete one somebody
-  # built on purpose — an unstamped directory is indistinguishable from a stale
-  # one, and a local build is exactly what you cannot re-download.
-  printf 'local-build=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    > "$ROOT/$platform/nitro_http/Frameworks/.nitro_curl_provenance"
   echo "==> vendored into $platform/nitro_http/Frameworks/NitroCurl.xcframework"
 done
 
@@ -193,5 +179,5 @@ done
 
 echo "==> xcframework staged for CMake at $SLICE_DIR"
 echo "    (usable directly: NITRO_HTTP_DEPS_DIR=$STAGE)"
-echo "==> record the .zip checksum in the podspecs and Package.swift:"
+echo "==> record the .zip checksum in deps/versions.cmake (read by Package.swift):"
 shasum -a 256 "$ZIP"

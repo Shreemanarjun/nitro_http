@@ -15,7 +15,7 @@
 # `out/stage/`. There is no per-architecture Apple artefact: the five Apple
 # builds are combined into NitroCurl.xcframework.zip and
 # nitro-curl-apple-xcframework.tar.gz by merge_apple.sh, which is what
-# src/deps.cmake, the podspecs and the SPM manifests consume.
+# src/deps.cmake and the SPM manifests consume.
 #
 # Windows is built by build.ps1 (MSVC + NASM + Ninja), not by this script.
 # ─────────────────────────────────────────────────────────────────────────────

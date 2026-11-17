@@ -188,25 +188,25 @@ packages:
     dependency: transitive
     description:
       name: nitro
-      sha256: e9ac1092561384bb79008a621e6dc3069382f4fb1774eb5be9fc4a49d9978ceb
+      sha256: "21a40e5062e8654f18da749b8436b546a21e5f51fc983113f65b90c82625f82c"
       url: "https://pub.dev"
     source: hosted
-    version: "0.8.6"
+    version: "0.8.7"
   nitro_annotations:
     dependency: transitive
     description:
       name: nitro_annotations
-      sha256: c2c458598567824223bc03f03f380cb13d9a8a2dbee4aee01ea23f275cc7d128
+      sha256: d5bf3226d8f418db10c41aebb3d897a063c61a0c8dc28bf7920464cc428173b4
       url: "https://pub.dev"
     source: hosted
-    version: "0.8.6"
+    version: "0.8.7"
   nitro_http:
     dependency: "direct main"
     description:
       path: ".."
       relative: true
     source: path
-    version: "0.0.6"
+    version: "0.0.7"
   path:
     dependency: transitive
     description:

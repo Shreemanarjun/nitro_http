@@ -15,8 +15,8 @@
 //      memory. This is the single most dangerous contract in the plugin.
 //   4. Delegates.
 //
-// On Apple platforms CocoaPods and SwiftPM glob `Classes/` / `Sources/`, which
-// forward here, and the `#include` at the bottom pulls in the whole engine as
+// On Apple platforms SwiftPM globs `Sources/`, which
+// forwards here, and the `#include` at the bottom pulls in the whole engine as
 // one unity translation unit. The CMake platforms define
 // NITRO_HTTP_ENGINE_SEPARATE_TUS and compile each engine source individually.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -304,7 +304,7 @@ __attribute__((constructor)) static void nitro_http_auto_register() {
 #endif
 
 // ── Apple unity translation unit ─────────────────────────────────────────────
-// CocoaPods and SwiftPM cannot reference `../src/engine/*.cpp` individually
+// SwiftPM cannot reference `../src/engine/*.cpp` individually
 // without a forwarder file per source. One `#include` here keeps the Apple
 // build wiring at zero maintenance; CMake platforms compile the sources
 // separately for better incremental builds.

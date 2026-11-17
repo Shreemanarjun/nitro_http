@@ -244,7 +244,7 @@ class NitroCompletionBatch {
         batchPort = idOrPort;
         stream = true;
       } else {
-        return (Dart_PostCObject_DL)(idOrPort, obj);
+        return postFlat(idOrPort, obj);
       }
       State& st = ports_[batchPort];
       if (st.inFlight && copyable(obj)) {
@@ -332,21 +332,74 @@ class NitroCompletionBatch {
     }
   }
 
+  // ── One message, one block ────────────────────────────────────────────────
+  // With compressed pointers (Android, iOS) the VM's message serializer tells
+  // two Dart_CObjects apart by the low 32 bits of their address: it keys them
+  // as ObjectPtr, and an untagged pointer compares as a Smi. Two nodes of one
+  // message that agree there are sent as one node. Heap nodes do agree, a few
+  // times in a hundred thousand batches: an id then arrives as the previous
+  // result and that call never completes, or a result arrives as its own id.
+  // So every node of a message is copied into one vector before the post.
+  // Addresses inside one block cannot agree in their low 32 bits.
+
+  static void countNodes(const Dart_CObject* o, size_t* nodes, size_t* links) {
+    *nodes += 1;
+    if (o->type != Dart_CObject_kArray) return;
+    *links += (size_t)o->value.as_array.length;
+    for (intptr_t i = 0; i < o->value.as_array.length; i++) countNodes(o->value.as_array.values[i], nodes, links);
+  }
+
+  // Copies [src] and everything below it into [nodes]; [links] holds the
+  // element pointers of its arrays. Both are reserved by the caller, so
+  // neither reallocates and the pointers handed out stay valid.
+  static Dart_CObject* flatten(const Dart_CObject* src, std::vector<Dart_CObject>& nodes, std::vector<Dart_CObject*>& links) {
+    nodes.push_back(*src);
+    Dart_CObject* dst = &nodes.back();
+    if (src->type == Dart_CObject_kArray) {
+      const size_t n = (size_t)src->value.as_array.length;
+      const size_t first = links.size();
+      links.resize(first + n);
+      for (size_t i = 0; i < n; i++) links[first + i] = flatten(src->value.as_array.values[i], nodes, links);
+      dst->value.as_array.values = links.data() + first;
+    }
+    return dst;
+  }
+
+  // A message the caller built itself (an unbound port).
+  static bool postFlat(int64_t port, Dart_CObject* message) {
+    size_t n = 0, l = 0;
+    countNodes(message, &n, &l);
+    if (n == 1) return (Dart_PostCObject_DL)(port, message);  // one node has nothing to collide with
+    std::vector<Dart_CObject> nodes;
+    std::vector<Dart_CObject*> links;
+    nodes.reserve(n);
+    links.reserve(l);
+    return (Dart_PostCObject_DL)(port, flatten(message, nodes, links));
+  }
+
   // [id0, obj0, id1, obj1, ...] as one kArray message.
   static bool postPairs(int64_t batchPort, const std::vector<std::pair<int64_t, Dart_CObject*>>& pairs) {
-    std::vector<Dart_CObject> ids(pairs.size());
-    std::vector<Dart_CObject*> values(pairs.size() * 2);
+    size_t n = 1 + pairs.size(), l = pairs.size() * 2;
+    for (const auto& p : pairs) countNodes(p.second, &n, &l);
+    std::vector<Dart_CObject> nodes;
+    std::vector<Dart_CObject*> links;
+    nodes.reserve(n);
+    links.reserve(l);
+    nodes.emplace_back();  // the array itself; filled in below
+    links.resize(pairs.size() * 2);
     for (size_t i = 0; i < pairs.size(); i++) {
-      ids[i].type = Dart_CObject_kInt64;
-      ids[i].value.as_int64 = pairs[i].first;
-      values[2 * i] = &ids[i];
-      values[2 * i + 1] = pairs[i].second;
+      nodes.emplace_back();
+      Dart_CObject* id = &nodes.back();
+      id->type = Dart_CObject_kInt64;
+      id->value.as_int64 = pairs[i].first;
+      links[2 * i] = id;
+      links[2 * i + 1] = flatten(pairs[i].second, nodes, links);
     }
-    Dart_CObject batch;
-    batch.type = Dart_CObject_kArray;
-    batch.value.as_array.length = (intptr_t)values.size();
-    batch.value.as_array.values = values.data();
-    return (Dart_PostCObject_DL)(batchPort, &batch);
+    Dart_CObject* batch = &nodes[0];
+    batch->type = Dart_CObject_kArray;
+    batch->value.as_array.length = (intptr_t)(pairs.size() * 2);
+    batch->value.as_array.values = links.data();
+    return (Dart_PostCObject_DL)(batchPort, batch);
   }
 
   static void freeItems(FreeItem freeItem, const std::vector<std::pair<int64_t, std::unique_ptr<Owned>>>& items) {
@@ -362,7 +415,13 @@ class NitroCompletionBatch {
     batch.type = Dart_CObject_kArray;
     batch.value.as_array.length = (intptr_t)items.size();
     batch.value.as_array.values = const_cast<Dart_CObject**>(items.data());
-    return (Dart_PostCObject_DL)(port, &batch);
+    size_t n = 0, l = 0;
+    countNodes(&batch, &n, &l);
+    std::vector<Dart_CObject> nodes;
+    std::vector<Dart_CObject*> links;
+    nodes.reserve(n);
+    links.reserve(l);
+    return (Dart_PostCObject_DL)(port, flatten(&batch, nodes, links));
   }
 
   std::mutex mu_;

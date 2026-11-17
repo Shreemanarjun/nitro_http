@@ -625,7 +625,7 @@ verifies the copies.
 | `CookieBridge.{h,cpp}` | Cookie engine access through the parked easy handle, as inbox ops |
 | `HttpCache.{h,cpp}` | RFC 9111 subset: index, freshness, revalidation, LRU eviction, `CacheWriter` |
 | `WsSession.{h,cpp}` | WebSockets: `CURLOPT_CONNECT_ONLY` handshake, then hand-written RFC 6455 framing, masking, reassembly, ping/pong and close over `curl_easy_send`/`recv` |
-| `EngineUnity.cpp` | Unity translation unit `#include`ing every engine `.cpp`. Apple only — podspecs glob `Classes/**` and cannot reach `../src`, so one forwarder per Apple location includes this instead of maintaining a forwarder per source |
+| `EngineUnity.cpp` | Unity translation unit `#include`ing every engine `.cpp`. Apple only — SwiftPM globs `Sources/**` and cannot reach `../src`, so one forwarder per Apple package includes this instead of maintaining a forwarder per source |
 | `mozilla_roots.inc` | Generated Mozilla CA bundle backing `RootCaSource.bundled` |
 
 CMake platforms compile the individual sources with

@@ -12,8 +12,8 @@ import PackageDescription
 // SwiftPM manifest is Swift evaluated during resolution.
 //
 //   1. A vendored NitroCurl.xcframework sitting in `<platform>/Frameworks/`
-//      (put there by the podspec's fetch script, by `tool/deps/build.sh` plus
-//      `merge_apple.sh`, or by hand for an air-gapped build). That slice carries
+//      (put there by `tool/deps/build.sh` plus `merge_apple.sh`, or by hand
+//      for an air-gapped build). That slice carries
 //      HTTP/3, brotli and zstd.
 //
 //   2. Otherwise the platform libcurl the Apple SDK ships. HTTP/1.1 and HTTP/2
@@ -59,9 +59,8 @@ let hasVendoredCurl = FileManager.default.fileExists(atPath: vendoredCurl.path)
 
 // ── The published-consumer path ──────────────────────────────────────────────
 // A pub.dev consumer has no vendored framework: `<platform>/*/Frameworks/` is
-// gitignored, so it is not in the package archive. CocoaPods used to cover that
-// by downloading it in `prepare_command`, but SwiftPM never runs a podspec —
-// and `nitro` is SPM-only, so CocoaPods is not even available as a fallback.
+// gitignored, so it is not in the package archive, and the plugin is
+// SwiftPM-only, so nothing else downloads it.
 // Such a consumer got the SDK's libcurl on macOS (no HTTP/3, brotli or zstd)
 // and, on iOS, undefined `curl_*` symbols.
 //
@@ -108,7 +107,7 @@ var cxxSettings: [CXXSetting] = [
     .headerSearchPath("include"),
     .unsafeFlags(["-std=c++17"]),
     // -O3 for anything that is not a debug build. Xcode's default here was `-Os`
-    // — optimise for SIZE — because neither this manifest nor the podspec set a
+    // — optimise for SIZE — because this manifest set no
     // level, and that is what Release inherits. Confirmed by reading the actual
     // clang invocation, not assumed.
     //

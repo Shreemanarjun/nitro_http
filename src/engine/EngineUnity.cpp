@@ -1,11 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // nitro_http engine — unity translation unit for Apple builds.
 //
-// Podspecs glob `Classes/**/*` and SwiftPM globs `Sources/**`; neither can
-// reference `../../src/engine/*.cpp` without one forwarder file per source, in
-// four separate locations (ios/Classes, macos/Classes, and both SwiftPM
-// `Sources/NitroHttpCpp/`). That is twelve files whose only job is to stay in
-// sync with this directory listing.
+// SwiftPM globs `Sources/**` and cannot reference `../../src/engine/*.cpp`
+// without one forwarder file per source, in both `Sources/NitroHttpCpp/`
+// folders. Those files' only job would be to stay in sync with this directory
+// listing.
 //
 // Instead `src/HybridNitroHttp.cpp` — which those locations already forward to —
 // includes this file, and this file includes the engine. The CMake platforms

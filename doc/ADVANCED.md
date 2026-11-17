@@ -465,8 +465,8 @@ with every BoringSSL symbol prefixed so it can never collide with another
 plugin's OpenSSL, and prints the `NITRO_HTTP_DEPS_DIR` export to use when done:
 
 The `apple` build also vendors `NitroCurl.xcframework` into the plugin's
-`ios/` and `macos/` folders — required because Swift Package Manager builds
-(the Flutter default) resolve it by path and never run the podspec.
+`ios/` and `macos/` folders, where the Swift Package Manager build resolves it
+by path.
 
 ```sh
 flutter pub run nitro_http:build_curl apple    # 5 Apple slices + xcframework merge

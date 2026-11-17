@@ -120,11 +120,15 @@ the dependency release, so later projects and package upgrades reuse it and
 | Platform | Requirement | Anything to do? |
 |---|---|---|
 | Android | minSdk 24 · arm64-v8a, armeabi-v7a, x86_64 | No |
-| iOS | 13.0+, device and simulator | No |
-| macOS | 10.15+ | **Yes — one entitlement, below** |
+| iOS | 13.0+, device and simulator · Swift Package Manager | No |
+| macOS | 10.15+ · Swift Package Manager | **Yes — one entitlement, below** |
 | Windows | x64 | No |
 | Linux | x64, arm64 | No |
 | Web | any browser Flutter supports | No — but it runs on `fetch`, [not the engine](#web) |
+
+iOS and macOS build through Swift Package Manager, which Flutter uses by
+default. There is no podspec, so an app that turns Swift Package Manager off
+cannot build the plugin.
 
 ### macOS: the one required step
 

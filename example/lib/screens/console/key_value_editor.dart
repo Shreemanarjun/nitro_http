@@ -5,7 +5,7 @@
 /// two sets of bugs.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:signals_flutter/signals_flutter.dart';
 import '../../core/request_spec.dart';
 import '../../theme/app_theme.dart';

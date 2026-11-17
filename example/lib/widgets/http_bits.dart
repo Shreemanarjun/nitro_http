@@ -7,7 +7,7 @@
 /// one place.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../core/http_library.dart';
 import '../theme/app_theme.dart';

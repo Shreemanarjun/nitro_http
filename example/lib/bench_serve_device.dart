@@ -14,7 +14,7 @@
 // force-stopped. The on-screen text is only so a human can see it is serving.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'server/local_server.dart';
 

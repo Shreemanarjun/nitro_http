@@ -5,7 +5,7 @@
 /// with no network at all, and nothing you press here leaves the device.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:nitro_http/nitro_http.dart';
 
 import 'benchmark/release_runner.dart';

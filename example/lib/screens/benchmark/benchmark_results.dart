@@ -7,7 +7,7 @@
 /// whose mean is fine but whose tail is not cannot hide behind its own average.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 
 import '../../benchmark/benchmark.dart';

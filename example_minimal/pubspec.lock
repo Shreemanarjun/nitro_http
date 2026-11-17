@@ -49,6 +49,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.9"
+  cupertino_ui:
+    dependency: transitive
+    description:
+      name: cupertino_ui
+      sha256: c3eaf7f5bdfee36deb0b14a4cbf7602f1b6b8d8b8576b81f38fc08c25881c94c
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.1.7"
   dio:
     dependency: transitive
     description:
@@ -94,6 +102,11 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "6.0.0"
+  flutter_localizations:
+    dependency: transitive
+    description: flutter
+    source: sdk
+    version: "0.0.0"
   flutter_test:
     dependency: "direct dev"
     description: flutter
@@ -120,6 +133,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.1.2"
+  intl:
+    dependency: transitive
+    description:
+      name: intl
+      sha256: "1ca20c894b1717686a2319b8548763d812bc0aabdac580420a44c5178c57a867"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.20.3"
   leak_tracker:
     dependency: transitive
     description:
@@ -168,6 +189,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.13.0"
+  material_ui:
+    dependency: "direct main"
+    description:
+      name: material_ui
+      sha256: a6b19012df437a356cbc01f8ea22a105e07194c47c9a6009da0032a0ce35c4ab
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.11.1"
   meta:
     dependency: transitive
     description:
@@ -188,18 +217,18 @@ packages:
     dependency: transitive
     description:
       name: nitro
-      sha256: "21a40e5062e8654f18da749b8436b546a21e5f51fc983113f65b90c82625f82c"
+      sha256: "7c65d80d8cd18008a609501eedc60971e22d1153cf3f02155720a16a48d1c12b"
       url: "https://pub.dev"
     source: hosted
-    version: "0.8.7"
+    version: "0.8.8"
   nitro_annotations:
     dependency: transitive
     description:
       name: nitro_annotations
-      sha256: d5bf3226d8f418db10c41aebb3d897a063c61a0c8dc28bf7920464cc428173b4
+      sha256: e2c35febb8f821f56bf0d08edad3d8672bea77d920e7ae294418281799feb108
       url: "https://pub.dev"
     source: hosted
-    version: "0.8.7"
+    version: "0.8.8"
   nitro_http:
     dependency: "direct main"
     description:
@@ -309,5 +338,5 @@ packages:
     source: hosted
     version: "1.0.1"
 sdks:
-  dart: ">=3.12.2 <4.0.0"
-  flutter: ">=3.18.0-18.0.pre.54"
+  dart: ">=3.13.0 <4.0.0"
+  flutter: ">=3.47.0"

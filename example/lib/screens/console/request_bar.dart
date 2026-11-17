@@ -4,7 +4,7 @@
 /// move when the window narrows is the control you press a hundred times an hour.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:signals_flutter/signals_flutter.dart';
 
 import '../../core/app_state.dart';

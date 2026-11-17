@@ -1,7 +1,7 @@
 /// The request side of the console: four editors behind one tab strip.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:signals_flutter/signals_flutter.dart';
 
 import '../../core/app_state.dart';

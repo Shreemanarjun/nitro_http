@@ -5,7 +5,7 @@
 /// hardcoded it is a layout constant (a gutter, a column width), never a colour.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:signals_flutter/signals_flutter.dart';
 

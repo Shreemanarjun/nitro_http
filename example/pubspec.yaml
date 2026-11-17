@@ -54,6 +54,7 @@ dependencies:
   # `rhttp` entries in benchmark.dart) if you do not have one.
   rhttp: ^0.18.0
   http2: ^3.1.0
+  material_ui: ^1.11.1
 
 dev_dependencies:
   # The measurement loop for `matrix_benchmark_test`: `AsyncBenchmarkBase`

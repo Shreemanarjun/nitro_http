@@ -7,7 +7,7 @@
 /// job, so this file sets component themes rather than exporting helper widgets.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Semantic colours for HTTP concepts, resolved against the active scheme.
 ///

@@ -4,7 +4,7 @@
 /// have to import the app shell that imports it.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// A titled card wrapping arbitrary content.
 class SectionCard extends StatelessWidget {

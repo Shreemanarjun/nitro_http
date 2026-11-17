@@ -253,6 +253,7 @@ void main() {
         'networkInterface:',
         'keepAlive:',
         'referrerPolicy:',
+        'crossOriginCredentials:',
         'unsupportedSettings:',
       ]) {
         expect(rendered, contains(field), reason: field);
@@ -262,7 +263,7 @@ void main() {
     test('every setting takes part in equality', () {
       // A client rebuilds its native configuration when its settings change, so
       // a field missing from `==` means a change that silently never reaches the
-      // engine. These seven were added after the first cut of this class, and
+      // engine. These were added after the first cut of this class, and
       // `unsupportedSettings` was in fact missing until this test was written.
       const base = ClientSettings();
 
@@ -275,6 +276,7 @@ void main() {
         'referrerPolicy': base.copyWith(
           referrerPolicy: ReferrerPolicy.noReferrer,
         ),
+        'crossOriginCredentials': base.copyWith(crossOriginCredentials: true),
         'unsupportedSettings': base.copyWith(
           unsupportedSettings: UnsupportedSettingPolicy.ignore,
         ),

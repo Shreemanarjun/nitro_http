@@ -213,6 +213,22 @@ Future<void> skipIfOffline(Future<void> Function() body) async {
   }
 }
 
+/// For the tests that need `self-signed.badssl.com`. That site is sometimes
+/// unreachable, slow, or resets the handshake, which says nothing about the
+/// engine, so the test is skipped. A certificate verdict is never swallowed:
+/// it is the thing under test.
+Future<void> skipIfSiteDown(Future<void> Function() body) async {
+  try {
+    await body();
+  } on NitroHttpException catch (e) {
+    final siteDown = e is NitroHttpConnectionException ||
+        e is NitroHttpTimeoutException ||
+        e is NitroHttpTlsException;
+    if (!siteDown) rethrow;
+    markTestSkipped('self-signed.badssl.com unavailable: ${e.message}');
+  }
+}
+
 void main() {
   final libraryPath = _locateLibrary();
   final skipReason = libraryPath == null
@@ -793,6 +809,17 @@ void main() {
       expect(cleared.body, isNot(contains('sid=abc123')));
     }, skip: skipReason);
 
+    test('sends a cookie set through the API, and flushes an in-memory jar', () async {
+      client.setCookie(
+        const Cookie(name: 'theme', value: 'dark', domain: '127.0.0.1'),
+      );
+      addTearDown(client.clearCookies);
+      final replay = await client.get('/readcookie');
+      expect(replay.body, contains('theme=dark'));
+      // Nothing to write for a jar that lives in memory; it must still be safe.
+      client.flushCookies();
+    }, skip: skipReason);
+
     test('sends default and per-request headers, with override', () async {
       final configured = NitroHttpClient(
         settings: ClientSettings(
@@ -877,6 +904,11 @@ void main() {
       expect(second.body, 'cached-body-60');
       expect(second.fromCache, isTrue);
       // The whole point: the origin was never asked a second time.
+      expect(server.hits['/cache/60'], 1);
+
+      // And the synchronous lookup sees the same entry, with no request at all.
+      expect(cached.cache.match('/cache/60')?.body, 'cached-body-60');
+      expect(cached.cache.match('/cache/never-fetched'), isNull);
       expect(server.hits['/cache/60'], 1);
     }, skip: skipReason);
 
@@ -1018,6 +1050,16 @@ void main() {
         expect((headers['user-agent'] as List).first, 'init-test/1.0');
       }, skip: skipReason);
 
+      test('preconnect reaches a live origin and shrugs off a dead one', () async {
+        NitroHttp.init(ClientSettings(baseUrl: server.url('')));
+        final before = server.hits['/echo'] ?? 0;
+        await NitroHttp.preconnectOnAppStart([
+          server.url('/echo'),
+          'http://127.0.0.1:1/',
+        ]);
+        expect(server.hits['/echo'], before + 1);
+      }, skip: skipReason);
+
       test('calling it again replaces and disposes the previous client', () async {
         NitroHttp.init(ClientSettings(baseUrl: server.url('')));
         final first = NitroHttp.defaultClient;
@@ -1110,20 +1152,22 @@ void main() {
       expect((await client!.get('https://example.com/')).statusCode, 200);
     }), skip: tlsSkipReason);
 
-    test('an untrusted chain is still REJECTED', () async {
+    test('an untrusted chain is still REJECTED', () => skipIfSiteDown(() async {
       // The other half of the guard. Installing a CA bundle is only correct if
       // it still refuses a bad certificate — a fix that trusted everything
       // would pass the three tests above and be far worse than the bug.
       client = NitroHttpClient(
         settings: const ClientSettings(timeout: Duration(seconds: 30)),
       );
-      await expectLater(
-        client!.get('https://self-signed.badssl.com/'),
-        throwsA(isA<NitroHttpCertificateException>()),
-      );
-    }, skip: tlsSkipReason);
+      try {
+        final res = await client!.get('https://self-signed.badssl.com/');
+        fail('an untrusted chain was accepted (status ${res.statusCode})');
+      } on NitroHttpCertificateException {
+        // Refused, as it must be.
+      }
+    }), skip: tlsSkipReason);
 
-    test('verification can be disabled deliberately', () async {
+    test('verification can be disabled deliberately', () => skipIfSiteDown(() async {
       client = NitroHttpClient(
         settings: const ClientSettings(
           timeout: Duration(seconds: 30),
@@ -1131,6 +1175,6 @@ void main() {
         ),
       );
       expect((await client!.get('https://self-signed.badssl.com/')).statusCode, 200);
-    }, skip: tlsSkipReason);
+    }), skip: tlsSkipReason);
   });
 }

@@ -325,12 +325,25 @@ void main() {
       FetchStreamDemux.instance.release(1);
     });
 
-    test('cookies follow the client setting rather than a web-only knob',
+    test('cross-origin credentials are off unless asked for', () async {
+      // A credentialed request is refused by a server that answers
+      // `Access-Control-Allow-Origin: *`, so the default must not send one.
+      final seen = <bool>[];
+      FetchRequestExecutor(
+        MockClient((r) async => http.Response('', 200)),
+        setCredentials: seen.add,
+      ).configureClient(toRawClientConfig(const ClientSettings()));
+
+      expect(seen, [false]);
+    });
+
+    test('asking for them turns them on, and disabling cookies wins',
         () async {
       final seen = <bool>[];
       final executor = FetchRequestExecutor(
         MockClient((r) async => http.Response('', 200)),
         setCredentials: seen.add,
+        crossOriginCredentials: true,
       );
 
       executor.configureClient(

@@ -3,35 +3,22 @@
 ### Breaking
 
 * iOS and macOS are **Swift Package Manager only**; the podspecs are removed.
-  An app that turns Swift Package Manager off cannot build the plugin. Under
-  CocoaPods `pod install` already failed in 0.0.6, because `nitro` has shipped
-  no pod since 0.8.0.
+* **Web:** cross-origin requests no longer send cookies by default, which broke
+  servers answering `Access-Control-Allow-Origin: *`. Opt back in with the new
+  `ClientSettings.crossOriginCredentials`.
 
 ### Changed
 
-* Upgraded to **`nitro` 0.8.8**: weakly-linked `dart_api_dl` symbols, so two nitro
-  plugins in one iOS/macOS SwiftPM app link again (nitro #61), an
-  allocation-free `@nitroAsync` worker dispatch, and a fix for an Android async
-  call that could never complete. No API change.
-* **Faster uploads**, no API change. Streamed bodies are written straight into
-  the engine's buffer (one copy per chunk, not two) and buffered whole up to
-  8 MiB, curl's send buffer is sized to the body, and two locks no longer make
-  the isolate wait. 8 MiB, p50: `HttpBody.file` is 2.3–18× faster than the next
-  client on macOS, the Android emulator and an iPhone 12. A stream leads on
-  macOS (1.54 ms against 1.86) and the emulator (2.38 against 2.95) but is
-  **behind on the iPhone 12** (5.20 against 3.23). Details:
-  [ADVANCED.md](doc/ADVANCED.md#benchmarks).
-* A `NitroBuffer` passed to `HttpBody.bytes` or a WebSocket send crosses the
-  bridge by pointer, with no copy.
-* Benchmark: uploads go to a sink that only counts bytes, and there is a new
-  `upload file` scenario.
+* Upgraded to **`nitro` 0.8.8**. No API change.
+* **Faster uploads**: `HttpBody.file` is 2.3–18× faster than the next client; a
+  stream leads on macOS and the Android emulator but is behind on an iPhone 12.
+  Details: [ADVANCED.md](doc/ADVANCED.md#benchmarks).
+* A `NitroBuffer` passed to `HttpBody.bytes` or a WebSocket send is not copied.
 
 ### Fixed
 
-* **#4** — iOS/macOS archived builds (TestFlight/App Store) no longer fail with
-  `Failed to lookup symbol 'nitro_http_release_RawChunk'`. 0.0.6 kept only the
-  runtime symbols through Xcode's archive strip; the 0.8.8 generator keeps
-  every function Dart looks up. Thanks @JoniDS.
+* **#4** — iOS/macOS archived builds no longer fail with `Failed to lookup
+  symbol`. Thanks @JoniDS.
 
 ## 0.0.6
 

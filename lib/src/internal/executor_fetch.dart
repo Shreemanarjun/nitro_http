@@ -125,6 +125,7 @@ final class FetchRequestExecutor implements RequestExecutor {
     http.Client client, {
     void Function(bool)? setCredentials,
     TimingsLookup? timings,
+    this.crossOriginCredentials = false,
     this.unsupported = UnsupportedSettingPolicy.reject,
   }) : _client = client,
        // ignore: prefer_initializing_formals
@@ -135,6 +136,8 @@ final class FetchRequestExecutor implements RequestExecutor {
   final http.Client _client;
   final void Function(bool)? _setCredentials;
   final TimingsLookup? _timings;
+  /// [ClientSettings.crossOriginCredentials].
+  final bool crossOriginCredentials;
   /// What to do with a setting a browser cannot honour.
   final UnsupportedSettingPolicy unsupported;
   final _aborts = <int, StreamSubscription<List<int>>>{};
@@ -161,10 +164,10 @@ final class FetchRequestExecutor implements RequestExecutor {
     // otherwise look configured and do nothing.
     _rejectUnsupported(config);
     _config = config;
-    // The browser owns the jar, but it will only attach it cross-origin when
-    // credentials are requested. `cookies.enabled` is the closest thing the
-    // caller already says, so honour it rather than inventing a web-only knob.
-    _setCredentials?.call(config.cookies.enabled);
+    // The browser owns the jar and attaches it same-origin on its own. Asking
+    // for it cross-origin is opt-in: a credentialed request is refused by any
+    // server that answers `Access-Control-Allow-Origin: *`.
+    _setCredentials?.call(crossOriginCredentials && config.cookies.enabled);
   }
 
   /// The response ceiling in bytes, or 0 when there is none.

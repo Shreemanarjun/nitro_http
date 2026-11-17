@@ -21,6 +21,7 @@ RequestExecutor defaultExecutor(int clientId, ClientSettings settings) {
     client,
     setCredentials: (enabled) => client.withCredentials = enabled,
     timings: resourceTimingFor,
+    crossOriginCredentials: settings.crossOriginCredentials,
     unsupported: settings.unsupportedSettings,
   );
 }

@@ -1055,6 +1055,7 @@ final class ClientSettings {
     this.networkInterface,
     this.keepAlive = false,
     this.referrerPolicy,
+    this.crossOriginCredentials = false,
     this.unsupportedSettings = UnsupportedSettingPolicy.reject,
   });
 
@@ -1188,6 +1189,16 @@ final class ClientSettings {
   /// Web only.
   final ReferrerPolicy? referrerPolicy;
 
+  /// Whether requests to another origin carry the browser's cookies and HTTP
+  /// credentials (`fetch`'s `credentials: 'include'`).
+  ///
+  /// Web only. Off by default, as in `fetch`: a server that answers
+  /// `Access-Control-Allow-Origin: *` refuses a credentialed request outright.
+  /// Turn it on for an API on another origin that signs you in with a cookie
+  /// and names your origin in its CORS headers. Requests to the page's own
+  /// origin carry cookies either way, and [CookieSettings.none] wins over this.
+  final bool crossOriginCredentials;
+
   /// What to do with settings this platform cannot honour. Web only; native
   /// honours everything and ignores this.
   ///
@@ -1279,6 +1290,7 @@ final class ClientSettings {
     String? networkInterface,
     bool? keepAlive,
     ReferrerPolicy? referrerPolicy,
+    bool? crossOriginCredentials,
     UnsupportedSettingPolicy? unsupportedSettings,
   }) => ClientSettings(
     baseUrl: baseUrl ?? this.baseUrl,
@@ -1305,6 +1317,8 @@ final class ClientSettings {
     networkInterface: networkInterface ?? this.networkInterface,
     keepAlive: keepAlive ?? this.keepAlive,
     referrerPolicy: referrerPolicy ?? this.referrerPolicy,
+    crossOriginCredentials:
+        crossOriginCredentials ?? this.crossOriginCredentials,
     unsupportedSettings: unsupportedSettings ?? this.unsupportedSettings,
   );
 
@@ -1336,6 +1350,7 @@ final class ClientSettings {
           other.networkInterface == networkInterface &&
           other.keepAlive == keepAlive &&
           other.referrerPolicy == referrerPolicy &&
+          other.crossOriginCredentials == crossOriginCredentials &&
           other.unsupportedSettings == unsupportedSettings;
 
   @override
@@ -1365,6 +1380,7 @@ final class ClientSettings {
       networkInterface,
       keepAlive,
       referrerPolicy,
+      crossOriginCredentials,
       unsupportedSettings,
     ),
   );
@@ -1382,6 +1398,7 @@ final class ClientSettings {
       'maxResponseBytes: $maxResponseBytes, hstsCachePath: $hstsCachePath, '
       'unixSocketPath: $unixSocketPath, networkInterface: $networkInterface, '
       'keepAlive: $keepAlive, referrerPolicy: ${referrerPolicy?.name}, '
+      'crossOriginCredentials: $crossOriginCredentials, '
       'unsupportedSettings: ${unsupportedSettings.name})';
 }
 

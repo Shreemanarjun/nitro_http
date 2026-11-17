@@ -186,7 +186,7 @@ only the total real.
 | proxies, DNS overrides, DoH | not exposed to a page |
 | HTTP version selection | the browser negotiates; you get what it picks |
 | connection pool | not observable from a page |
-| the cookie jar | the browser manages cookies; `credentials` is the only lever |
+| the cookie jar | the browser manages cookies. They go to the page's own origin; `crossOriginCredentials: true` sends them to other origins too |
 | the disk cache | the browser's HTTP cache applies instead |
 | streamed *uploads* | streamed where the browser allows a `ReadableStream` body (Chrome), buffered elsewhere |
 | WebSocket headers, `pingInterval`, TLS | the browser performs the upgrade and owns them |

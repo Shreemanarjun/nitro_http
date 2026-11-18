@@ -281,6 +281,20 @@ void main() {
       expect(NitroHttp.supportsHttp3, isA<bool>());
     }, skip: skipReason);
 
+    test('large bodies reach Dart zero-copy and byte-exact', () async {
+      // Bodies of kDetachBodyMinBytes (16 KiB) and up skip the record and are
+      // adopted as external Uint8Lists; below it they stay inline. Both sides
+      // of the threshold must deliver identical bytes, and a released body
+      // must not be read after its finalizer frees it.
+      for (final n in const [16 * 1024 - 1, 16 * 1024, 1024 * 1024]) {
+        for (var i = 0; i < 3; i++) {
+          final response = await client.get('/bytes/$n');
+          expect(response.statusCode, 200);
+          expect(response.bodyBytes, _Server.bytesOfLength(n), reason: '$n B');
+        }
+      }
+    }, skip: skipReason);
+
     test('performs a real GET and reports timings', () async {
       final response = await client.get('/echo', query: {'a': '1', 'b': '2'});
 

@@ -9,13 +9,80 @@ import 'dart:async';
 import 'dart:ffi';
 import 'dart:typed_data';
 
-import 'package:nitro/nitro.dart' show NitroBuffer;
+import 'package:nitro/nitro.dart' show NitroBuffer, NitroConfig, NitroRuntime;
 
 import '../nitro_http.native.dart';
 import 'instance_keys.dart';
 import 'native_attach.dart';
 import '../api/settings.dart';
 import 'request_runner.dart';
+
+// ── Zero-copy response bodies ────────────────────────────────────────────────
+
+/// `nitro_http_free_body`, attached as the finalizer of every adopted body.
+///
+/// The reference this takes on the library is deliberately never released:
+/// on Android, Linux and Windows `NitroRuntime.releaseLib` unmaps the library
+/// at refcount zero, and a body still alive after that would run a finalizer
+/// that no longer exists.
+final Pointer<NativeFinalizerFunction> _freeBody = NitroRuntime.loadLib(
+  'nitro_http',
+).lookup<NativeFinalizerFunction>('nitro_http_free_body');
+
+/// Takes ownership of a body the engine detached from the record (see
+/// `RawResponse.bodyOwner`), wrapping the native bytes without copying them.
+///
+/// Called straight off the decoded record so ownership is never left
+/// unclaimed: the only other owner is the native side, which let go when it
+/// posted the record.
+RawResponse _adoptBody(RawResponse r) {
+  if (r.bodyOwner == 0) return r;
+  final bytes = Pointer<Uint8>.fromAddress(r.bodyAddress).asTypedList(
+    r.bodyLength,
+    finalizer: _freeBody,
+    token: Pointer<Void>.fromAddress(r.bodyOwner),
+  );
+  return RawResponse(
+    requestId: r.requestId,
+    errorKind: r.errorKind,
+    errorMessage: r.errorMessage,
+    engineErrorCode: r.engineErrorCode,
+    statusCode: r.statusCode,
+    reasonPhrase: r.reasonPhrase,
+    version: r.version,
+    finalUrl: r.finalUrl,
+    redirectCount: r.redirectCount,
+    headers: r.headers,
+    body: bytes,
+    fromCache: r.fromCache,
+    revalidated: r.revalidated,
+    primaryIp: r.primaryIp,
+    primaryPort: r.primaryPort,
+    timings: r.timings,
+  );
+}
+
+// ── Completion spin ──────────────────────────────────────────────────────────
+
+/// Runs [call] with nitro's completion spin off, then restores the setting.
+///
+/// After a native-async call nitro busy-waits up to `nativeAsyncSpinUs` (40 µs
+/// on iOS, 100 µs on Android) in case the result is already there, to save an
+/// isolate wake. No HTTP response completes that fast, so for these calls the
+/// spin only ever adds work: on an iPhone 12 turning it off made every test of
+/// the device benchmark faster, by up to 7 %. nitro reads the setting
+/// synchronously when the call is made, so restoring it right after leaves
+/// every other nitro plugin in the app on its own setting.
+T _withoutSpin<T>(T Function() call) {
+  final cfg = NitroConfig.instance;
+  final saved = cfg.nativeAsyncSpinUs;
+  cfg.nativeAsyncSpinUs = 0;
+  try {
+    return call();
+  } finally {
+    cfg.nativeAsyncSpinUs = saved;
+  }
+}
 
 // ── Native implementations ───────────────────────────────────────────────────
 
@@ -34,11 +101,11 @@ final class NativeRequestExecutor implements RequestExecutor {
 
   @override
   Future<RawResponse> sendBuffered(RawRequest request, Uint8List body) =>
-      _native.sendBuffered(request, body);
+      _withoutSpin(() => _native.sendBuffered(request, body)).then(_adoptBody);
 
   @override
   Future<RawResponseHead> startStreamed(RawRequest request, Uint8List body) =>
-      _native.startStreamed(request, body);
+      _withoutSpin(() => _native.startStreamed(request, body));
 
   @override
   RawResponse cachedResponse(RawRequest request) =>

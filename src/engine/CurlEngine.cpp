@@ -65,6 +65,13 @@ constexpr size_t kMaxPooledEasyHandles = 64;
 /// stops making requests stops burning CPU within a millisecond. An engine with
 /// nothing to do sleeps exactly as before.
 constexpr auto kSpinWindow = std::chrono::microseconds(750);
+// Measured on an iPhone 12 (release, loopback): a request waits ~12 µs for the
+// spinning loop to pick it up. Two cheaper-looking waits were tried and were
+// slower, so the zero-timeout poll stays: an atomic busy-wait between requests
+// (21 µs; it starves the Dart isolate on a two-P-core phone) and a
+// `sched_yield` loop (28 µs; iOS gives the core away for longer than a pass).
+// Skipping the inbox lock and the per-task sweeps on idle passes made no
+// measurable difference either.
 
 /// Ceiling on how long a Dart-thread cookie call waits for the loop thread. The
 /// operation itself is sub-millisecond; this only exists so a wedged loop thread
@@ -224,8 +231,18 @@ void CurlEngine::loop() {
     // Zero timeout while the spin window is open — see `kSpinWindow`. Outside it
     // this is the same blocking poll as before, so an idle engine still sleeps.
     const bool spinning = std::chrono::steady_clock::now() < spinUntil;
-    curl_multi_poll(multi_, nullptr, 0, spinning ? 0 : nextPollTimeoutMs(),
-                    &numfds);
+    int timeoutMs = 0;
+    if (!spinning) {
+      // About to block: announce it BEFORE `nextPollTimeoutMs` takes its last
+      // look at the inbox (it returns 0 when work is queued). A push that lands
+      // after that look sees the flag and wakes us; one that landed before is
+      // in the inbox, and we don't block. Both sides go through `inboxMtx_`,
+      // which orders the flag store against the push.
+      loopMayBlock_.store(true, std::memory_order_seq_cst);
+      timeoutMs = nextPollTimeoutMs();
+    }
+    curl_multi_poll(multi_, nullptr, 0, timeoutMs, &numfds);
+    loopMayBlock_.store(false, std::memory_order_relaxed);
     (void)numfds;
 
     const bool hadOps = drainInbox();
@@ -655,8 +672,13 @@ void CurlEngine::startTask(RequestTask* task) {
     // `configure` replaces both of these from the Dart thread.
     std::lock_guard<std::mutex> lock(configMtx_);
     // Pool limits live on the multi handle, which only this thread may touch,
-    // so a reconfigure takes effect here rather than on the Dart thread.
-    config_.applyToMulti(multi_);
+    // so a reconfigure takes effect here rather than on the Dart thread — and
+    // only after one, not on every request.
+    const uint64_t gen = configGen_.load(std::memory_order_acquire);
+    if (gen != appliedConfigGen_) {
+      config_.applyToMulti(multi_);
+      appliedConfigGen_ = gen;
+    }
     return task->prepare(
         config_, config_.cookiesEnabled() ? cookies_.get() : nullptr, cache_);
   }();
@@ -828,7 +850,10 @@ void CurlEngine::push(Op op) {
     }
   }
   if (accepted) {
-    if (multi_ != nullptr) curl_multi_wakeup(multi_);
+    // Only a loop that may be blocked needs the wakeup; see `loopMayBlock_`.
+    if (multi_ != nullptr && loopMayBlock_.load(std::memory_order_seq_cst)) {
+      curl_multi_wakeup(multi_);
+    }
     return;
   }
 
@@ -871,6 +896,7 @@ void CurlEngine::configure(const RawClientConfig& cfg) {
   const bool hadCookies = config_.cookiesEnabled();
   const std::string previousJar = config_.cookieJarPath();
   config_.set(cfg);
+  configGen_.fetch_add(1, std::memory_order_release);
 
   if (config_.cookiesEnabled() != hadCookies ||
       config_.cookieJarPath() != previousJar) {

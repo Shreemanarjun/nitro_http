@@ -241,6 +241,9 @@ class RequestTask {
   /// while Dart is busy, so a burst still costs one isolate wake without any
   /// batching here. Takes ownership of `blob`.
   void deliverBuffered(Blob blob);
+  /// Encodes and posts a buffered response, moving a large body to Dart
+  /// zero-copy. May move `response.body` out.
+  void deliverResponse(RawResponse& response);
 
   void emitTerminalChunk(const EngineError& err);
   void emitProgress(RawEventKind kind, int64_t now, int64_t total);

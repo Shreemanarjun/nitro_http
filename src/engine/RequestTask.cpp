@@ -662,7 +662,8 @@ EngineError RequestTask::prepare(const ClientConfig& config,
     curl_easy_setopt(easy_, CURLOPT_SHARE, share);
   }
 
-  err = CertStore::apply(easy_, config.raw().tls, options.pinnedSpkiOverride);
+  err = CertStore::apply(easy_, config.raw().tls, options.pinnedSpkiOverride,
+                         config.stableRootsPem());
   if (!err.ok()) return err;
 
   if (cookies != nullptr) cookies->attach(easy_);
@@ -835,7 +836,7 @@ bool RequestTask::tryServeFromCache(const std::shared_ptr<HttpCache>& cache,
     response.revalidated = revalidating_;
     response.primaryPort = 0;
     response.timings = timings_;
-    deliverBuffered(wire::encodeResponse(response));
+    deliverResponse(response);
   }
 
   if (pending_.mode == RespMode::Prefetch) cacheKey_.clear();
@@ -1580,7 +1581,22 @@ void RequestTask::finish(int curlCode) {
   response.primaryIp = primaryIp_;
   response.primaryPort = primaryPort_;
   response.timings = timings_;
-  deliverBuffered(wire::encodeResponse(response));
+  deliverResponse(response);
+}
+
+void RequestTask::deliverResponse(RawResponse& response) {
+  wire::DetachedBody detached;
+  Blob blob =
+      wire::encodeResponse(response, postHookInstalled() ? nullptr : &detached);
+  // An empty blob means encoding failed: Dart receives a null and never sees
+  // the body's address, so the body has to stay ours to free.
+  const bool encoded = !blob.empty();
+  // Same single post as `deliverBuffered`, but its result decides who frees the
+  // body: Dart, once the record reached it, or `detached` here when it did not
+  // (a dead port after hot restart).
+  if (postRecord(pending_.dartPort, blob) && encoded && detached) {
+    (void)detached.release();  // Dart's finalizer frees it now.
+  }
 }
 
 void RequestTask::deliverBuffered(Blob blob) {

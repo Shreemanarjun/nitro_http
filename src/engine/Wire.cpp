@@ -60,6 +60,22 @@ RawWsConfig decodeWsConfig(NitroCppBuffer buf) {
 
 Blob encodeResponse(const RawResponse& v) { return adopt(v.toNativeBuffer()); }
 
+Blob encodeResponse(RawResponse& v, DetachedBody* detached) {
+  // Encoding a 1 MiB body into the record cost three full passes over it (the
+  // writer's growing vector, the malloc'd copy handed to Dart, and Dart's
+  // `readBlob` sublist) — over half the request time on an iPhone 12. Moving
+  // the vector out instead hands Dart the bytes libcurl already wrote.
+  if (detached != nullptr && v.body.size() >= kDetachBodyMinBytes) {
+    auto owned = std::make_unique<std::vector<uint8_t>>(std::move(v.body));
+    v.body.clear();
+    v.bodyAddress = static_cast<int64_t>(reinterpret_cast<intptr_t>(owned->data()));
+    v.bodyLength = static_cast<int64_t>(owned->size());
+    v.bodyOwner = static_cast<int64_t>(reinterpret_cast<intptr_t>(owned.get()));
+    *detached = std::move(owned);
+  }
+  return encodeResponse(static_cast<const RawResponse&>(v));
+}
+
 Blob encodeResponseHead(const RawResponseHead& v) {
   return adopt(v.toNativeBuffer());
 }
@@ -191,3 +207,18 @@ bool methodIsBodyless(const RawRequest& req) {
 }
 
 }  // namespace nitrohttp::wire
+
+// Finalizer for a detached response body (see `RawResponse.bodyOwner`). Dart
+// attaches it to the external `Uint8List` it wraps the body in, so it runs once
+// that list is garbage-collected. `used` keeps it through dead-stripping: on
+// iOS the plugin is linked statically and only Dart looks this symbol up.
+#ifndef NITRO_EXPORT
+#  if defined(_WIN32)
+#    define NITRO_EXPORT __declspec(dllexport)
+#  else
+#    define NITRO_EXPORT __attribute__((visibility("default"))) __attribute__((used))
+#  endif
+#endif
+extern "C" NITRO_EXPORT void nitro_http_free_body(void* owner) {
+  delete static_cast<std::vector<uint8_t>*>(owner);
+}

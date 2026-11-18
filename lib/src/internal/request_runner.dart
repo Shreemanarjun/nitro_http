@@ -243,29 +243,34 @@ class RequestRunner {
   /// Merges the body's implied headers into the caller's, without overriding
   /// anything the caller set explicitly.
   HttpHeaders _headersFor(HttpRequest request, EncodedBody body) {
-    final headers = request.headers.clone();
     final contentType = body.contentType;
-    if (contentType != null && headers.contentType == null) {
-      headers.set('content-type', contentType);
+    // Copy only when a header is actually added, so the caller's collection is
+    // never mutated; otherwise it is only read, and the copy bought nothing.
+    if (contentType == null || request.headers.contentType != null) {
+      return request.headers;
     }
-    return headers;
+    return request.headers.clone()..set('content-type', contentType);
   }
 
   // ── Buffered path ──────────────────────────────────────────────────────────
 
-  Future<HttpResponse> send(HttpRequest request) async {
-    _checkAlive();
-    return switch (request.expectedBody) {
-      HttpExpectedBody.stream => sendStreamed(request),
-      HttpExpectedBody.text => sendBuffered(request),
-      HttpExpectedBody.bytes => sendBuffered(request),
-    };
-  }
+  // Not `async`: both targets check liveness inside their own async bodies, so
+  // a disposed runner still fails the returned Future rather than throwing.
+  Future<HttpResponse> send(HttpRequest request) =>
+      switch (request.expectedBody) {
+        HttpExpectedBody.stream => sendStreamed(request),
+        HttpExpectedBody.text => sendBuffered(request),
+        HttpExpectedBody.bytes => sendBuffered(request),
+      };
 
   Future<HttpResponse> sendBuffered(HttpRequest request) async {
     _checkAlive();
     final requestId = Ids.nextRequest();
-    final body = await encodeBody(request.body);
+    // No body (every GET): skip the await, which would cost a microtask hop
+    // even on a completed Future.
+    final body = request.body == null
+        ? EncodedBody.none
+        : await encodeBody(request.body);
     final headers = _headersFor(request, body);
     final reportProgress =
         request.onSendProgress != null || request.onReceiveProgress != null;
@@ -305,7 +310,9 @@ class RequestRunner {
         sentBytes: body.contentLength,
       );
     } finally {
-      await eventSub?.cancel();
+      // Awaiting a null still costs a microtask hop; only progress requests
+      // have a subscription to cancel.
+      if (eventSub != null) await eventSub.cancel();
       _demux.release(requestId);
     }
   }

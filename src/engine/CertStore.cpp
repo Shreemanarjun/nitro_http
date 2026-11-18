@@ -11,6 +11,7 @@
 #include <cctype>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "Wire.h"
@@ -322,8 +323,11 @@ const std::string& CertStore::bundledRootsPem() {
 bool CertStore::usesPlatformVerifyCallback() {
 #if defined(__APPLE__)
   // Overriding CAINFO against Secure Transport would *narrow* trust, so
-  // nothing is installed there; see backendResolvesAppleTrust().
-  return certdetail::backendResolvesAppleTrust();
+  // nothing is installed there; see backendResolvesAppleTrust(). The linked
+  // backend cannot change while the process runs, and this is asked on every
+  // HTTPS request, so the string inspection runs once.
+  static const bool kResolves = certdetail::backendResolvesAppleTrust();
+  return kResolves;
 #else
   return false;
 #endif
@@ -358,8 +362,18 @@ long CertStore::curlTlsVersion(int64_t v, bool isMax) {
 
 // ── Apply ────────────────────────────────────────────────────────────────────
 
+const std::string* CertStore::internPem(const std::string& pem) {
+  static std::mutex mutex;
+  // Deliberately never freed: a handle may borrow an entry until the process
+  // ends, including during static destruction at exit.
+  static auto* pool = new std::unordered_set<std::string>();
+  std::lock_guard<std::mutex> lock(mutex);
+  return &*pool->insert(pem).first;
+}
+
 EngineError CertStore::apply(CURL* easy, const RawTlsConfig& tls,
-                             const std::string& pinOverride) {
+                             const std::string& pinOverride,
+                             const std::string* stableRootsPem) {
   // Function-local so the directive cannot leak into the next source file
   // of the unity translation unit.
   using namespace certdetail;  // NOLINT(build/namespaces)
@@ -481,9 +495,13 @@ EngineError CertStore::apply(CURL* easy, const RawTlsConfig& tls,
             RawErrorKind::RAWERRORKIND_BAD_REQUEST,
             "trustedRootsPem contains no PEM certificate block");
       }
-      // COPY: the config this string lives in can be replaced while the handle
-      // is still in flight.
-      if (!setCaBundleBlob(easy, tls.trustedRootsPem, false)) {
+      // Borrowed when the caller has an interned copy, which outlives every
+      // handle. Otherwise COPY: the config this string lives in can be replaced
+      // while the handle is still in flight. Copying cost ~15 µs per request
+      // for a 199 KB bundle on an iPhone 12.
+      const bool borrowed = stableRootsPem != nullptr;
+      if (!setCaBundleBlob(easy, borrowed ? *stableRootsPem : tls.trustedRootsPem,
+                           borrowed)) {
         return EngineError::make(
             RawErrorKind::RAWERRORKIND_BAD_REQUEST,
             "this libcurl predates CURLOPT_CAINFO_BLOB, so a custom PEM trust "

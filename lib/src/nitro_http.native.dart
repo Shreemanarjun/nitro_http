@@ -499,6 +499,16 @@ class RawResponse {
   final int primaryPort;
   final RawTimings timings;
 
+  /// Zero-copy body hand-off. When [bodyOwner] is non-zero the engine did not
+  /// encode the body into this record: it lives in native memory at
+  /// [bodyAddress] ([bodyLength] bytes), [body] is empty, and ownership passed
+  /// to Dart with the record. The native executor adopts it as an external
+  /// `Uint8List` whose finalizer calls `nitro_http_free_body(bodyOwner)`.
+  /// Large buffered bodies only — see `kDetachBodyMinBytes` in Wire.h.
+  final int bodyAddress;
+  final int bodyLength;
+  final int bodyOwner;
+
   const RawResponse({
     required this.requestId,
     this.errorKind = RawErrorKind.none,
@@ -516,6 +526,9 @@ class RawResponse {
     this.primaryIp = '',
     this.primaryPort = 0,
     this.timings = const RawTimings(),
+    this.bodyAddress = 0,
+    this.bodyLength = 0,
+    this.bodyOwner = 0,
   });
 }
 

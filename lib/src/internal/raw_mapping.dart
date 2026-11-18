@@ -398,13 +398,11 @@ HttpVersion fromRawVersion(RawHttpVersion v) => switch (v) {
   RawHttpVersion.http3 => HttpVersion.http3,
 };
 
-HttpHeaders fromRawHeaders(List<RawHeader> headers) {
-  final h = HttpHeaders();
-  for (final raw in headers) {
-    h.add(raw.name, raw.value);
-  }
-  return h;
-}
+HttpHeaders fromRawHeaders(List<RawHeader> headers) => headersFromParsedFields(
+  headers.length,
+  (i) => headers[i].name,
+  (i) => headers[i].value,
+);
 
 Duration _dur(double ms) =>
     Duration(microseconds: (ms * 1000).isFinite ? (ms * 1000).round() : 0);
@@ -423,7 +421,10 @@ HttpTimings fromRawTimings(RawTimings t) => HttpTimings(
 /// reported something unparseable, because a response object with a broken
 /// `finalUrl` is worse than a slightly stale one.
 Uri _finalUri(String finalUrl, Uri fallback) {
-  if (finalUrl.isEmpty) return fallback;
+  // No redirect is the common case, and then libcurl reports the URL it was
+  // given: reuse the already-parsed request URL instead of parsing it again.
+  // `Uri.toString` is cached, so the comparison costs no formatting.
+  if (finalUrl.isEmpty || finalUrl == fallback.toString()) return fallback;
   return Uri.tryParse(finalUrl) ?? fallback;
 }
 

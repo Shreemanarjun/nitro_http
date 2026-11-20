@@ -288,7 +288,7 @@ Future<EncodedBody> encodeBody(HttpBody? body) async {
       return EncodedBody.none;
 
     case HttpTextBody(:final text, :final contentType):
-      final bytes = Uint8List.fromList(utf8.encode(text));
+      final bytes = utf8.encode(text);
       return EncodedBody(
         kind: RawBodyKind.bytes,
         bytes: bytes,
@@ -297,7 +297,10 @@ Future<EncodedBody> encodeBody(HttpBody? body) async {
       );
 
     case HttpJsonBody(:final json):
-      final bytes = Uint8List.fromList(utf8.encode(jsonEncode(json)));
+      final encoded = _jsonToUtf8.convert(json);
+      final bytes = encoded is Uint8List
+          ? encoded
+          : Uint8List.fromList(encoded);
       return EncodedBody(
         kind: RawBodyKind.bytes,
         bytes: bytes,
@@ -314,7 +317,7 @@ Future<EncodedBody> encodeBody(HttpBody? body) async {
       );
 
     case HttpFormBody(:final fields):
-      final bytes = Uint8List.fromList(utf8.encode(encodeFormFields(fields)));
+      final bytes = utf8.encode(encodeFormFields(fields));
       return EncodedBody(
         kind: RawBodyKind.bytes,
         bytes: bytes,
@@ -419,11 +422,13 @@ HttpTimings fromRawTimings(RawTimings t) => HttpTimings(
 
 /// Parsed URL of the final hop. Falls back to the request URL when the engine
 /// reported something unparseable, because a response object with a broken
+/// Straight to UTF-8, without the intermediate `String` of `jsonEncode`.
+final JsonUtf8Encoder _jsonToUtf8 = JsonUtf8Encoder();
+
 /// `finalUrl` is worse than a slightly stale one.
 Uri _finalUri(String finalUrl, Uri fallback) {
-  // No redirect is the common case, and then libcurl reports the URL it was
-  // given: reuse the already-parsed request URL instead of parsing it again.
-  // `Uri.toString` is cached, so the comparison costs no formatting.
+  // The engine sends no URL when it is the request's; the web executor and a
+  // cached response send the request's own. Either way reuse the parsed one.
   if (finalUrl.isEmpty || finalUrl == fallback.toString()) return fallback;
   return Uri.tryParse(finalUrl) ?? fallback;
 }

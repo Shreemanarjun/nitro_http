@@ -282,11 +282,8 @@ void main() {
     }, skip: skipReason);
 
     test('large bodies reach Dart zero-copy and byte-exact', () async {
-      // Bodies of kDetachBodyMinBytes (16 KiB) and up skip the record and are
-      // adopted as external Uint8Lists; below it they stay inline. Both sides
-      // of the threshold must deliver identical bytes, and a released body
-      // must not be read after its finalizer frees it.
-      for (final n in const [16 * 1024 - 1, 16 * 1024, 1024 * 1024]) {
+      // Either side of kDetachBodyMinBytes: inline below it, adopted from it.
+      for (final n in const [8 * 1024 - 1, 8 * 1024, 1024 * 1024]) {
         for (var i = 0; i < 3; i++) {
           final response = await client.get('/bytes/$n');
           expect(response.statusCode, 200);
@@ -796,6 +793,26 @@ void main() {
       }
     }, skip: skipReason);
 
+    test('an in-memory body arrives intact', () async {
+      // Either side of the size from which the engine keeps the block Dart
+      // filled, and well past it.
+      for (final length in const [16 * 1024 - 1, 16 * 1024, 300000]) {
+        final text = String.fromCharCodes(
+          List<int>.generate(length, (i) => 0x61 + (i * 7) % 26),
+        );
+        final buffered = await client.post('/echo', body: HttpBody.text(text));
+        expect((buffered.bodyToJson()! as Map)['body'], text);
+
+        final streamed = await client.requestStream(
+          HttpMethod.post,
+          '/echo',
+          body: HttpBody.text(text),
+        );
+        final echoed = await utf8.decoder.bind(streamed.body).join();
+        expect((jsonDecode(echoed) as Map)['body'], text);
+      }
+    }, skip: skipReason);
+
     test('uploads a file without buffering it in Dart', () async {
       final temp = File(
         '${Directory.systemTemp.path}/nitro_http_upload_${DateTime.now().microsecondsSinceEpoch}.bin',
@@ -1171,7 +1188,7 @@ void main() {
       // it still refuses a bad certificate — a fix that trusted everything
       // would pass the three tests above and be far worse than the bug.
       client = NitroHttpClient(
-        settings: const ClientSettings(timeout: Duration(seconds: 30)),
+        settings: const ClientSettings(timeout: Duration(seconds: 10)),
       );
       try {
         final res = await client!.get('https://self-signed.badssl.com/');
@@ -1184,7 +1201,7 @@ void main() {
     test('verification can be disabled deliberately', () => skipIfSiteDown(() async {
       client = NitroHttpClient(
         settings: const ClientSettings(
-          timeout: Duration(seconds: 30),
+          timeout: Duration(seconds: 10),
           tlsSettings: TlsSettings.insecure(),
         ),
       );

@@ -2,9 +2,9 @@
 ///
 /// Mirrors `request_runner.dart`: a per-socket executor seam plus one
 /// process-wide demultiplexer over the module-global `wsFrames` stream. Frame
-/// payloads are copied on arrival and acked through `wsGrantCredit`, for exactly
-/// the reason the chunk stream needs it — the generated release symbol frees
-/// only the struct shell.
+/// payloads are taken out of native memory on arrival and acked through
+/// `wsGrantCredit`, for exactly the reason the chunk stream needs it — the
+/// generated release symbol frees only the struct shell.
 library;
 
 import 'dart:async';
@@ -119,6 +119,12 @@ final class NativeWsExecutor implements WsExecutor {
   }
 }
 
+/// Takes a frame's payload out of native memory, or returns null when it is
+/// already gone. A copy here; the native build installs one that takes large
+/// payloads over whole, which needs `dart:ffi` and so cannot live in this file.
+Uint8List? Function(RawWsFrame raw) takeWsPayload =
+    (raw) => Uint8List.fromList(raw.payload);
+
 /// Exactly one instance, exactly one subscription to `wsFrames`.
 final class NativeWsFrameDemux implements WsFrameDemux {
   NativeWsFrameDemux._() {
@@ -134,13 +140,15 @@ final class NativeWsFrameDemux implements WsFrameDemux {
   final _controllers = <int, StreamController<WsFrameEvent>>{};
 
   void _onFrame(RawWsFrame raw) {
-    // COPY FIRST — the payload is native-owned until we ack it.
+    // The payload is native-owned until we ack it, so it is taken first.
+    final payload = takeWsPayload(raw);
+    if (payload == null) return;
     final event = WsFrameEvent(
       socketId: raw.socketId,
       // The one place a wire int becomes a typed opcode.
       opcode: WsOpcode.fromWire(raw.opcode),
       fin: (raw.flags & 1) != 0,
-      payload: Uint8List.fromList(raw.payload),
+      payload: payload,
     );
     final c = _controllers[event.socketId];
     if (c != null && !c.isClosed) c.add(event);

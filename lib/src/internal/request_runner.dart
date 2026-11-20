@@ -103,10 +103,8 @@ abstract interface class UploadWriter {
   void release();
 }
 
-/// A body chunk that has already been copied out of native memory.
-///
-/// The copy is not an optimisation failure — it is the mechanism that makes the
-/// zero-copy struct safe. See the library doc.
+/// A body chunk whose bytes no longer belong to the engine: copied out of
+/// native memory, or taken over whole when the chunk is large.
 final class ChunkEvent {
   ChunkEvent({
     required this.requestId,
@@ -244,8 +242,8 @@ class RequestRunner {
   /// anything the caller set explicitly.
   HttpHeaders _headersFor(HttpRequest request, EncodedBody body) {
     final contentType = body.contentType;
-    // Copy only when a header is actually added, so the caller's collection is
-    // never mutated; otherwise it is only read, and the copy bought nothing.
+    // Copied only when a header is added: the caller's collection is never
+    // mutated.
     if (contentType == null || request.headers.contentType != null) {
       return request.headers;
     }
@@ -266,8 +264,7 @@ class RequestRunner {
   Future<HttpResponse> sendBuffered(HttpRequest request) async {
     _checkAlive();
     final requestId = Ids.nextRequest();
-    // No body (every GET): skip the await, which would cost a microtask hop
-    // even on a completed Future.
+    // No body: skip the await and its microtask hop.
     final body = request.body == null
         ? EncodedBody.none
         : await encodeBody(request.body);
@@ -310,8 +307,7 @@ class RequestRunner {
         sentBytes: body.contentLength,
       );
     } finally {
-      // Awaiting a null still costs a microtask hop; only progress requests
-      // have a subscription to cancel.
+      // Only progress requests have a subscription to cancel.
       if (eventSub != null) await eventSub.cancel();
       _demux.release(requestId);
     }

@@ -453,6 +453,7 @@ EngineError RequestTask::prepare(const ClientConfig& config,
   // needs them much later, and reading the engine's config then would race a
   // `configure` on the Dart thread.
   streamChunkBytes_ = config.raw().streamChunkBytes;
+  hstsEnabled_ = !config.raw().hstsCachePath.empty();
   streamChunkMinContentLength_ = config.raw().streamChunkMinContentLength;
   streamChunkMaxHoldMs_ = config.raw().streamChunkMaxHoldMs;
   if (!req.responseFilePath.empty()) {
@@ -1045,7 +1046,6 @@ void RequestTask::emitHeadIfNeeded() {
   coalesceMaxHoldMs_ = streamChunkMaxHoldMs_ >= 0
                            ? static_cast<double>(streamChunkMaxHoldMs_)
                            : kDefaultCoalesceMaxHoldMs;
-  if (coalesceTarget_ > 0) coalesceBuf_.reserve(coalesceTarget_);
 
   RawResponseHead head{};
   head.requestId = id();
@@ -1054,7 +1054,7 @@ void RequestTask::emitHeadIfNeeded() {
   head.statusCode = statusCode_;
   head.reasonPhrase = reasonPhrase_;
   head.version = version_;
-  head.finalUrl = finalUrl_.empty() ? pending_.req.url : finalUrl_;
+  head.finalUrl = finalUrl_;
   head.redirectCount = redirectCount_;
   head.headers = headers_;
   head.fromCache = false;
@@ -1150,7 +1150,9 @@ size_t RequestTask::handleWrite(const char* data, size_t len) {
         if (coalesceTarget_ > 0) {
           // Batched into one larger chunk; see `coalesceTarget_`.
           if (coalesceBuf_.empty()) coalesceStartedMs_ = lastActivityMs_;
-          coalesceBuf_.insert(coalesceBuf_.end(), bytes, bytes + count);
+          if (!coalesceBuf_.append(bytes, count, coalesceTarget_)) {
+            return 0;  // out of memory; curl fails the transfer
+          }
           // Age as well as size, so a body that arrives slowly is not held back
           // waiting for a threshold this link will not reach soon.
           if (coalesceBuf_.size() >= coalesceTarget_ ||
@@ -1186,8 +1188,44 @@ size_t RequestTask::handleWrite(const char* data, size_t len) {
   return len;
 }
 
+bool CoalesceBuffer::append(const uint8_t* bytes, size_t n, size_t target) {
+  if (size_ + n > capacity_) {
+    // Room for the write that crosses `target`, so the block is not grown,
+    // and so copied, just before it is handed over.
+    const size_t wanted = std::max(target + CURL_MAX_WRITE_SIZE, size_ + n);
+    auto* grown = static_cast<uint8_t*>(::realloc(data_, wanted));
+    if (grown == nullptr) return false;
+    data_ = grown;
+    capacity_ = wanted;
+  }
+  std::memcpy(data_ + size_, bytes, n);
+  size_ += n;
+  return true;
+}
+
+Blob CoalesceBuffer::take() {
+  if (size_ * 2 < capacity_) {
+    // A slow body flushes on age with the block mostly empty; Dart would hold
+    // all of it.
+    if (auto* trimmed = static_cast<uint8_t*>(::realloc(data_, size_))) {
+      data_ = trimmed;
+    }
+  }
+  Blob block{data_, size_};
+  data_ = nullptr;
+  size_ = 0;
+  capacity_ = 0;
+  return block;
+}
+
 void RequestTask::emitChunk(const uint8_t* data, size_t len) {
-  Blob payload = copyPayload(data, len);
+  emitPayload(copyPayload(data, len));
+}
+
+void RequestTask::emitPayload(Blob payload) {
+  const size_t len = payload.size;
+  // Past this size Dart taking the block over is cheaper than copying it.
+  if (len >= wire::kDetachBodyMinBytes) offerPayload(&payload);
 
   RawChunk chunk{};
   chunk.bytes = payload.data;
@@ -1195,9 +1233,11 @@ void RequestTask::emitChunk(const uint8_t* data, size_t len) {
   chunk.requestId = id();
   chunk.kind = RAWCHUNKKIND_DATA;
   chunk.aux = 0;
+  chunk.owner = static_cast<int64_t>(payload.offer);
 
-  // The arena owns `payload` until Dart acknowledges having copied it; the
-  // generated release symbol frees only the per-emit struct shell.
+  // The arena owns `payload` until Dart takes it over or acknowledges having
+  // copied it; the generated release symbol frees only the per-emit struct
+  // shell.
   arena_.track(emittedSeq_, payload);
   ++emittedSeq_;
 
@@ -1218,10 +1258,8 @@ void RequestTask::flushAgedCoalesce(double now) {
 
 void RequestTask::flushCoalesced() {
   if (coalesceBuf_.empty()) return;
-  emitChunk(coalesceBuf_.data(), coalesceBuf_.size());
+  emitPayload(coalesceBuf_.take());
   --credits_;
-  // `clear` keeps the capacity, so a 32 MiB body allocates this buffer once.
-  coalesceBuf_.clear();
 }
 
 void RequestTask::emitTerminalChunk(const EngineError& err) {
@@ -1370,8 +1408,18 @@ void RequestTask::collectTransferInfo() {
 
   // Every `CURLINFO_*` string is owned by the handle and dies with it, so each
   // one is copied into a member here rather than read after cleanup.
+  long value = 0;
+  if (curl_easy_getinfo(easy_, CURLINFO_REDIRECT_COUNT, &value) == CURLE_OK) {
+    redirectCount_ = value;
+  }
+  // A request that followed no redirect ends where it started, and an empty
+  // final URL tells Dart exactly that. The one exception is still asked: HSTS
+  // upgrades a plain http request without a redirect.
   char* text = nullptr;
-  if (curl_easy_getinfo(easy_, CURLINFO_EFFECTIVE_URL, &text) == CURLE_OK &&
+  if ((redirectCount_ > 0 ||
+       (hstsEnabled_ &&
+        !curl_strnequal(pending_.req.url.c_str(), "https:", 6))) &&
+      curl_easy_getinfo(easy_, CURLINFO_EFFECTIVE_URL, &text) == CURLE_OK &&
       text != nullptr) {
     finalUrl_.assign(text);
   }
@@ -1381,13 +1429,9 @@ void RequestTask::collectTransferInfo() {
     primaryIp_.assign(text);
   }
 
-  long value = 0;
+  value = 0;
   if (curl_easy_getinfo(easy_, CURLINFO_PRIMARY_PORT, &value) == CURLE_OK) {
     primaryPort_ = value;
-  }
-  value = 0;
-  if (curl_easy_getinfo(easy_, CURLINFO_REDIRECT_COUNT, &value) == CURLE_OK) {
-    redirectCount_ = value;
   }
   value = 0;
   if (curl_easy_getinfo(easy_, CURLINFO_RESPONSE_CODE, &value) == CURLE_OK &&
@@ -1559,7 +1603,7 @@ void RequestTask::finish(int curlCode) {
   response.statusCode = statusCode_;
   response.reasonPhrase = std::move(reasonPhrase_);
   response.version = version_;
-  response.finalUrl = finalUrl_.empty() ? pending_.req.url : std::move(finalUrl_);
+  response.finalUrl = std::move(finalUrl_);
   response.redirectCount = redirectCount_;
   // Moved, not copied: `completed_` is already set above, so nothing reads these
   // again — the task is retired as soon as this returns. A copy here duplicates

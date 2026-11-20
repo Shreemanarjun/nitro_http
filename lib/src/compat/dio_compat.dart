@@ -2,7 +2,6 @@
 library;
 
 import 'dart:async';
-import 'dart:io' show HttpDate;
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -246,10 +245,22 @@ class NitroHttpDioAdapter implements HttpClientAdapter {
 
   static String _headerValue(Object value) => switch (value) {
     String() => value,
-    DateTime() => HttpDate.format(value),
+    DateTime() => _httpDate(value),
     // Required: dio types header values as `Object`, an open universe.
     _ => value.toString(),
   };
+
+  /// `HttpDate.format` without `dart:io`, so this library compiles for the
+  /// web: an IMF-fixdate such as `Sun, 06 Nov 1994 08:49:37 GMT`.
+  static String _httpDate(DateTime value) {
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final d = value.toUtc();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${days[d.weekday - 1]}, ${two(d.day)} ${months[d.month - 1]} '
+        '${d.year} ${two(d.hour)}:${two(d.minute)}:${two(d.second)} GMT';
+  }
 
   /// The `Content-Length` dio declared, or `null` when it did not.
   ///

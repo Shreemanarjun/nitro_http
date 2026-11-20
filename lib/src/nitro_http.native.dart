@@ -486,6 +486,8 @@ class RawResponse {
   final String reasonPhrase;
 
   final RawHttpVersion version;
+
+  /// The URL of the last hop. Empty when it is the request URL itself.
   final String finalUrl;
   final int redirectCount;
   final List<RawHeader> headers;
@@ -499,12 +501,10 @@ class RawResponse {
   final int primaryPort;
   final RawTimings timings;
 
-  /// Zero-copy body hand-off. When [bodyOwner] is non-zero the engine did not
-  /// encode the body into this record: it lives in native memory at
-  /// [bodyAddress] ([bodyLength] bytes), [body] is empty, and ownership passed
-  /// to Dart with the record. The native executor adopts it as an external
-  /// `Uint8List` whose finalizer calls `nitro_http_free_body(bodyOwner)`.
-  /// Large buffered bodies only — see `kDetachBodyMinBytes` in Wire.h.
+  /// Zero-copy body hand-off. When [bodyOwner] is non-zero the body is not in
+  /// this record: it is [bodyLength] bytes of native memory at [bodyAddress],
+  /// [body] is empty, and Dart owns it. Freed through
+  /// [NitroHttpNative.bodyFinalizerAddress].
   final int bodyAddress;
   final int bodyLength;
   final int bodyOwner;
@@ -542,6 +542,8 @@ class RawResponseHead {
   final int statusCode;
   final String reasonPhrase;
   final RawHttpVersion version;
+
+  /// The URL of the last hop. Empty when it is the request URL itself.
   final String finalUrl;
   final int redirectCount;
   final List<RawHeader> headers;
@@ -729,11 +731,16 @@ class RawChunk {
   /// error: [RawErrorKind] index · done: 0.
   final int aux;
 
+  /// Non-zero when Dart may take [bytes] over instead of copying them: pass it
+  /// to [NitroHttpNative.adoptChunk]. Large data chunks only.
+  final int owner;
+
   const RawChunk({
     required this.bytes,
     required this.requestId,
     required this.kind,
     required this.aux,
+    this.owner = 0,
   });
 }
 
@@ -749,11 +756,15 @@ class RawWsFrame {
   /// bit0 = fin.
   final int flags;
 
+  /// As [RawChunk.owner]: non-zero when Dart may take [payload] over.
+  final int owner;
+
   const RawWsFrame({
     required this.payload,
     required this.socketId,
     required this.opcode,
     required this.flags,
+    this.owner = 0,
   });
 }
 
@@ -810,6 +821,33 @@ abstract class NitroHttpNative extends HybridObject {
   bool supportsBrotli();
   @nitroFast
   bool supportsZstd();
+
+  /// Address of the native function that frees a detached response body,
+  /// given [RawResponse.bodyOwner].
+  @nitroFast
+  int bodyFinalizerAddress();
+
+  /// Takes a streamed chunk's payload over from the engine. Returns its
+  /// address, freed through [chunkFinalizerAddress], or 0 when the engine has
+  /// already released it.
+  @nitroFast
+  int adoptChunk(int owner);
+
+  /// Address of the native function that frees a payload taken with
+  /// [adoptChunk], given its address.
+  @nitroFast
+  int chunkFinalizerAddress();
+
+  /// Allocates [length] bytes for a request body Dart fills in place. Passed
+  /// as the `body` of [sendBuffered] or [startStreamed], the engine keeps the
+  /// block instead of copying it. Returns 0 on failure.
+  @nitroFast
+  int allocRequestBody(int length);
+
+  /// Frees a block from [allocRequestBody] that no request took. A no-op once
+  /// one did.
+  @nitroFast
+  void freeRequestBody(int address);
 
   /// Hot-restart recovery: abort every transfer, join every thread, flush jars.
   /// The Dart layer calls this once at startup, before creating any client.

@@ -8,7 +8,7 @@
 #
 # Records the generated bridge each module was built against; `nitrogen doctor`
 # warns when a bridge has been regenerated since this script was written.
-# NITRO_BRIDGE_CHECKSUM nitro_http a4f3ba2b21f23792
+# NITRO_BRIDGE_CHECKSUM nitro_http a41200662388c190
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

@@ -244,13 +244,11 @@ class CurlEngine {
 
   /// True only while the loop thread is about to block, or is blocked, in
   /// `curl_multi_poll` with a non-zero timeout. `push` wakes it only then: a
-  /// loop that is spinning (zero timeout, see `kSpinWindow`) drains the inbox
-  /// on its next pass anyway, so the wakeup's socket write was pure overhead
-  /// on the Dart thread for every back-to-back request.
+  /// spinning loop (see `kSpinWindow`) drains the inbox on its next pass.
   std::atomic<bool> loopMayBlock_{false};
 
   /// Bumped by `configure`; the loop re-applies the multi-handle options only
-  /// when it changes, instead of four `curl_multi_setopt` calls per request.
+  /// when it changes.
   std::atomic<uint64_t> configGen_{1};
   uint64_t appliedConfigGen_ = 0;  // loop thread only
 

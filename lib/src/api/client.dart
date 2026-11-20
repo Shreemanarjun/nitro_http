@@ -369,9 +369,7 @@ class NitroHttpClient {
 
   /// Runs [request] through the interceptor chain and the retry policy.
   Future<HttpResponse> request(HttpRequest request) {
-    // No interceptors and no retry policy: nothing can rewrite, answer or
-    // repeat the call, so skip the chain's two awaits and go straight to the
-    // runner. Errors still arrive through the returned Future.
+    // Nothing can rewrite, answer or repeat the call, so skip the chain.
     if (_interceptors.isEmpty && _retryPolicy == null) {
       try {
         _checkAlive();

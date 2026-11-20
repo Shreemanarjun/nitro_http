@@ -2,9 +2,11 @@
 library;
 
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+
+import '../internal/file_read_stub.dart'
+    if (dart.library.io) '../internal/file_read_io.dart';
 
 /// A request payload.
 ///
@@ -349,7 +351,7 @@ Stream<List<int>> composeMultipart(
       case MultipartBytesItem(:final bytes):
         yield bytes;
       case MultipartFileItem(:final path):
-        yield* File(path).openRead();
+        yield* openFileRead(path);
     }
     yield crlf;
   }
@@ -375,13 +377,9 @@ Future<int?> multipartContentLength(
       case MultipartBytesItem(:final bytes):
         total += bytes.length;
       case MultipartFileItem(:final path):
-        final file = File(path);
-        try {
-          if (!await file.exists()) return null;
-          total += await file.length();
-        } on FileSystemException {
-          return null;
-        }
+        final length = await fileLengthOrNull(path);
+        if (length == null) return null;
+        total += length;
     }
     total += 2; // The CRLF that terminates the part body.
   }

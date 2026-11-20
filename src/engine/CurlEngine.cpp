@@ -65,13 +65,8 @@ constexpr size_t kMaxPooledEasyHandles = 64;
 /// stops making requests stops burning CPU within a millisecond. An engine with
 /// nothing to do sleeps exactly as before.
 constexpr auto kSpinWindow = std::chrono::microseconds(750);
-// Measured on an iPhone 12 (release, loopback): a request waits ~12 µs for the
-// spinning loop to pick it up. Two cheaper-looking waits were tried and were
-// slower, so the zero-timeout poll stays: an atomic busy-wait between requests
-// (21 µs; it starves the Dart isolate on a two-P-core phone) and a
-// `sched_yield` loop (28 µs; iOS gives the core away for longer than a pass).
-// Skipping the inbox lock and the per-task sweeps on idle passes made no
-// measurable difference either.
+// The zero-timeout poll stays: an atomic busy-wait and a `sched_yield` loop
+// between requests were both slower end to end.
 
 /// Ceiling on how long a Dart-thread cookie call waits for the loop thread. The
 /// operation itself is sub-millisecond; this only exists so a wedged loop thread

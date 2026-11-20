@@ -43,9 +43,8 @@ RawWsConfig decodeWsConfig(NitroCppBuffer buf);
 Blob encodeResponse(const RawResponse& v);
 
 /// Bodies at least this large skip the record and reach Dart zero-copy. Below
-/// it the copy is cheaper than the finalizer bookkeeping an external Dart
-/// buffer costs, so small bodies stay inline exactly as before.
-constexpr size_t kDetachBodyMinBytes = 16 * 1024;
+/// it the copy is cheaper than the bookkeeping an external Dart buffer costs.
+constexpr size_t kDetachBodyMinBytes = 8 * 1024;
 
 /// A response body moved out of its record; see `RawResponse.bodyOwner`.
 using DetachedBody = std::unique_ptr<std::vector<uint8_t>>;
@@ -54,8 +53,16 @@ using DetachedBody = std::unique_ptr<std::vector<uint8_t>>;
 /// least `kDetachBodyMinBytes`, the body is MOVED into `*detached` and only its
 /// address, length and owner are encoded. The caller keeps `*detached` alive
 /// until the record is delivered, then releases it — Dart frees it through
-/// `nitro_http_free_body` — or lets it die if delivery failed.
+/// `freeDetachedBody` — or lets it die if delivery failed.
 Blob encodeResponse(RawResponse& v, DetachedBody* detached);
+
+/// Frees a detached body, given `RawResponse.bodyOwner`; the finalizer behind
+/// `bodyFinalizerAddress`.
+void freeDetachedBody(void* owner);
+
+/// Frees a chunk payload Dart took with `adoptPayload`; the finalizer behind
+/// `chunkFinalizerAddress`.
+void freeAdoptedChunk(void* payload);
 Blob encodeResponseHead(const RawResponseHead& v);
 Blob encodeEvent(const RawEvent& v);
 Blob encodeWsHandshake(const RawWsHandshake& v);

@@ -19,6 +19,7 @@
 #include <cstring>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 namespace nitrohttp {
@@ -46,10 +47,52 @@ Blob Blob::copy(const void* src, size_t n) {
   return Blob{p, n};
 }
 
+namespace common_detail {
+namespace {
+
+/// Offered blocks the engine still owns, by offer id. An id, not the address:
+/// a block Dart frees can come back from malloc while its old entry is still
+/// queued in an arena.
+struct OfferedPayloads {
+  std::mutex mutex;
+  std::unordered_map<uint64_t, void*> blocks;
+  uint64_t lastId = 0;
+};
+
+OfferedPayloads& offered() {
+  // Never destroyed: Dart's finalizer thread and a loop thread can both
+  // outlive static destruction at exit.
+  static auto* instance = new OfferedPayloads();
+  return *instance;
+}
+
+}  // namespace
+}  // namespace common_detail
+
+void offerPayload(Blob* blob) {
+  if (blob->empty()) return;
+  common_detail::OfferedPayloads& o = common_detail::offered();
+  std::lock_guard<std::mutex> lock(o.mutex);
+  blob->offer = ++o.lastId;
+  o.blocks.emplace(blob->offer, blob->data);
+}
+
+void* adoptPayload(uint64_t offer) {
+  common_detail::OfferedPayloads& o = common_detail::offered();
+  std::lock_guard<std::mutex> lock(o.mutex);
+  const auto found = o.blocks.find(offer);
+  if (found == o.blocks.end()) return nullptr;
+  void* block = found->second;
+  o.blocks.erase(found);
+  return block;
+}
+
 void Blob::release() {
-  ::free(data);
+  // An offer that is gone means Dart owns the block now.
+  if (offer == 0 || adoptPayload(offer) != nullptr) ::free(data);
   data = nullptr;
   size = 0;
+  offer = 0;
 }
 
 // ── Errors ───────────────────────────────────────────────────────────────────

@@ -88,7 +88,11 @@ void main() {
 
     // ── Custom root trust ────────────────────────────────────────────────────
     test('RootCaSource.custom trusts exactly the PEM it was given', () async {
-      expect((await trusting().get(server.url('/ok'))).statusCode, 200);
+      final response = await trusting().get(server.url('/ok'));
+      expect(response.statusCode, 200);
+      // The engine sends no final URL for a request it did not redirect;
+      // the response still reports the one that was asked for.
+      expect(response.finalUrl, Uri.parse(server.url('/ok')));
     }, skip: skipReason);
 
     test('the same certificate is REJECTED without that root', () async {
@@ -101,6 +105,30 @@ void main() {
         client!.get(server.url('/ok')),
         throwsA(isA<NitroHttpCertificateException>()),
       );
+    }, skip: skipReason);
+
+    test('a reconfigured root list is not served by the old connection',
+        () async {
+      // Both lists open with the same certificate, and the first request
+      // leaves a live connection and a TLS session behind.
+      final unrelated = fixture.clientCertPem;
+      ClientSettings withRoots(String pem) => ClientSettings(
+            timeout: const Duration(seconds: 20),
+            throwOnStatusCode: false,
+            tlsSettings: TlsSettings(rootCaSource: RootCaSource.custom(pem)),
+          );
+      final trusting = withRoots('$unrelated\n${fixture.caPem}');
+      final c = client = NitroHttpClient(settings: trusting);
+      expect((await c.get(server.url('/ok'))).statusCode, 200);
+
+      c.reconfigure(withRoots(unrelated));
+      await expectLater(
+        c.get(server.url('/ok')),
+        throwsA(isA<NitroHttpCertificateException>()),
+      );
+
+      c.reconfigure(trusting);
+      expect((await c.get(server.url('/ok'))).statusCode, 200);
     }, skip: skipReason);
 
     test('verifyCertificates:false accepts the untrusted chain', () async {

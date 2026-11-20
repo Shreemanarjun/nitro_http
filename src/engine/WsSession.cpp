@@ -956,6 +956,7 @@ void WsSession::emitFrame(int64_t opcode, bool fin, const uint8_t* payload,
     if (!blob.data) return;
   }
 
+  if (n >= wire::kDetachBodyMinBytes) offerPayload(&blob);
   arena_.track(emittedSeq_, blob);
 
   RawWsFrame frame{};
@@ -964,6 +965,7 @@ void WsSession::emitFrame(int64_t opcode, bool fin, const uint8_t* payload,
   frame.socketId = socketId_;
   frame.opcode = opcode;
   frame.flags = fin ? 1 : 0;
+  frame.owner = static_cast<int64_t>(blob.offer);
   sink.wsFrame(frame);
 
   ++emittedSeq_;

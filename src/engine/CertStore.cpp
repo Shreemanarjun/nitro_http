@@ -9,12 +9,30 @@
 #include "CertStore.h"
 
 #include <cctype>
+#include <climits>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "Wire.h"
+
+// Only a vendored slice ships the TLS library's headers, and its BoringSSL
+// exports every symbol under the prefix set in tool/deps/CMakeLists.txt.
+#if defined(__has_include) && __has_include(<openssl/prefix_symbols.h>)
+#define NITRO_HTTP_SHARES_TRUST_STORE 1
+#ifndef BORINGSSL_PREFIX
+#define BORINGSSL_PREFIX NH
+#endif
+#include <openssl/bio.h>
+#include <openssl/err.h>
+#include <openssl/pem.h>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+#else
+#define NITRO_HTTP_SHARES_TRUST_STORE 0
+#endif
 
 // Only the bundle-scanning platforms need filesystem access; keeping the
 // includes with the code they serve means an Apple build compiles neither.
@@ -122,16 +140,107 @@ bool readTrustFile(const std::string& path, std::string* out) {
 
 #endif  // NITRO_HTTP_SCANS_TRUST_FILES
 
-/// Installs a CA bundle. `ownedByProcess` selects `CURL_BLOB_NOCOPY` for the
-/// function-local statics that outlive every handle — the bundle is ~180 KB and
-/// copying it per request is pure waste. Returns false when this libcurl has no
+#if NITRO_HTTP_SHARES_TRUST_STORE
+
+/// A root list parsed once for the whole process. curl parses a
+/// `CURLOPT_CAINFO_BLOB` again on every new connection, so a handle gets
+/// `store` through the SSL-context callback instead, and `identity` as its
+/// blob: one certificate plus a tag unique to the list. curl compares the blob
+/// before it reuses a connection or a TLS session, so two root lists must
+/// never present the same one.
+struct SharedTrust {
+  X509_STORE* store = nullptr;
+  std::string identity;
+};
+
+/// Same acceptance rule as curl's own blob loader: every certificate and CRL
+/// must load, and there must be at least one.
+X509_STORE* parseRoots(const std::string& pem) {
+  if (pem.size() > static_cast<size_t>(INT_MAX)) return nullptr;
+  BIO* bio = BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size()));
+  if (bio == nullptr) return nullptr;
+  STACK_OF(X509_INFO)* infos =
+      PEM_X509_INFO_read_bio(bio, nullptr, nullptr, nullptr);
+  BIO_free(bio);
+  X509_STORE* store = infos != nullptr ? X509_STORE_new() : nullptr;
+  bool ok = store != nullptr;
+  size_t count = 0;
+  for (size_t i = 0; ok && i < sk_X509_INFO_num(infos); ++i) {
+    const X509_INFO* info = sk_X509_INFO_value(infos, i);
+    if (info->x509 != nullptr) {
+      ok = X509_STORE_add_cert(store, info->x509) == 1;
+      ++count;
+    }
+    if (ok && info->crl != nullptr) {
+      ok = X509_STORE_add_crl(store, info->crl) == 1;
+      ++count;
+    }
+  }
+  sk_X509_INFO_pop_free(infos, X509_INFO_free);
+  ERR_clear_error();
+  if (!ok || count == 0) {
+    X509_STORE_free(store);
+    return nullptr;
+  }
+  // The flags curl sets on the store it would have built from the blob.
+  X509_STORE_set_flags(store,
+                       X509_V_FLAG_TRUSTED_FIRST | X509_V_FLAG_PARTIAL_CHAIN);
+  return store;
+}
+
+/// `pem` must live for the rest of the process: its address is the key.
+/// Returns null when the list does not parse, so the caller hands curl the
+/// list itself and curl reports the error.
+const SharedTrust* sharedTrust(const std::string& pem) {
+  static std::mutex mutex;
+  // Never freed, for the same reason as the interned PEM pool.
+  static auto* cache =
+      new std::unordered_map<const std::string*, SharedTrust>();
+  std::lock_guard<std::mutex> lock(mutex);
+  const auto found = cache->find(&pem);
+  if (found != cache->end()) {
+    return found->second.store != nullptr ? &found->second : nullptr;
+  }
+  SharedTrust& entry = (*cache)[&pem];
+  static constexpr char kEnd[] = "-----END CERTIFICATE-----";
+  const size_t begin = pem.find(kPemCertBegin);
+  const size_t end = pem.find(kEnd, begin);
+  if (begin == std::string::npos || end == std::string::npos) return nullptr;
+  entry.store = parseRoots(pem);
+  if (entry.store == nullptr) return nullptr;
+  entry.identity = pem.substr(begin, end + sizeof(kEnd) - 1 - begin) +
+                   "\nnitro_http trust store " +
+                   std::to_string(cache->size()) + "\n";
+  return &entry;
+}
+
+CURLcode useSharedTrust(CURL* /*easy*/, void* sslCtx, void* store) {
+  auto* shared = static_cast<X509_STORE*>(store);
+  X509_STORE_up_ref(shared);
+  SSL_CTX_set_cert_store(static_cast<SSL_CTX*>(sslCtx), shared);
+  return CURLE_OK;
+}
+
+#endif  // NITRO_HTTP_SHARES_TRUST_STORE
+
+/// Installs a CA bundle. `ownedByProcess` says `pem` outlives every handle, so
+/// curl borrows it (`CURL_BLOB_NOCOPY`) and, where the TLS library is ours,
+/// the list is parsed once and shared. Returns false when this libcurl has no
 /// blob support at all, in which case the caller degrades to curl's default
 /// trust rather than failing the request.
 bool setCaBundleBlob(CURL* easy, const std::string& pem, bool ownedByProcess) {
 #if LIBCURL_VERSION_NUM >= 0x074D00  // 7.77.0
+  const std::string* data = &pem;
+#if NITRO_HTTP_SHARES_TRUST_STORE
+  if (const SharedTrust* shared = ownedByProcess ? sharedTrust(pem) : nullptr) {
+    curl_easy_setopt(easy, CURLOPT_SSL_CTX_FUNCTION, &useSharedTrust);
+    curl_easy_setopt(easy, CURLOPT_SSL_CTX_DATA, shared->store);
+    data = &shared->identity;
+  }
+#endif
   struct curl_blob blob;
-  blob.data = const_cast<char*>(pem.data());
-  blob.len = pem.size();
+  blob.data = const_cast<char*>(data->data());
+  blob.len = data->size();
   blob.flags = ownedByProcess ? CURL_BLOB_NOCOPY : CURL_BLOB_COPY;
   return curl_easy_setopt(easy, CURLOPT_CAINFO_BLOB, &blob) == CURLE_OK;
 #else
@@ -397,6 +506,12 @@ EngineError CertStore::apply(CURL* easy, const RawTlsConfig& tls,
              "this configuration.");
   }
 
+#if NITRO_HTTP_SHARES_TRUST_STORE
+  // A handle that last carried a shared store must not keep it when this
+  // configuration installs none.
+  curl_easy_setopt(easy, CURLOPT_SSL_CTX_FUNCTION, nullptr);
+#endif
+
   switch (static_cast<RootCaSource>(tls.rootCaSource)) {
     case RootCaSource::Platform: {
 #if defined(_WIN32)
@@ -497,8 +612,7 @@ EngineError CertStore::apply(CURL* easy, const RawTlsConfig& tls,
       }
       // Borrowed when the caller has an interned copy, which outlives every
       // handle. Otherwise COPY: the config this string lives in can be replaced
-      // while the handle is still in flight. Copying cost ~15 µs per request
-      // for a 199 KB bundle on an iPhone 12.
+      // while the handle is still in flight.
       const bool borrowed = stableRootsPem != nullptr;
       if (!setCaBundleBlob(easy, borrowed ? *stableRootsPem : tls.trustedRootsPem,
                            borrowed)) {

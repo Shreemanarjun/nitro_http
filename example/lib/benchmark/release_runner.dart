@@ -52,7 +52,9 @@ import '../server/h2_server.dart';
 import '../server/in_app_sink.dart';
 import '../server/local_server.dart';
 import 'benchmark.dart';
+import 'detach_probe.dart';
 import 'execution.dart';
+import 'remote_tls_probe.dart';
 
 /// Whether this build was compiled to run the benchmark instead of the UI.
 ///
@@ -237,6 +239,32 @@ Future<void> _writeReport(
 /// Never throws: a release build that dies in `main` cannot say why, so failures
 /// are printed and marked instead.
 Future<void> runReleaseBenchmark() async {
+  const probe = String.fromEnvironment('BENCH_PROBE');
+  if (probe == 'detach' || probe == 'sizes' || probe == 'remote') {
+    final List<String> lines;
+    if (probe == 'detach') {
+      lines = await runDetachProbe();
+    } else if (probe == 'remote') {
+      List<String> result;
+      try {
+        result = await runRemoteTlsProbe(
+          const String.fromEnvironment('BENCH_REMOTE_URL'),
+        );
+      } on Object catch (error) {
+        result = ['REMOTE_TLS failed: $error'];
+      }
+      lines = result;
+    } else {
+      NitroHttp.reset();
+      final server = await IsolatedServer.start();
+      lines = await runSizeProbe(server.baseUrl);
+      await server.stop();
+    }
+    final dir = await getApplicationDocumentsDirectory();
+    await File('${dir.path}/$reportFileName')
+        .writeAsString([...lines, endMarker].join('\n'));
+    return _quit();
+  }
   Future<void> Function()? stopServer;
   try {
     NitroHttp.reset();

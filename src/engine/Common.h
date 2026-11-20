@@ -15,7 +15,10 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <new>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Spelled relative rather than as a bare `"nitro_http.native.g.h"`: the CMake
@@ -45,6 +48,8 @@ int64_t wallClockMs();
 struct Blob {
   uint8_t* data = nullptr;
   size_t size = 0;
+  /// Non-zero while Dart may still take this block over; see `offerPayload`.
+  uint64_t offer = 0;
 
   bool empty() const { return data == nullptr || size == 0; }
 
@@ -54,8 +59,43 @@ struct Blob {
   /// Copies `n` bytes from `src` into a fresh malloc'd block.
   static Blob copy(const void* src, size_t n);
 
-  void release();  // free() and null out
+  /// free() and null out. A block Dart took over is left alone.
+  void release();
 };
+
+/// `std::allocator` that leaves trivially constructible elements
+/// uninitialized, so sizing a byte buffer that is about to be overwritten does
+/// not zero it first.
+template <class T>
+struct UninitializedAllocator : std::allocator<T> {
+  template <class U>
+  struct rebind {
+    using other = UninitializedAllocator<U>;
+  };
+  UninitializedAllocator() = default;
+  template <class U>
+  UninitializedAllocator(const UninitializedAllocator<U>&) noexcept {}
+  template <class U>
+  void construct(U* p) noexcept {
+    ::new (static_cast<void*>(p)) U;
+  }
+  template <class U, class... Args>
+  void construct(U* p, Args&&... args) {
+    ::new (static_cast<void*>(p)) U(std::forward<Args>(args)...);
+  }
+};
+
+/// An inline request body.
+using RequestBody = std::vector<uint8_t, UninitializedAllocator<uint8_t>>;
+
+/// Marks `blob` as one Dart may take over with `adoptPayload(blob.offer)`.
+/// Until then it is released as usual; afterwards `release` frees nothing and
+/// Dart's finalizer does.
+void offerPayload(Blob* blob);
+
+/// Dart thread. Hands the block offered under `offer` to the caller, who must
+/// `free()` it; null when the engine released it first.
+void* adoptPayload(uint64_t offer);
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 

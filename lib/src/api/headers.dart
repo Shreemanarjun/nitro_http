@@ -106,8 +106,6 @@ class HttpHeaders {
   /// Throws [ArgumentError], because a header with a newline in it is a bug in
   /// the caller and not a transport failure.
   static void _rejectControlCharacters(String name, String value) {
-    // Two direct calls rather than a loop over a list of records: this runs on
-    // every header of every request, and the list cost an allocation each time.
     _rejectIn(name, 'name');
     _rejectIn(value, 'value');
   }
@@ -190,7 +188,6 @@ class HttpHeaders {
 
   /// A deep copy that shares no mutable state with this collection.
   HttpHeaders clone() {
-    // Every entry passed [add]'s check on the way in; don't scan it again.
     final copy = HttpHeaders();
     for (final (name, value) in _entries) {
       copy._addTrusted(name, value);
@@ -278,11 +275,8 @@ class HttpHeaders {
   }
 }
 
-/// Builds headers from fields libcurl already split into lines, skipping the
-/// CR/LF/NUL scan [HttpHeaders.add] runs on caller-supplied fields: a parsed
-/// response line cannot contain CR or LF, and these fields are read, never sent.
-///
-/// Internal: hidden from the package's public exports.
+/// Builds headers from fields libcurl already parsed, without the CR/LF/NUL
+/// scan [HttpHeaders.add] runs on caller-supplied fields.
 HttpHeaders headersFromParsedFields(
   int length,
   String Function(int i) nameAt,

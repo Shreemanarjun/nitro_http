@@ -1,3 +1,22 @@
+## Unreleased
+
+### Added
+
+* **DartNative support.** The same package now resolves and builds under
+  DartNative (`dn`) as well as Flutter: the SDK floor is `^3.12.0-0`, the
+  no-op web registrant and its `flutter_web_plugins` dependency are gone (web
+  still works through `fetch`), and the Android Gradle script no longer needs
+  the Kotlin plugin.
+* **WASM-compatible.** The public libraries no longer import `dart:io` or
+  `dart:isolate` directly (multipart file reads and the isolate-name check sit
+  behind conditional imports; the dio adapter formats HTTP-dates itself), so
+  `flutter build web --wasm` works and pana scores full platform support.
+
+### Fixed
+
+* `http` lower bound raised to `^1.5.0`, the first release with `Abortable`;
+  the package did not compile against `http` 1.2–1.4.
+
 ## 0.0.7
 
 ### Breaking

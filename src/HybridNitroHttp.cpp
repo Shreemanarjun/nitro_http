@@ -25,7 +25,9 @@
 
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -56,8 +58,44 @@ class HybridNitroHttpImpl final : public HybridNitroHttpNative {
   bool supportsWebSockets() override { return hasWebSockets(); }
   bool supportsBrotli() override { return hasBrotli(); }
   bool supportsZstd() override { return hasZstd(); }
+  int64_t bodyFinalizerAddress() override {
+    return static_cast<int64_t>(
+        reinterpret_cast<intptr_t>(&wire::freeDetachedBody));
+  }
+  int64_t adoptChunk(int64_t owner) override {
+    return static_cast<int64_t>(reinterpret_cast<intptr_t>(
+        adoptPayload(static_cast<uint64_t>(owner))));
+  }
+  int64_t chunkFinalizerAddress() override {
+    return static_cast<int64_t>(
+        reinterpret_cast<intptr_t>(&wire::freeAdoptedChunk));
+  }
 
-  void resetNative() override { EngineRegistry::resetAll(); }
+  int64_t allocRequestBody(int64_t length) override {
+    if (length <= 0) return 0;
+    auto body = std::make_unique<RequestBody>();
+    try {
+      body->resize(static_cast<size_t>(length));
+    } catch (const std::bad_alloc&) {
+      return 0;
+    }
+    const uint8_t* data = body->data();
+    std::lock_guard<std::mutex> lock(dartBodiesMutex());
+    dartBodies()[data] = std::move(body);
+    return static_cast<int64_t>(reinterpret_cast<intptr_t>(data));
+  }
+  void freeRequestBody(int64_t address) override {
+    takeDartBody(reinterpret_cast<const uint8_t*>(
+        static_cast<intptr_t>(address)));
+  }
+
+  void resetNative() override {
+    {
+      std::lock_guard<std::mutex> lock(dartBodiesMutex());
+      dartBodies().clear();
+    }
+    EngineRegistry::resetAll();
+  }
 
   // ── Client role ────────────────────────────────────────────────────────────
 
@@ -222,12 +260,38 @@ class HybridNitroHttpImpl final : public HybridNitroHttpNative {
     PendingRequest pending;
     pending.req = wire::decodeRequest(request);  // deep copy
     if (body != nullptr && bodyLen > 0) {
-      pending.body.assign(body, body + bodyLen);  // deep copy
+      std::unique_ptr<RequestBody> owned = takeDartBody(body);
+      if (owned && owned->size() == bodyLen) {
+        pending.body = std::move(*owned);
+      } else {
+        pending.body.assign(body, body + bodyLen);  // deep copy
+      }
     }
     pending.mode = mode;
     pending.dartPort = dartPort;
     pending.submittedAtMs = monotonicMs();
     role_.engine().submit(std::move(pending));
+  }
+
+  /// Blocks handed out by `allocRequestBody` that no request has taken yet,
+  /// by data address.
+  static std::unordered_map<const uint8_t*, std::unique_ptr<RequestBody>>&
+  dartBodies() {
+    static auto* bodies =
+        new std::unordered_map<const uint8_t*, std::unique_ptr<RequestBody>>();
+    return *bodies;
+  }
+  static std::mutex& dartBodiesMutex() {
+    static auto* mutex = new std::mutex();
+    return *mutex;
+  }
+  static std::unique_ptr<RequestBody> takeDartBody(const uint8_t* data) {
+    std::lock_guard<std::mutex> lock(dartBodiesMutex());
+    const auto found = dartBodies().find(data);
+    if (found == dartBodies().end()) return nullptr;
+    std::unique_ptr<RequestBody> body = std::move(found->second);
+    dartBodies().erase(found);
+    return body;
   }
 
   RoleHandle role_;

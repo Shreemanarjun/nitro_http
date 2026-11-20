@@ -72,6 +72,35 @@ public:
         // return false;
     }
 
+    int64_t bodyFinalizerAddress() override {
+        // TODO: implement bodyFinalizerAddress
+        throw std::runtime_error("Not implemented: bodyFinalizerAddress");
+        // return 0;
+    }
+
+    int64_t adoptChunk(int64_t owner) override {
+        // TODO: implement adoptChunk
+        throw std::runtime_error("Not implemented: adoptChunk");
+        // return 0;
+    }
+
+    int64_t chunkFinalizerAddress() override {
+        // TODO: implement chunkFinalizerAddress
+        throw std::runtime_error("Not implemented: chunkFinalizerAddress");
+        // return 0;
+    }
+
+    int64_t allocRequestBody(int64_t length) override {
+        // TODO: implement allocRequestBody
+        throw std::runtime_error("Not implemented: allocRequestBody");
+        // return 0;
+    }
+
+    void freeRequestBody(int64_t address) override {
+        // TODO: implement freeRequestBody
+        throw std::runtime_error("Not implemented: freeRequestBody");
+    }
+
     void resetNative() override {
         // TODO: implement resetNative
         throw std::runtime_error("Not implemented: resetNative");

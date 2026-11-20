@@ -17,6 +17,11 @@
 * `http` lower bound raised to `^1.5.0`, the first release with `Abortable`;
   the package did not compile against `http` 1.2–1.4.
 
+### Changed
+
+* Upgraded to **`nitro` 0.9.0**: a response record is built in the block it is
+  handed to Dart in, roughly halving its encode time. No API change.
+
 ## 0.0.7
 
 ### Breaking

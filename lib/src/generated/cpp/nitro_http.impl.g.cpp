@@ -22,13 +22,13 @@
 //     (String, typed data, nested struct) before Dart sees it, so return
 //     views of your own storage (or the argument) and keep ownership of
 //     what you return; do not malloc fields for Dart to free.
-//   • TypedData RETURNS use NitroCppBuffer{ data, size } where size is in
-//     BYTES, not elements (Float32List: count * sizeof(float)). A wrong
-//     unit silently truncates the list Dart sees (bytes / elemSize).
+//   • TypedData RETURNS are a std::vector of the element type (a
+//     std::optional of one when nullable); the bridge copies it.
 //   • @zeroCopy TypedData returns are NOT copied by the bridge: return a
-//     malloc'd buffer — ownership transfers, and the bridge frees it (via
-//     <lib>_release_typed_data_return) when Dart's view is GC'd. Never
-//     return a pointer to a member or stack buffer: it would be free()d.
+//     NitroCppBuffer{ data, size } over a malloc'd buffer, size in BYTES
+//     (Float32List: count * sizeof(float)). Ownership transfers, and the
+//     bridge frees it (via <lib>_release_typed_data_return) when Dart's
+//     view is GC'd. Never return a pointer to a member or stack buffer.
 
 #include "nitro_http.native.g.h"
 #include <stdexcept>

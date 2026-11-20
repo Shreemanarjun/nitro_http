@@ -73,5 +73,9 @@ void main() {
     }
     // ignore: avoid_print
     print('NEW_CONNECTION_PROBE\n$out');
-  }, timeout: const Timeout(Duration(minutes: 5)));
+  },
+      timeout: const Timeout(Duration(minutes: 5)),
+      skip: File('build/lib/libnitro_http.dylib').existsSync()
+          ? null
+          : 'build/lib/libnitro_http.dylib missing');
 }

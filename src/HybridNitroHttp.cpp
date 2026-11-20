@@ -257,10 +257,13 @@ class HybridNitroHttpImpl final : public HybridNitroHttpNative {
  private:
   void submit(NitroCppBuffer request, const uint8_t* body, size_t bodyLen,
               RespMode mode, int64_t dartPort) {
+    // Taken before anything can throw, so a block Dart filled is never left
+    // in the registry.
+    std::unique_ptr<RequestBody> owned =
+        body != nullptr && bodyLen > 0 ? takeDartBody(body) : nullptr;
     PendingRequest pending;
     pending.req = wire::decodeRequest(request);  // deep copy
     if (body != nullptr && bodyLen > 0) {
-      std::unique_ptr<RequestBody> owned = takeDartBody(body);
       if (owned && owned->size() == bodyLen) {
         pending.body = std::move(*owned);
       } else {

@@ -131,6 +131,69 @@ void main() {
       expect((await c.get(server.url('/ok'))).statusCode, 200);
     }, skip: skipReason);
 
+    test('a root list whose comment mentions the PEM marker still connects',
+        () async {
+      client = NitroHttpClient(
+        settings: ClientSettings(
+          timeout: const Duration(seconds: 20),
+          throwOnStatusCode: false,
+          tlsSettings: TlsSettings(
+            rootCaSource: RootCaSource.custom(
+              '# -----BEGIN CERTIFICATE-----\n'
+              '${fixture.caPem}',
+            ),
+          ),
+        ),
+      );
+      expect((await client!.get(server.url('/ok'))).statusCode, 200);
+    }, skip: skipReason);
+
+    test('an HTTPS proxy is not verified against the origin roots', () async {
+      // The proxy's certificate comes from the CA the client trusts for the
+      // origin, and nothing configures trust for the proxy itself. It tunnels
+      // faithfully, so the request only fails if the proxy is refused.
+      final ctx = SecurityContext(withTrustedRoots: false)
+        ..useCertificateChain('${fixture.dir.path}/server.crt')
+        ..usePrivateKey('${fixture.dir.path}/server.key');
+      final proxy =
+          await SecureServerSocket.bind(InternetAddress.loopbackIPv4, 0, ctx);
+      addTearDown(proxy.close);
+      proxy.listen((inbound) {
+        Socket? upstream;
+        final head = <int>[];
+        inbound.listen(
+          (data) async {
+            if (upstream != null) return upstream!.add(data);
+            head.addAll(data);
+            final text = String.fromCharCodes(head);
+            if (!text.contains('\r\n\r\n')) return;
+            final target = text.split(' ')[1].split(':');
+            final socket = await Socket.connect(target[0], int.parse(target[1]));
+            upstream = socket;
+            socket.listen(inbound.add, onDone: inbound.destroy, onError: (_) {});
+            inbound.write('HTTP/1.1 200 Connection established\r\n\r\n');
+          },
+          onDone: () => upstream?.destroy(),
+          onError: (_) {},
+        );
+      }, onError: (_) {});
+
+      client = NitroHttpClient(
+        settings: ClientSettings(
+          timeout: const Duration(seconds: 10),
+          throwOnStatusCode: false,
+          tlsSettings: TlsSettings(
+            rootCaSource: RootCaSource.custom(fixture.caPem),
+          ),
+          proxySettings: ProxySettings.http('https://localhost:${proxy.port}'),
+        ),
+      );
+      await expectLater(
+        client!.get(server.url('/ok')),
+        throwsA(isA<NitroHttpException>()),
+      );
+    }, skip: skipReason);
+
     test('verifyCertificates:false accepts the untrusted chain', () async {
       // The counterpart to the control above: the same server, the same lack of
       // a trusted root, but verification switched off.

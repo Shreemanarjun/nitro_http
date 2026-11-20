@@ -150,8 +150,25 @@ bool readTrustFile(const std::string& path, std::string* out) {
 /// never present the same one.
 struct SharedTrust {
   X509_STORE* store = nullptr;
+  /// The certificate inside `identity`, for recognising a context curl loaded
+  /// it into.
+  X509* identityCert = nullptr;
   std::string identity;
 };
+
+/// The first certificate block of `pem` that starts a line, which is the only
+/// kind the PEM reader takes; empty when there is none.
+std::string firstCertificateBlock(const std::string& pem) {
+  static constexpr char kEnd[] = "-----END CERTIFICATE-----";
+  size_t begin = pem.find(kPemCertBegin);
+  while (begin != std::string::npos && begin != 0 && pem[begin - 1] != '\n') {
+    begin = pem.find(kPemCertBegin, begin + 1);
+  }
+  if (begin == std::string::npos) return {};
+  const size_t end = pem.find(kEnd, begin);
+  if (end == std::string::npos) return {};
+  return pem.substr(begin, end + sizeof(kEnd) - 1 - begin);
+}
 
 /// Same acceptance rule as curl's own blob loader: every certificate and CRL
 /// must load, and there must be at least one.
@@ -202,22 +219,43 @@ const SharedTrust* sharedTrust(const std::string& pem) {
     return found->second.store != nullptr ? &found->second : nullptr;
   }
   SharedTrust& entry = (*cache)[&pem];
-  static constexpr char kEnd[] = "-----END CERTIFICATE-----";
-  const size_t begin = pem.find(kPemCertBegin);
-  const size_t end = pem.find(kEnd, begin);
-  if (begin == std::string::npos || end == std::string::npos) return nullptr;
-  entry.store = parseRoots(pem);
-  if (entry.store == nullptr) return nullptr;
-  entry.identity = pem.substr(begin, end + sizeof(kEnd) - 1 - begin) +
-                   "\nnitro_http trust store " +
+  const std::string block = firstCertificateBlock(pem);
+  if (block.empty()) return nullptr;
+  BIO* bio = BIO_new_mem_buf(block.data(), static_cast<int>(block.size()));
+  X509* cert = bio != nullptr
+                   ? PEM_read_bio_X509(bio, nullptr, nullptr, nullptr)
+                   : nullptr;
+  BIO_free(bio);
+  ERR_clear_error();
+  if (cert == nullptr) return nullptr;
+  X509_STORE* store = parseRoots(pem);
+  if (store == nullptr) {
+    X509_free(cert);
+    return nullptr;
+  }
+  entry.store = store;
+  entry.identityCert = cert;
+  entry.identity = block + "\nnitro_http trust store " +
                    std::to_string(cache->size()) + "\n";
   return &entry;
 }
 
-CURLcode useSharedTrust(CURL* /*easy*/, void* sslCtx, void* store) {
-  auto* shared = static_cast<X509_STORE*>(store);
-  X509_STORE_up_ref(shared);
-  SSL_CTX_set_cert_store(static_cast<SSL_CTX*>(sslCtx), shared);
+CURLcode useSharedTrust(CURL* /*easy*/, void* sslCtx, void* trust) {
+  const auto* shared = static_cast<const SharedTrust*>(trust);
+  auto* ctx = static_cast<SSL_CTX*>(sslCtx);
+  // curl calls this for every TLS handshake on the handle, an HTTPS proxy's
+  // included, and the proxy keeps its own trust. Only the origin's context
+  // holds exactly what curl loaded from `identity`.
+  STACK_OF(X509_OBJECT)* loaded =
+      X509_STORE_get1_objects(SSL_CTX_get_cert_store(ctx));
+  const X509* only = loaded != nullptr && sk_X509_OBJECT_num(loaded) == 1
+                         ? X509_OBJECT_get0_X509(sk_X509_OBJECT_value(loaded, 0))
+                         : nullptr;
+  const bool origin = only != nullptr && X509_cmp(only, shared->identityCert) == 0;
+  sk_X509_OBJECT_pop_free(loaded, X509_OBJECT_free);
+  if (!origin) return CURLE_OK;
+  X509_STORE_up_ref(shared->store);
+  SSL_CTX_set_cert_store(ctx, shared->store);
   return CURLE_OK;
 }
 
@@ -234,7 +272,8 @@ bool setCaBundleBlob(CURL* easy, const std::string& pem, bool ownedByProcess) {
 #if NITRO_HTTP_SHARES_TRUST_STORE
   if (const SharedTrust* shared = ownedByProcess ? sharedTrust(pem) : nullptr) {
     curl_easy_setopt(easy, CURLOPT_SSL_CTX_FUNCTION, &useSharedTrust);
-    curl_easy_setopt(easy, CURLOPT_SSL_CTX_DATA, shared->store);
+    curl_easy_setopt(easy, CURLOPT_SSL_CTX_DATA,
+                     const_cast<SharedTrust*>(shared));
     data = &shared->identity;
   }
 #endif

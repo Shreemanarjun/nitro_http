@@ -377,6 +377,7 @@ void RequestTask::applyUrl(const RawRequest& req, const ClientConfig& config) {
         curl_easy_setopt(easy_, CURLOPT_CONNECT_TO, connectToList_);
         curl_easy_setopt(easy_, CURLOPT_URL, rewritten);
         applied = true;
+        urlRewritten_ = true;
       }
     }
   }
@@ -1413,10 +1414,11 @@ void RequestTask::collectTransferInfo() {
     redirectCount_ = value;
   }
   // A request that followed no redirect ends where it started, and an empty
-  // final URL tells Dart exactly that. The one exception is still asked: HSTS
-  // upgrades a plain http request without a redirect.
+  // final URL tells Dart exactly that. Two exceptions are still asked: the SNI
+  // override rewrites the URL, and HSTS upgrades a plain http request without
+  // a redirect.
   char* text = nullptr;
-  if ((redirectCount_ > 0 ||
+  if ((redirectCount_ > 0 || urlRewritten_ ||
        (hstsEnabled_ &&
         !curl_strnequal(pending_.req.url.c_str(), "https:", 6))) &&
       curl_easy_getinfo(easy_, CURLINFO_EFFECTIVE_URL, &text) == CURLE_OK &&

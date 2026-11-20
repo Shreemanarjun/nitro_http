@@ -19,12 +19,25 @@ case "$ACTION:$TARGET" in
   start:macos)
     cc -O2 -o "$OUT/source" source.c
     [ -f "$OUT/pid" ] && kill "$(cat "$OUT/pid")" 2>/dev/null || true
-    "$OUT/source" "$PORT" >/dev/null 2>&1 &
-    echo $! > "$OUT/pid"
+    "$OUT/source" "$PORT" >"$OUT/source.log" 2>&1 &
+    pid=$!
+    echo "$pid" > "$OUT/pid"
+    # Ready means OUR child is alive and the port answers: a listener someone
+    # else holds makes the child exit, which the second check catches.
+    ready=0
     for _ in $(seq 1 50); do
-      nc -z 127.0.0.1 "$PORT" 2>/dev/null && break
+      kill -0 "$pid" 2>/dev/null || break
+      if nc -z 127.0.0.1 "$PORT" 2>/dev/null; then ready=1; break; fi
       perl -e 'select(undef, undef, undef, 0.1)'
     done
+    perl -e 'select(undef, undef, undef, 0.3)'
+    if [ "$ready" != 1 ] || ! kill -0 "$pid" 2>/dev/null; then
+      echo "source did not start on port $PORT:" >&2
+      cat "$OUT/source.log" >&2
+      kill "$pid" 2>/dev/null || true
+      rm -f "$OUT/pid"
+      exit 1
+    fi
     echo "http://127.0.0.1:$PORT"
     ;;
   stop:macos)
@@ -44,7 +57,14 @@ case "$ACTION:$TARGET" in
     adb shell "pkill -f $DEVICE_BIN" >/dev/null 2>&1 || true
     adb push "$OUT/source-android" "$DEVICE_BIN" >/dev/null
     adb shell "chmod 755 $DEVICE_BIN"
-    adb shell "nohup $DEVICE_BIN $PORT >/dev/null 2>&1 &" >/dev/null 2>&1
+    adb shell "nohup $DEVICE_BIN $PORT >$DEVICE_BIN.log 2>&1 &" >/dev/null 2>&1
+    # The source exits at once when it cannot bind, so alive means listening.
+    perl -e 'select(undef, undef, undef, 0.5)'
+    if ! adb shell "pgrep -f $DEVICE_BIN" | grep -q '[0-9]'; then
+      echo "source did not start on port $PORT:" >&2
+      adb shell "cat $DEVICE_BIN.log" >&2 || true
+      exit 1
+    fi
     echo "http://127.0.0.1:$PORT"
     ;;
   stop:android)

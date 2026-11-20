@@ -353,6 +353,8 @@ class RequestTask {
   /// Whether the client remembers Strict-Transport-Security; see
   /// `collectTransferInfo`.
   bool hstsEnabled_ = false;
+  /// Whether `applyUrl` gave curl a different URL than the request's.
+  bool urlRewritten_ = false;
   int64_t streamChunkMinContentLength_ = -1;
   int64_t streamChunkMaxHoldMs_ = -1;
 

@@ -39,6 +39,24 @@ double _p50(List<int> micros) {
   return micros[micros.length ~/ 2] / 1000;
 }
 
+/// A GET through dart:io that fails on a status outside 2xx, so an error page
+/// is never timed as a download. Completes with the peer address.
+Future<String> _ioGet(HttpClient client, Uri url) async {
+  final response = await (await client.getUrl(url)).close();
+  final peer = response.connectionInfo?.remoteAddress.address ?? '?';
+  await response.drain<void>();
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw HttpException('status ${response.statusCode}', uri: url);
+  }
+  return peer;
+}
+
+/// [names] starting from a different one each round, so no client always
+/// runs first or last within a round.
+List<String> _rotated(List<String> names, int round) => [
+  for (var i = 0; i < names.length; i++) names[(i + round) % names.length],
+];
+
 /// One line per client: negotiated protocol, median serial GET and median
 /// time for a burst of [_burst] GETs of [resource], in milliseconds.
 Future<List<String>> runRemoteTlsProbe(String resource) async {
@@ -61,121 +79,121 @@ Future<List<String>> runRemoteTlsProbe(String resource) async {
       ),
     ),
   );
+  HttpClient io() {
+    final client = HttpClient();
+    if (selfSigned) client.badCertificateCallback = (_, _, _) => true;
+    return client;
+  }
+
+  const names = ['nitro_http auto', 'nitro_http http11Only', 'dart:io'];
+  final protocols = <String, String>{};
+  final serial = {for (final name in names) name: <int>[]};
+  final bursts = {for (final name in names) name: <int>[]};
+  final opened = {for (final name in names) name: 0};
+  final watch = Stopwatch();
+
   final h2 = nitro(HttpVersionPref.auto);
   final h1 = nitro(HttpVersionPref.http11Only);
-  final dartIo = HttpClient();
-  if (selfSigned) dartIo.badCertificateCallback = (_, _, _) => true;
-
-  final clients = <String, _Get>{
-    'nitro_http auto': () async =>
-        (await h2.requestBytes(HttpMethod.get, resource)).timings.tls >
-        Duration.zero,
-    'nitro_http http11Only': () async =>
-        (await h1.requestBytes(HttpMethod.get, resource)).timings.tls >
-        Duration.zero,
-    'dart:io': () async {
-      final response = await (await dartIo.getUrl(url)).close();
-      await response.drain<void>();
-      return false;
-    },
-  };
-  // Protocol and peer address: two clients on different address families are
-  // on different routes, and their times are not comparable.
-  final first = {
-    'nitro_http auto': await h2.requestBytes(HttpMethod.get, resource),
-    'nitro_http http11Only': await h1.requestBytes(HttpMethod.get, resource),
-  };
-  final ioResponse = await (await dartIo.getUrl(url)).close();
-  final ioPeer = ioResponse.connectionInfo?.remoteAddress.address ?? '?';
-  await ioResponse.drain<void>();
-  final protocols = <String, String>{
-    for (final entry in first.entries)
-      entry.key: '${entry.value.version.label} ${entry.value.primaryIp}',
-    'dart:io': 'HTTP/1.1 $ioPeer',
-  };
-
-  // Open every connection a burst will use before anything is timed.
-  for (final get in clients.values) {
-    for (var i = 0; i < 2; i++) {
-      await Future.wait([for (var j = 0; j < _burst; j++) get()]);
+  final dartIo = io();
+  try {
+    final clients = <String, _Get>{
+      names[0]: () async =>
+          (await h2.requestBytes(HttpMethod.get, resource)).timings.tls >
+          Duration.zero,
+      names[1]: () async =>
+          (await h1.requestBytes(HttpMethod.get, resource)).timings.tls >
+          Duration.zero,
+      names[2]: () async {
+        await _ioGet(dartIo, url);
+        return false;
+      },
+    };
+    // Protocol and peer address: two clients on different address families
+    // are on different routes, and their times are not comparable.
+    for (final (name, client) in [(names[0], h2), (names[1], h1)]) {
+      final first = await client.requestBytes(HttpMethod.get, resource);
+      protocols[name] = '${first.version.label} ${first.primaryIp}';
     }
-  }
+    protocols[names[2]] = 'HTTP/1.1 ${await _ioGet(dartIo, url)}';
 
-  final serial = {for (final name in clients.keys) name: <int>[]};
-  final bursts = {for (final name in clients.keys) name: <int>[]};
-  final opened = {for (final name in clients.keys) name: 0};
-  final watch = Stopwatch();
-  // One round per client in turn, so a change in the link lands on all three.
-  for (var i = 0; i < _bursts; i++) {
-    for (final entry in clients.entries) {
-      watch
-        ..reset()
-        ..start();
-      final results = await Future.wait([
-        for (var j = 0; j < _burst; j++) entry.value(),
-      ]);
-      watch.stop();
-      bursts[entry.key]!.add(watch.elapsedMicroseconds);
-      opened[entry.key] =
-          opened[entry.key]! + results.where((isNew) => isNew).length;
+    // Open every connection a burst will use before anything is timed.
+    for (final get in clients.values) {
+      for (var i = 0; i < 2; i++) {
+        await Future.wait([for (var j = 0; j < _burst; j++) get()]);
+      }
     }
-  }
-  for (var i = 0; i < _serial; i++) {
-    for (final entry in clients.entries) {
-      watch
-        ..reset()
-        ..start();
-      await entry.value();
-      watch.stop();
-      serial[entry.key]!.add(watch.elapsedMicroseconds);
-    }
-  }
 
-  h2.dispose();
-  h1.dispose();
-  dartIo.close(force: true);
+    // One round per client in turn, so a change in the link lands on all
+    // three.
+    for (var i = 0; i < _bursts; i++) {
+      for (final name in _rotated(names, i)) {
+        watch
+          ..reset()
+          ..start();
+        final results = await Future.wait([
+          for (var j = 0; j < _burst; j++) clients[name]!(),
+        ]);
+        watch.stop();
+        bursts[name]!.add(watch.elapsedMicroseconds);
+        opened[name] = opened[name]! + results.where((isNew) => isNew).length;
+      }
+    }
+    for (var i = 0; i < _serial; i++) {
+      for (final name in _rotated(names, i)) {
+        watch
+          ..reset()
+          ..start();
+        await clients[name]!();
+        watch.stop();
+        serial[name]!.add(watch.elapsedMicroseconds);
+      }
+    }
+  } finally {
+    h2.dispose();
+    h1.dispose();
+    dartIo.close(force: true);
+  }
 
   // The same burst from a client that has no connection yet, as at app launch.
-  final cold = {for (final name in clients.keys) name: <int>[]};
+  final cold = {for (final name in names) name: <int>[]};
   for (var i = 0; i < _coldBursts; i++) {
-    for (final name in clients.keys) {
-      final fresh = name == 'dart:io'
+    for (final name in _rotated(names, i)) {
+      final fresh = name == names[2]
           ? null
           : nitro(
-              name.endsWith('auto')
+              name == names[0]
                   ? HttpVersionPref.auto
                   : HttpVersionPref.http11Only,
             );
-      final freshIo = HttpClient();
-      if (selfSigned) freshIo.badCertificateCallback = (_, _, _) => true;
-      Future<void> get() async {
-        if (fresh != null) {
-          await fresh.requestBytes(HttpMethod.get, resource);
-        } else {
-          final response = await (await freshIo.getUrl(url)).close();
-          await response.drain<void>();
-        }
+      final freshIo = io();
+      try {
+        watch
+          ..reset()
+          ..start();
+        await Future.wait([
+          for (var j = 0; j < _burst; j++)
+            fresh != null
+                ? fresh.requestBytes(HttpMethod.get, resource)
+                : _ioGet(freshIo, url),
+        ]);
+        watch.stop();
+        cold[name]!.add(watch.elapsedMicroseconds);
+      } finally {
+        fresh?.dispose();
+        freshIo.close(force: true);
       }
-
-      watch
-        ..reset()
-        ..start();
-      await Future.wait([for (var j = 0; j < _burst; j++) get()]);
-      watch.stop();
-      cold[name]!.add(watch.elapsedMicroseconds);
-      fresh?.dispose();
-      freshIo.close(force: true);
     }
   }
   return <String>[
     'REMOTE_TLS $resource | serial GET p50 ms | burst of $_burst p50 (min) '
-        'ms | connections opened in $_bursts bursts | cold burst p50 ms',
-    for (final name in clients.keys)
+        'ms | connections opened in $_bursts bursts | cold burst p50 ms | '
+        'round n starts with client n mod ${names.length}',
+    for (final name in names)
       '${name.padRight(22)} ${protocols[name]!} | '
           '${_p50(serial[name]!).toStringAsFixed(3)} | '
           '${_p50(bursts[name]!).toStringAsFixed(2)} '
           '(${(bursts[name]!.first / 1000).toStringAsFixed(2)}) | '
-          '${name == 'dart:io' ? '-' : opened[name]} | '
+          '${name == names[2] ? '-' : opened[name]} | '
           '${_p50(cold[name]!).toStringAsFixed(2)}',
   ];
 }

@@ -241,29 +241,22 @@ Future<void> _writeReport(
 Future<void> runReleaseBenchmark() async {
   const probe = String.fromEnvironment('BENCH_PROBE');
   if (probe == 'detach' || probe == 'sizes' || probe == 'remote') {
-    final List<String> lines;
-    if (probe == 'detach') {
-      lines = await runDetachProbe();
-    } else if (probe == 'remote') {
-      List<String> result;
+    try {
+      var lines = <String>[];
       try {
-        result = await runRemoteTlsProbe(
-          const String.fromEnvironment('BENCH_REMOTE_URL'),
-        );
+        lines = await _runProbe(probe);
       } on Object catch (error) {
-        result = ['REMOTE_TLS failed: $error'];
+        lines = ['PROBE failed: $error'];
+        exitCode = 1;
       }
-      lines = result;
-    } else {
-      NitroHttp.reset();
-      final server = await IsolatedServer.start();
-      lines = await runSizeProbe(server.baseUrl);
-      await server.stop();
+      final dir = await getApplicationDocumentsDirectory();
+      await File('${dir.path}/$reportFileName').writeAsString(
+        [...lines, if (exitCode == 0) endMarker else failMarker].join('\n'),
+      );
+    } finally {
+      await _quit();
     }
-    final dir = await getApplicationDocumentsDirectory();
-    await File('${dir.path}/$reportFileName')
-        .writeAsString([...lines, endMarker].join('\n'));
-    return _quit();
+    return;
   }
   Future<void> Function()? stopServer;
   try {
@@ -336,6 +329,21 @@ Future<void> runReleaseBenchmark() async {
   } finally {
     await stopServer?.call();
     await _quit();
+  }
+}
+
+/// One of the `BENCH_PROBE` runs that replace the benchmark.
+Future<List<String>> _runProbe(String probe) async {
+  if (probe == 'detach') return runDetachProbe();
+  if (probe == 'remote') {
+    return runRemoteTlsProbe(const String.fromEnvironment('BENCH_REMOTE_URL'));
+  }
+  NitroHttp.reset();
+  final server = await IsolatedServer.start();
+  try {
+    return await runSizeProbe(server.baseUrl);
+  } finally {
+    await server.stop();
   }
 }
 

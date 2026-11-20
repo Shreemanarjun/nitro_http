@@ -7,6 +7,8 @@ import { createSecureServer } from 'node:http2';
 import { readFileSync } from 'node:fs';
 
 const [, , port, key, cert] = process.argv;
+// Largest body served; BENCH_MAX_BYTES overrides it.
+const maxBytes = Number(process.env.BENCH_MAX_BYTES ?? 1 << 30);
 const server = createSecureServer({
   key: readFileSync(key),
   cert: readFileSync(cert),
@@ -19,7 +21,12 @@ server.on('request', (req, res) => {
     res.writeHead(404).end();
     return;
   }
-  const body = Buffer.alloc(Number(match[1]), 0x61);
+  const size = Number(match[1]);
+  if (!Number.isSafeInteger(size) || size > maxBytes) {
+    res.writeHead(400).end();
+    return;
+  }
+  const body = Buffer.alloc(size, 0x61);
   res.writeHead(200, {
     'content-type': 'application/octet-stream',
     'content-length': body.length,

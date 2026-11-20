@@ -420,11 +420,11 @@ HttpTimings fromRawTimings(RawTimings t) => HttpTimings(
   total: _dur(t.totalMs),
 );
 
-/// Parsed URL of the final hop. Falls back to the request URL when the engine
-/// reported something unparseable, because a response object with a broken
 /// Straight to UTF-8, without the intermediate `String` of `jsonEncode`.
 final JsonUtf8Encoder _jsonToUtf8 = JsonUtf8Encoder();
 
+/// Parsed URL of the final hop. Falls back to the request URL when the engine
+/// reported something unparseable, because a response object with a broken
 /// `finalUrl` is worse than a slightly stale one.
 Uri _finalUri(String finalUrl, Uri fallback) {
   // The engine sends no URL when it is the request's; the web executor and a

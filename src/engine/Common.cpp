@@ -450,7 +450,14 @@ bool parseHeaderLine(const std::string& line, std::string* name,
   }
 
   if (name != nullptr) *name = std::move(rawName);
-  if (value != nullptr) *value = trimAsciiSpace(line.substr(colon + 1));
+  if (value != nullptr) {
+    *value = trimAsciiSpace(line.substr(colon + 1));
+    // RFC 9110 §5.5: CR, LF and NUL inside a field value become SP before the
+    // value can be forwarded anywhere.
+    for (char& c : *value) {
+      if (c == '\r' || c == '\n' || c == '\0') c = ' ';
+    }
+  }
   return true;
 }
 

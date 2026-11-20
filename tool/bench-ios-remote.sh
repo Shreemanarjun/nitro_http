@@ -75,11 +75,12 @@ xcrun devicectl device process launch --device "$DEVICE" --terminate-existing "$
 for _ in $(seq 1 90); do
   sleep 4
   pull "$OUT/report.tmp"
-  if grep -q "NITRO_BENCH_END" "$OUT/report.tmp" 2>/dev/null &&
+  if grep -q "NITRO_BENCH_END\|NITRO_BENCH_FAIL" "$OUT/report.tmp" 2>/dev/null &&
      ! cmp -s "$OUT/report.tmp" "$OUT/before.md"; then
     mv "$OUT/report.tmp" "$OUT/report.md"
-    grep -v "NITRO_BENCH_END" "$OUT/report.md"
-    exit 0
+    grep -v "NITRO_BENCH_END\|NITRO_BENCH_FAIL" "$OUT/report.md"
+    grep -q "NITRO_BENCH_END" "$OUT/report.md"
+    exit $?
   fi
 done
 echo "no report after 6 minutes — see $OUT"

@@ -13,18 +13,14 @@ import 'package:nitro_http/nitro_http.dart';
 
 const List<int> _sizesKiB = <int>[1, 2, 4, 8, 12, 16, 24, 32, 64, 128];
 
-/// The engine's copy path makes three passes over a body: into the record
-/// being built, into the block posted to Dart, and out of it into a
-/// `Uint8List`.
+/// The engine's copy path makes two passes over a body: into the record,
+/// which is posted to Dart as it is, and out of it into a `Uint8List`.
 int _copyPath(Pointer<Uint8> body, int size) {
-  final building = malloc<Uint8>(size);
-  building.asTypedList(size).setRange(0, size, body.asTypedList(size));
-  final posted = malloc<Uint8>(size);
-  posted.asTypedList(size).setRange(0, size, building.asTypedList(size));
-  malloc.free(building);
+  final record = malloc<Uint8>(size);
+  record.asTypedList(size).setRange(0, size, body.asTypedList(size));
   malloc.free(body);
-  final bytes = Uint8List.fromList(posted.asTypedList(size));
-  malloc.free(posted);
+  final bytes = Uint8List.fromList(record.asTypedList(size));
+  malloc.free(record);
   return bytes[size - 1];
 }
 

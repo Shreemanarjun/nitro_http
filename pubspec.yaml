@@ -14,26 +14,38 @@ topics:
   - nitro
   - websocket
 
+# Web is deliberately absent from `flutter: plugin: platforms` below: it needs
+# no registration (`executor_fetch.dart` is picked by a conditional import), and
+# declaring it makes Flutter's web registrant import flutter_web_plugins, which
+# DartNative's SDK does not ship. This list keeps the pub.dev platform badges.
+platforms:
+  android:
+  ios:
+  linux:
+  macos:
+  web:
+  windows:
+
 environment:
-  sdk: ^3.12.2
+  # Prerelease floor so DartNative (which ships Dart 3.12.0-dev) resolves it;
+  # private named parameters need 3.12, so ^3.11 is not an option. `pub
+  # publish` warns about a prerelease floor; raise it to ^3.12.0 once
+  # DartNative ships a stable 3.12.
+  sdk: ^3.12.0-0
   flutter: '>=3.3.0'
 
 dependencies:
   flutter:
     sdk: flutter
-  # Required because the plugin declares a `web` platform: Flutter generates a
-  # web plugin registrant that imports it, even though this package registers
-  # nothing there.
-  flutter_web_plugins:
-    sdk: flutter
   # Only reached from `package:nitro_http/dio.dart`; the main barrel never
   # imports it, so an app that does not use the adapter tree-shakes it away.
   dio: ^5.7.0
-  nitro: ^0.8.8
+  nitro: ^0.9.0
   # Both are tiny and pure Dart. `http` backs the `package:http` Client
   # adapter and `web_socket` the official WebSocket interface, so consumers
   # can swap nitro_http in without rewriting call sites.
-  http: ^1.2.0
+  # 1.5.0 is the first release with `Abortable` / `RequestAbortedException`.
+  http: ^1.5.0
   web: ^1.1.0
   web_socket: ^1.0.0
 
@@ -45,7 +57,7 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   build_runner: ^2.4.0
-  nitro_generator: ^0.8.8
+  nitro_generator: ^0.9.0
   test: ^1.25.0
   # A local HTTP + WebSocket server for the engine's end-to-end tests, so the
   # suite never depends on the public internet.
@@ -92,9 +104,3 @@ flutter:
         ffiPlugin: true
       linux:
         ffiPlugin: true
-      # Web has no native code to build: `executor_web.dart` is selected by a
-      # conditional import and needs no registrant, so there is no plugin class
-      # for Flutter to call.
-      web:
-        pluginClass: NitroHttpWeb
-        fileName: nitro_http_web.dart

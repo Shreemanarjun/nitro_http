@@ -18,6 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 #pragma once
 
+#include <cstdlib>
 #include <curl/curl.h>
 
 #include <atomic>
@@ -51,7 +52,7 @@ enum class RespMode {
 /// `prefetch`, because that arena is released the instant the call returns.
 struct PendingRequest {
   RawRequest req;               ///< owns its strings and header vector
-  std::vector<uint8_t> body;    ///< inline body, already copied
+  RequestBody body;             ///< inline body, copied or taken over
   /// A streamed body's pipe, when the producer opened a direct writer before the
   /// loop thread picked the request up. The task adopts it rather than making
   /// its own, so nothing written early is lost.
@@ -59,6 +60,31 @@ struct PendingRequest {
   RespMode mode = RespMode::Buffered;
   int64_t dartPort = 0;
   double submittedAtMs = 0;     ///< for RawTimings::queueMs
+};
+
+/// Bytes held back to be emitted as one larger chunk. One malloc'd block, so
+/// a flush hands the block itself to Dart instead of copying it.
+class CoalesceBuffer {
+ public:
+  CoalesceBuffer() = default;
+  ~CoalesceBuffer() { ::free(data_); }
+  CoalesceBuffer(const CoalesceBuffer&) = delete;
+  CoalesceBuffer& operator=(const CoalesceBuffer&) = delete;
+
+  bool empty() const { return size_ == 0; }
+  size_t size() const { return size_; }
+
+  /// Appends `n` bytes, sizing the block for `target`. False when out of
+  /// memory.
+  bool append(const uint8_t* bytes, size_t n, size_t target);
+
+  /// Gives the block up, trimmed when it is mostly unused.
+  Blob take();
+
+ private:
+  uint8_t* data_ = nullptr;
+  size_t size_ = 0;
+  size_t capacity_ = 0;
 };
 
 class RequestTask {
@@ -229,6 +255,8 @@ class RequestTask {
 
   void emitHeadIfNeeded();
   void emitChunk(const uint8_t* data, size_t len);
+  /// As `emitChunk`, for a block the task already owns.
+  void emitPayload(Blob payload);
 
   /// Emits whatever `coalesceBuf_` is holding, if anything, and spends a credit.
   ///
@@ -241,6 +269,9 @@ class RequestTask {
   /// while Dart is busy, so a burst still costs one isolate wake without any
   /// batching here. Takes ownership of `blob`.
   void deliverBuffered(Blob blob);
+  /// Encodes and posts a buffered response, moving a large body to Dart
+  /// zero-copy. May move `response.body` out.
+  void deliverResponse(RawResponse& response);
 
   void emitTerminalChunk(const EngineError& err);
   void emitProgress(RawEventKind kind, int64_t now, int64_t total);
@@ -295,7 +326,7 @@ class RequestTask {
   bool writePaused_ = false;
 
   /// Bytes held back to be emitted as one larger chunk. See `coalesceTarget_`.
-  std::vector<uint8_t> coalesceBuf_;
+  CoalesceBuffer coalesceBuf_;
 
   /// Chunk size this transfer batches up to, or 0 to emit as bytes arrive.
   ///
@@ -319,6 +350,11 @@ class RequestTask {
   size_t coalesceTarget_ = 0;
   /// The client's coalescing settings as they stood when this request started.
   int64_t streamChunkBytes_ = -1;
+  /// Whether the client remembers Strict-Transport-Security; see
+  /// `collectTransferInfo`.
+  bool hstsEnabled_ = false;
+  /// Whether `applyUrl` gave curl a different URL than the request's.
+  bool urlRewritten_ = false;
   int64_t streamChunkMinContentLength_ = -1;
   int64_t streamChunkMaxHoldMs_ = -1;
 

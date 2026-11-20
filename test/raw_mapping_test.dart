@@ -27,7 +27,10 @@ void main() {
 
     expect(version, isNotNull);
     expect(defaultUserAgent, 'nitro_http/$version');
-    expect(File('CHANGELOG.md').readAsStringSync(), startsWith('## $version\n'));
+    // The newest released section; an `## Unreleased` one may sit above it.
+    final released = RegExp(r'^## (?!Unreleased)(\S+)$', multiLine: true)
+        .firstMatch(File('CHANGELOG.md').readAsStringSync())?[1];
+    expect(released, version);
   });
 
   group('toRawClientConfig', () {

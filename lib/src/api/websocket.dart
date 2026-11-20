@@ -271,7 +271,7 @@ final class NitroWebSocket implements WebSocket {
   @override
   void sendText(String s) {
     _requireOpen();
-    _executor.send(WsOpcode.text.wire, Uint8List.fromList(utf8.encode(s)));
+    _executor.send(WsOpcode.text.wire, utf8.encode(s));
   }
 
   @override

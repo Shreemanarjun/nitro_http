@@ -28,6 +28,10 @@ class ClientConfig {
 
   const RawClientConfig& raw() const { return raw_; }
 
+  /// Process-lifetime copy of a custom trust bundle, for `CertStore::apply`;
+  /// null when the roots are not `RootCaSource::CustomPem`.
+  const std::string* stableRootsPem() const { return stableRootsPem_; }
+
   /// Applies every client-level option to a fresh easy handle. TLS material is
   /// delegated to `CertStore`; this covers version preference, timeouts,
   /// redirects, compression, user agent, proxy, DNS, cookies and pool limits.
@@ -65,6 +69,7 @@ class ClientConfig {
   void rebuildCaches();
 
   RawClientConfig raw_;
+  const std::string* stableRootsPem_ = nullptr;
   std::vector<std::string> defaultHeaderLines_;
   struct curl_slist* resolveList_ = nullptr;
 

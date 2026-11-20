@@ -40,7 +40,7 @@ export 'src/api/client.dart';
 export 'src/api/cookies.dart';
 export 'src/api/exceptions.dart';
 export 'src/api/fetch.dart';
-export 'src/api/headers.dart';
+export 'src/api/headers.dart' hide headersFromParsedFields;
 export 'src/api/interceptor.dart';
 export 'src/api/log_interceptor.dart';
 export 'src/api/progress.dart';

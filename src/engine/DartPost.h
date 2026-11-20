@@ -46,6 +46,10 @@ bool postNull(int64_t port);
 using PostHook = std::function<bool(int64_t port, Blob blob)>;
 void setPostHook(PostHook hook);
 
+/// True while a test hook intercepts posts. Hooks decode records themselves and
+/// never adopt a detached body, so the engine keeps bodies inline for them.
+bool postHookInstalled();
+
 /// True when the Dart API DL has been initialised, i.e. posting is possible.
 /// False inside the C++ test binary, where the hook is used instead.
 bool dartPostAvailable();

@@ -106,18 +106,28 @@ class HttpHeaders {
   /// Throws [ArgumentError], because a header with a newline in it is a bug in
   /// the caller and not a transport failure.
   static void _rejectControlCharacters(String name, String value) {
-    for (final (label, text) in [('name', name), ('value', value)]) {
-      for (var i = 0; i < text.length; i++) {
-        final unit = text.codeUnitAt(i);
-        if (unit == 0x0D || unit == 0x0A || unit == 0x00) {
-          throw ArgumentError.value(
-            text,
-            'header $label',
-            'must not contain CR, LF or NUL — it would split the request',
-          );
-        }
+    _rejectIn(name, 'name');
+    _rejectIn(value, 'value');
+  }
+
+  static void _rejectIn(String text, String label) {
+    for (var i = 0; i < text.length; i++) {
+      final unit = text.codeUnitAt(i);
+      if (unit == 0x0D || unit == 0x0A || unit == 0x00) {
+        throw ArgumentError.value(
+          text,
+          'header $label',
+          'must not contain CR, LF or NUL — it would split the request',
+        );
       }
     }
+  }
+
+  /// [add] without the CR/LF/NUL scan, for fields already known to be clean:
+  /// copied from another [HttpHeaders], or parsed out of a response by libcurl.
+  void _addTrusted(String name, String value) {
+    _entries.add((name, value));
+    (_index[name.toLowerCase()] ??= <String>[]).add(value);
   }
 
   /// Removes every value for [name]. Does nothing when it is absent.
@@ -177,7 +187,13 @@ class HttpHeaders {
   bool get isNotEmpty => _entries.isNotEmpty;
 
   /// A deep copy that shares no mutable state with this collection.
-  HttpHeaders clone() => HttpHeaders.fromEntries(_entries);
+  HttpHeaders clone() {
+    final copy = HttpHeaders();
+    for (final (name, value) in _entries) {
+      copy._addTrusted(name, value);
+    }
+    return copy;
+  }
 
   /// Adds every field of [other] to this collection, keeping duplicates.
   void addAll(HttpHeaders other) {
@@ -257,4 +273,18 @@ class HttpHeaders {
     ];
     return 'HttpHeaders(${parts.join(', ')})';
   }
+}
+
+/// Builds headers from fields libcurl already parsed, without the CR/LF/NUL
+/// scan [HttpHeaders.add] runs on caller-supplied fields.
+HttpHeaders headersFromParsedFields(
+  int length,
+  String Function(int i) nameAt,
+  String Function(int i) valueAt,
+) {
+  final headers = HttpHeaders();
+  for (var i = 0; i < length; i++) {
+    headers._addTrusted(nameAt(i), valueAt(i));
+  }
+  return headers;
 }

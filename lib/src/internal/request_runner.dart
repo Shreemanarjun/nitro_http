@@ -103,10 +103,8 @@ abstract interface class UploadWriter {
   void release();
 }
 
-/// A body chunk that has already been copied out of native memory.
-///
-/// The copy is not an optimisation failure — it is the mechanism that makes the
-/// zero-copy struct safe. See the library doc.
+/// A body chunk whose bytes no longer belong to the engine: copied out of
+/// native memory, or taken over whole when the chunk is large.
 final class ChunkEvent {
   ChunkEvent({
     required this.requestId,
@@ -243,29 +241,33 @@ class RequestRunner {
   /// Merges the body's implied headers into the caller's, without overriding
   /// anything the caller set explicitly.
   HttpHeaders _headersFor(HttpRequest request, EncodedBody body) {
-    final headers = request.headers.clone();
     final contentType = body.contentType;
-    if (contentType != null && headers.contentType == null) {
-      headers.set('content-type', contentType);
+    // Copied only when a header is added: the caller's collection is never
+    // mutated.
+    if (contentType == null || request.headers.contentType != null) {
+      return request.headers;
     }
-    return headers;
+    return request.headers.clone()..set('content-type', contentType);
   }
 
   // ── Buffered path ──────────────────────────────────────────────────────────
 
-  Future<HttpResponse> send(HttpRequest request) async {
-    _checkAlive();
-    return switch (request.expectedBody) {
-      HttpExpectedBody.stream => sendStreamed(request),
-      HttpExpectedBody.text => sendBuffered(request),
-      HttpExpectedBody.bytes => sendBuffered(request),
-    };
-  }
+  // Not `async`: both targets check liveness inside their own async bodies, so
+  // a disposed runner still fails the returned Future rather than throwing.
+  Future<HttpResponse> send(HttpRequest request) =>
+      switch (request.expectedBody) {
+        HttpExpectedBody.stream => sendStreamed(request),
+        HttpExpectedBody.text => sendBuffered(request),
+        HttpExpectedBody.bytes => sendBuffered(request),
+      };
 
   Future<HttpResponse> sendBuffered(HttpRequest request) async {
     _checkAlive();
     final requestId = Ids.nextRequest();
-    final body = await encodeBody(request.body);
+    // No body: skip the await and its microtask hop.
+    final body = request.body == null
+        ? EncodedBody.none
+        : await encodeBody(request.body);
     final headers = _headersFor(request, body);
     final reportProgress =
         request.onSendProgress != null || request.onReceiveProgress != null;
@@ -305,7 +307,8 @@ class RequestRunner {
         sentBytes: body.contentLength,
       );
     } finally {
-      await eventSub?.cancel();
+      // Only progress requests have a subscription to cancel.
+      if (eventSub != null) await eventSub.cancel();
       _demux.release(requestId);
     }
   }

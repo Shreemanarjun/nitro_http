@@ -9,13 +9,61 @@ import 'dart:async';
 import 'dart:ffi';
 import 'dart:typed_data';
 
-import 'package:nitro/nitro.dart' show NitroBuffer;
+import 'package:nitro/nitro.dart'
+    show NitroBuffer, NitroConfig, NitroRuntime, nitroRegisterZeroCopyView;
 
 import '../nitro_http.native.dart';
 import 'instance_keys.dart';
 import 'native_attach.dart';
 import '../api/settings.dart';
 import 'request_runner.dart';
+
+// ── Zero-copy response bodies ────────────────────────────────────────────────
+
+/// Held for good once the first body is adopted. On Android, Linux and Windows
+/// `NitroRuntime.releaseLib` unmaps the library at refcount zero, and a body
+/// still alive after that would run a finalizer that no longer exists.
+final DynamicLibrary _pinnedLibrary = NitroRuntime.loadLib('nitro_http');
+
+final Pointer<NativeFinalizerFunction> _freePayload = () {
+  _pinnedLibrary;
+  return Pointer<NativeFinalizerFunction>.fromAddress(
+    NitroHttpNative.engine.chunkFinalizerAddress(),
+  );
+}();
+
+/// Takes [view], native memory the engine frees once it is acked, out of the
+/// engine's hands: whole when the engine offered it under [owner], by copy
+/// otherwise. Null when the engine released an offered block first, which it
+/// only does for a request or socket it has already torn down.
+Uint8List? takeNativeBytes(Uint8List view, int owner) {
+  if (owner == 0) return Uint8List.fromList(view);
+  final address = NitroHttpNative.engine.adoptChunk(owner);
+  if (address == 0) return null;
+  return Pointer<Uint8>.fromAddress(address)
+      .asTypedList(view.length, finalizer: _freePayload);
+}
+
+/// Request bodies at least this large are written straight into a block the
+/// engine keeps; below it the generated copy is as fast or faster.
+const int _ownedBodyMinBytes = 16 * 1024;
+
+// ── Completion spin ──────────────────────────────────────────────────────────
+
+/// Runs [call] with nitro's completion spin off, then restores the setting.
+/// The spin busy-waits for a result that is already there, which an HTTP
+/// response never is. nitro reads the setting when the call is made, so other
+/// nitro plugins keep their own.
+T _withoutSpin<T>(T Function() call) {
+  final cfg = NitroConfig.instance;
+  final saved = cfg.nativeAsyncSpinUs;
+  cfg.nativeAsyncSpinUs = 0;
+  try {
+    return call();
+  } finally {
+    cfg.nativeAsyncSpinUs = saved;
+  }
+}
 
 // ── Native implementations ───────────────────────────────────────────────────
 
@@ -32,13 +80,73 @@ final class NativeRequestExecutor implements RequestExecutor {
   void configureClient(RawClientConfig config) =>
       _native.configureClient(config);
 
+  /// Finalizer of every adopted body; see `bodyFinalizerAddress`.
+  late final Pointer<NativeFinalizerFunction> _freeBody = () {
+    _pinnedLibrary;
+    return Pointer<NativeFinalizerFunction>.fromAddress(
+      _native.bodyFinalizerAddress(),
+    );
+  }();
+
+  /// Takes ownership of a body the engine detached from the record (see
+  /// `RawResponse.bodyOwner`), wrapping the native bytes without copying them.
+  RawResponse _adoptBody(RawResponse r) {
+    if (r.bodyOwner == 0) return r;
+    final bytes = Pointer<Uint8>.fromAddress(r.bodyAddress).asTypedList(
+      r.bodyLength,
+      finalizer: _freeBody,
+      token: Pointer<Void>.fromAddress(r.bodyOwner),
+    );
+    return RawResponse(
+      requestId: r.requestId,
+      errorKind: r.errorKind,
+      errorMessage: r.errorMessage,
+      engineErrorCode: r.engineErrorCode,
+      statusCode: r.statusCode,
+      reasonPhrase: r.reasonPhrase,
+      version: r.version,
+      finalUrl: r.finalUrl,
+      redirectCount: r.redirectCount,
+      headers: r.headers,
+      body: bytes,
+      fromCache: r.fromCache,
+      revalidated: r.revalidated,
+      primaryIp: r.primaryIp,
+      primaryPort: r.primaryPort,
+      timings: r.timings,
+    );
+  }
+
+  /// Runs [send] with a large [body] in a block the engine keeps. The
+  /// generated call passes a registered native view by address.
+  T _withOwnedBody<T>(Uint8List body, T Function(Uint8List body) send) {
+    if (body.length < _ownedBodyMinBytes) return send(body);
+    final address = _native.allocRequestBody(body.length);
+    if (address == 0) return send(body);
+    final block = Pointer<Uint8>.fromAddress(address);
+    final view = block.asTypedList(body.length)..setAll(0, body);
+    try {
+      return send(nitroRegisterZeroCopyView(view, block.cast()));
+    } on Object {
+      // The call threw before the engine took the block.
+      _native.freeRequestBody(address);
+      rethrow;
+    }
+  }
+
   @override
   Future<RawResponse> sendBuffered(RawRequest request, Uint8List body) =>
-      _native.sendBuffered(request, body);
+      _withOwnedBody(
+        body,
+        (body) => _withoutSpin(() => _native.sendBuffered(request, body)),
+      ).then(_adoptBody);
 
   @override
   Future<RawResponseHead> startStreamed(RawRequest request, Uint8List body) =>
-      _native.startStreamed(request, body);
+      _withOwnedBody(
+        body,
+        (body) => _withoutSpin(() => _native.startStreamed(request, body)),
+      );
 
   @override
   RawResponse cachedResponse(RawRequest request) =>
@@ -154,18 +262,20 @@ final class NativeStreamDemux implements StreamDemux {
   final _eventControllers = <int, StreamController<RawEvent>>{};
 
   void _onChunk(RawChunk raw) {
-    // COPY FIRST. `raw` is a proxy over native memory whose payload is freed
-    // once we ack it; reading it later would be a use-after-free.
-    final event = ChunkEvent(
-      requestId: raw.requestId,
-      kind: raw.kind,
-      aux: raw.aux,
-      bytes: Uint8List.fromList(raw.bytes),
+    final c = _chunkControllers[raw.requestId];
+    // A cancelled request's tail can arrive after its controller is gone.
+    // The engine frees it.
+    if (c == null || c.isClosed) return;
+    final bytes = takeNativeBytes(raw.bytes, raw.owner);
+    if (bytes == null) return;
+    c.add(
+      ChunkEvent(
+        requestId: raw.requestId,
+        kind: raw.kind,
+        aux: raw.aux,
+        bytes: bytes,
+      ),
     );
-    final c = _chunkControllers[event.requestId];
-    // An unknown id is not an error: a cancelled request's tail can still be
-    // in flight when its controller is already gone.
-    if (c != null && !c.isClosed) c.add(event);
   }
 
   void _onEvent(RawEvent raw) {

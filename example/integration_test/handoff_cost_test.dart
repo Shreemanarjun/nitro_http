@@ -114,5 +114,23 @@ void main() {
     );
 
     expect(h, greaterThan(0));
+
+    // 3. The same empty round trip with several in flight at once. If
+    // completions share a wake, the cost per request falls with the width.
+    final perRequest = <String>[];
+    for (final width in const [1, 4, 16, 64]) {
+      final rounds = <int>[];
+      for (var i = 0; i < 400; i++) {
+        final sw = Stopwatch()..start();
+        await Future.wait([for (var j = 0; j < width; j++) emptyRoundTrip()]);
+        sw.stop();
+        if (i >= 100) rounds.add(sw.elapsedMicroseconds);
+      }
+      perRequest.add(
+        'x$width ${(_median(rounds) / width).toStringAsFixed(1)}',
+      );
+    }
+    // ignore: avoid_print
+    print('HANDOFF_CONCURRENT us per request — ${perRequest.join(' | ')}');
   });
 }

@@ -12,13 +12,25 @@ plugins {
 group = "dev.shreeman.nitro_http"
 version = "1.0"
 
-android {
-    kotlinOptions { jvmTarget = "17" }
-    sourceSets {
-        main {
-            kotlin.srcDirs += "${project.projectDir}/../lib/src/generated/kotlin"
+// Kotlin settings apply only where the Kotlin plugin is: Flutter applies it to
+// every plugin, DartNative doesn't. Calling `kotlinOptions` without it aborts
+// this script before `compileSdk` is read, which surfaces as "does not specify
+// compileSdk" plus NullPointerExceptions in the host's plugin loader.
+// `withPlugin` runs whether Kotlin is applied before or after this script.
+// The engine is reached over dart:ffi, never JNI, so a build without Kotlin
+// (and so without the generated Kotlin bridge) loses nothing at runtime.
+pluginManager.withPlugin("org.jetbrains.kotlin.android") {
+    android {
+        kotlinOptions { jvmTarget = "17" }
+        sourceSets {
+            main {
+                kotlin.srcDirs += "${project.projectDir}/../lib/src/generated/kotlin"
+            }
         }
     }
+}
+
+android {
     namespace = "dev.shreeman.nitro_http"
     compileSdk = 36
     ndkVersion = "27.0.12077973"

@@ -399,6 +399,12 @@ TEST(ParseHeaderLine, SplitsAndTrims) {
   EXPECT_EQ(name, "X-Trailing");
   EXPECT_EQ(value, "spaced");
 
+  // A bare CR or a NUL inside a value must not survive to be forwarded.
+  ASSERT_TRUE(parseHeaderLine(std::string("X-Split: a\rInjected: b\0c\r\n", 26),
+                              &name, &value));
+  EXPECT_EQ(name, "X-Split");
+  EXPECT_EQ(value, "a Injected: b c");
+
   ASSERT_TRUE(parseHeaderLine("Tight:value", &name, &value));
   EXPECT_EQ(name, "Tight");
   EXPECT_EQ(value, "value");

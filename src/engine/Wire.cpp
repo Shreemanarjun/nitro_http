@@ -10,6 +10,8 @@
 
 #include "Wire.h"
 
+#include <cstdlib>
+
 namespace nitrohttp::wire {
 namespace {
 
@@ -59,6 +61,20 @@ RawWsConfig decodeWsConfig(NitroCppBuffer buf) {
 // ── Encoding ─────────────────────────────────────────────────────────────────
 
 Blob encodeResponse(const RawResponse& v) { return adopt(v.toNativeBuffer()); }
+
+Blob encodeResponse(RawResponse& v, DetachedBody* detached) {
+  // Moving the vector out hands Dart the bytes libcurl already wrote, instead
+  // of copying them into the record.
+  if (detached != nullptr && v.body.size() >= kDetachBodyMinBytes) {
+    auto owned = std::make_unique<std::vector<uint8_t>>(std::move(v.body));
+    v.body.clear();
+    v.bodyAddress = static_cast<int64_t>(reinterpret_cast<intptr_t>(owned->data()));
+    v.bodyLength = static_cast<int64_t>(owned->size());
+    v.bodyOwner = static_cast<int64_t>(reinterpret_cast<intptr_t>(owned.get()));
+    *detached = std::move(owned);
+  }
+  return encodeResponse(static_cast<const RawResponse&>(v));
+}
 
 Blob encodeResponseHead(const RawResponseHead& v) {
   return adopt(v.toNativeBuffer());
@@ -189,5 +205,11 @@ bool methodIsBodyless(const RawRequest& req) {
          asciiEqualIgnoreCase(token, "TRACE") ||
          asciiEqualIgnoreCase(token, "DELETE");
 }
+
+void freeDetachedBody(void* owner) {
+  delete static_cast<std::vector<uint8_t>*>(owner);
+}
+
+void freeAdoptedChunk(void* payload) { ::free(payload); }
 
 }  // namespace nitrohttp::wire

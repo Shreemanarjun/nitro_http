@@ -54,8 +54,17 @@ class CertStore {
   /// Returns non-ok only for material this build cannot use at all — malformed
   /// PEM, a pin that is not valid base64, or a TLS version the linked backend
   /// does not know. Unsupported-but-ignorable settings emit a notice instead.
+  /// [stableRootsPem], when given, is a process-lifetime copy of
+  /// `tls.trustedRootsPem` (see `internPem`): curl then borrows it instead of
+  /// copying a custom trust bundle into the handle on every request.
   static EngineError apply(CURL* easy, const RawTlsConfig& tls,
-                           const std::string& pinOverride);
+                           const std::string& pinOverride,
+                           const std::string* stableRootsPem = nullptr);
+
+  /// One immortal copy per distinct [pem]. Called when a client is configured,
+  /// never per request. Bounded by the number of distinct custom bundles an
+  /// app installs, which in practice is one or two.
+  static const std::string* internPem(const std::string& pem);
 
   /// Platform trust as a PEM bundle, loaded once and cached. Empty when the
   /// platform is served by a verify callback (Apple) or by curl itself

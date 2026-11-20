@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "CertStore.h"
 #include "Wire.h"
 
 namespace nitrohttp {
@@ -126,6 +127,12 @@ ClientConfig::~ClientConfig() {
 void ClientConfig::set(const RawClientConfig& cfg) {
   raw_ = cfg;
   rebuildCaches();
+  stableRootsPem_ =
+      static_cast<RootCaSource>(raw_.tls.rootCaSource) ==
+                  RootCaSource::CustomPem &&
+              !raw_.tls.trustedRootsPem.empty()
+          ? CertStore::internPem(raw_.tls.trustedRootsPem)
+          : nullptr;
 
   const bool wantsHttp3 =
       raw_.httpVersion == RawHttpVersionPref::RAWHTTPVERSIONPREF_HTTP3 ||

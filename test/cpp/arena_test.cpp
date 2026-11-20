@@ -860,3 +860,42 @@ TEST_F(DeferredPayloadsTest, AdoptingTwiceAppendsToTheSameBucket) {
   deferred.ack(PayloadOwner::Request, 1, 2);
   EXPECT_EQ(deferred.liveBytes(), 10u);
 }
+
+// ─── Payloads offered to Dart ────────────────────────────────────────────────
+
+TEST(OfferedPayload, AnAdoptedBlockIsNotFreedByItsArena) {
+  ChunkArena arena;
+  Blob blob = mkBlob(64, 'x');
+  uint8_t* block = blob.data;
+  offerPayload(&blob);
+  ASSERT_NE(blob.offer, 0u);
+  arena.track(0, blob);
+
+  EXPECT_EQ(adoptPayload(blob.offer), block);
+  // The arena's entry is stale now. Under AddressSanitizer a free here is a
+  // double free against the one below.
+  arena.ack(1);
+  EXPECT_EQ(arena.liveCount(), 0u);
+  EXPECT_EQ(block[63], 'x');
+  ::free(block);
+}
+
+TEST(OfferedPayload, AReleasedBlockCannotBeAdopted) {
+  ChunkArena arena;
+  Blob blob = mkBlob(64, 'y');
+  offerPayload(&blob);
+  const uint64_t offer = blob.offer;
+  arena.track(0, blob);
+  arena.releaseAll();
+
+  EXPECT_EQ(adoptPayload(offer), nullptr);
+}
+
+TEST(OfferedPayload, AnOfferIsAdoptedOnce) {
+  Blob blob = mkBlob(64, 'z');
+  offerPayload(&blob);
+  void* block = adoptPayload(blob.offer);
+  ASSERT_NE(block, nullptr);
+  EXPECT_EQ(adoptPayload(blob.offer), nullptr);
+  ::free(block);
+}

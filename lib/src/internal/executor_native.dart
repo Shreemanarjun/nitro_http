@@ -25,6 +25,15 @@ import 'request_runner.dart';
 /// still alive after that would run a finalizer that no longer exists.
 final DynamicLibrary _pinnedLibrary = NitroRuntime.loadLib('nitro_http');
 
+/// Finalizer of every adopted response body; see `bodyFinalizerAddress`.
+final Pointer<NativeFinalizerFunction> _freeBody = () {
+  _pinnedLibrary;
+  return Pointer<NativeFinalizerFunction>.fromAddress(
+    NitroHttpNative.engine.bodyFinalizerAddress(),
+  );
+}();
+
+/// Finalizer of every adopted chunk and frame; see `chunkFinalizerAddress`.
 final Pointer<NativeFinalizerFunction> _freePayload = () {
   _pinnedLibrary;
   return Pointer<NativeFinalizerFunction>.fromAddress(
@@ -50,18 +59,25 @@ const int _ownedBodyMinBytes = 16 * 1024;
 
 // ── Completion spin ──────────────────────────────────────────────────────────
 
-/// Runs [call] with nitro's completion spin off, then restores the setting.
-/// The spin busy-waits for a result that is already there, which an HTTP
-/// response never is. nitro reads the setting when the call is made, so other
+/// Runs [call] with nitro's completion spin and completion timeout off, then
+/// restores both. The spin busy-waits for a result that is already there,
+/// which an HTTP response never is. A nitro timeout would drop a late response
+/// unread, leaking a body Dart was handed; the engine enforces the request's
+/// own timeouts instead. nitro reads both when the call is made, so other
 /// nitro plugins keep their own.
 T _withoutSpin<T>(T Function() call) {
   final cfg = NitroConfig.instance;
-  final saved = cfg.nativeAsyncSpinUs;
-  cfg.nativeAsyncSpinUs = 0;
+  final spin = cfg.nativeAsyncSpinUs;
+  final timeout = cfg.nativeAsyncTimeoutMs;
+  cfg
+    ..nativeAsyncSpinUs = 0
+    ..nativeAsyncTimeoutMs = 0;
   try {
     return call();
   } finally {
-    cfg.nativeAsyncSpinUs = saved;
+    cfg
+      ..nativeAsyncSpinUs = spin
+      ..nativeAsyncTimeoutMs = timeout;
   }
 }
 
@@ -80,14 +96,6 @@ final class NativeRequestExecutor implements RequestExecutor {
   void configureClient(RawClientConfig config) =>
       _native.configureClient(config);
 
-  /// Finalizer of every adopted body; see `bodyFinalizerAddress`.
-  late final Pointer<NativeFinalizerFunction> _freeBody = () {
-    _pinnedLibrary;
-    return Pointer<NativeFinalizerFunction>.fromAddress(
-      _native.bodyFinalizerAddress(),
-    );
-  }();
-
   /// Takes ownership of a body the engine detached from the record (see
   /// `RawResponse.bodyOwner`), wrapping the native bytes without copying them.
   RawResponse _adoptBody(RawResponse r) {
@@ -97,6 +105,9 @@ final class NativeRequestExecutor implements RequestExecutor {
       finalizer: _freeBody,
       token: Pointer<Void>.fromAddress(r.bodyOwner),
     );
+    // Every field but the three that described the detached body, which this
+    // list now owns. test/adopt_body_fields_test.dart fails when a field is
+    // added to RawResponse and not here.
     return RawResponse(
       requestId: r.requestId,
       errorKind: r.errorKind,
@@ -119,17 +130,25 @@ final class NativeRequestExecutor implements RequestExecutor {
 
   /// Runs [send] with a large [body] in a block the engine keeps. The
   /// generated call passes a registered native view by address.
-  T _withOwnedBody<T>(Uint8List body, T Function(Uint8List body) send) {
+  Future<T> _withOwnedBody<T>(
+    Uint8List body,
+    Future<T> Function(Uint8List body) send,
+  ) {
     if (body.length < _ownedBodyMinBytes) return send(body);
     final address = _native.allocRequestBody(body.length);
     if (address == 0) return send(body);
     final block = Pointer<Uint8>.fromAddress(address);
     final view = block.asTypedList(body.length)..setAll(0, body);
+    // The bridge can fail a call without ever reaching the engine, so the
+    // block is released on every outcome; once a request took it this frees
+    // nothing.
+    void release() => _native.freeRequestBody(address);
     try {
-      return send(nitroRegisterZeroCopyView(view, block.cast()));
+      return send(
+        nitroRegisterZeroCopyView(view, block.cast()),
+      ).whenComplete(release);
     } on Object {
-      // The call threw before the engine took the block.
-      _native.freeRequestBody(address);
+      release();
       rethrow;
     }
   }

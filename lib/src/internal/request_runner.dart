@@ -9,11 +9,12 @@
 ///   [NativeStreamDemux] therefore holds exactly one subscription per stream for
 ///   the whole process and fans out by `requestId`.
 ///
-/// * **Eager copy, then ack.** `nitro_http_release_RawChunk` frees only the
-///   struct shell; the payload stays native-owned. The demux copies each
-///   chunk's bytes the moment it arrives, and the runner reports the cumulative
-///   copied count back through `grantCredit(id, credits, acked)`, which is what
-///   lets native free those payloads without ever racing a Dart read.
+/// * **Take, then ack.** `nitro_http_release_RawChunk` frees only the struct
+///   shell; the payload stays native-owned. The demux takes each chunk's bytes
+///   the moment it arrives — a large chunk whole, freed later by its finalizer,
+///   a small one by copy — and the runner reports the cumulative count back
+///   through `grantCredit(id, credits, acked)`, which is what lets native free
+///   the copied payloads without ever racing a Dart read.
 ///
 /// * **Credit loop.** Native emits at most `credits` chunks then returns
 ///   `CURL_WRITEFUNC_PAUSE`, closing the TCP window. Consumer backpressure —
@@ -361,12 +362,9 @@ class RequestRunner {
       timings: response.timings,
     );
 
-    // NOT copied: the generated record decoder builds this with `sublist`, so it
-    // is already a fresh Dart-owned `Uint8List` and a second copy bought nothing.
-    // Removing it did not move the wall clock on a 32 MiB body (437 ms either
-    // way) — the buffered path is bounded by the record codec's own passes over
-    // the payload — but it does halve this step's peak footprint, which for a
-    // large response is the difference between holding it once and twice.
+    // Not copied: a small body is a fresh Dart-owned `Uint8List` from the
+    // record decoder, and a large one is native memory the executor adopted
+    // with a finalizer. Either way it is the response's own.
     final bytes = response.body;
 
     // Progress events are lossy by design, so the terminal values are

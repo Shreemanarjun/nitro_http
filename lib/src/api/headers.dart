@@ -91,8 +91,7 @@ class HttpHeaders {
   /// Appends [value] under [name], keeping any values already present.
   void add(String name, String value) {
     _rejectControlCharacters(name, value);
-    _entries.add((name, value));
-    (_index[name.toLowerCase()] ??= <String>[]).add(value);
+    _addTrusted(name, value);
   }
 
   /// Rejects the characters that would end the header line early.

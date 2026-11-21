@@ -120,28 +120,30 @@ final class NativeWsExecutor implements WsExecutor {
 }
 
 /// Takes a frame's payload out of native memory, or returns null when it is
-/// already gone. A copy here; the native build installs one that takes large
-/// payloads over whole, which needs `dart:ffi` and so cannot live in this file.
-Uint8List? Function(RawWsFrame raw) takeWsPayload =
-    (raw) => Uint8List.fromList(raw.payload);
+/// already gone.
+typedef WsPayloadTaker = Uint8List? Function(RawWsFrame raw);
 
 /// Exactly one instance, exactly one subscription to `wsFrames`.
 final class NativeWsFrameDemux implements WsFrameDemux {
-  NativeWsFrameDemux._() {
+  NativeWsFrameDemux._(this._take) {
     _sub = NitroHttpNative.engine.wsFrames.listen(_onFrame);
   }
 
   static NativeWsFrameDemux? _instance;
 
-  static NativeWsFrameDemux get instance =>
-      _instance ??= NativeWsFrameDemux._();
+  /// The one demux. [take] needs `dart:ffi`, which this file must not import,
+  /// so the native build passes it in; only the first call's is used.
+  static NativeWsFrameDemux instance(WsPayloadTaker take) =>
+      _instance ??= NativeWsFrameDemux._(take);
+
+  final WsPayloadTaker _take;
 
   late final StreamSubscription<RawWsFrame> _sub;
   final _controllers = <int, StreamController<WsFrameEvent>>{};
 
   void _onFrame(RawWsFrame raw) {
     // The payload is native-owned until we ack it, so it is taken first.
-    final payload = takeWsPayload(raw);
+    final payload = _take(raw);
     if (payload == null) return;
     final event = WsFrameEvent(
       socketId: raw.socketId,

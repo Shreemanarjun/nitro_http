@@ -8,7 +8,5 @@ import 'ws_runner.dart';
 WsExecutor defaultWsExecutor(int socketId) => NativeWsExecutor(socketId);
 
 /// The frame demux a caller gets on a native platform.
-WsFrameDemux get defaultWsDemux {
-  takeWsPayload = (raw) => takeNativeBytes(raw.payload, raw.owner);
-  return NativeWsFrameDemux.instance;
-}
+WsFrameDemux get defaultWsDemux =>
+    NativeWsFrameDemux.instance((raw) => takeNativeBytes(raw.payload, raw.owner));

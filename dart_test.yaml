@@ -1,0 +1,5 @@
+# Benchmark probes time things and assert little; run them on request only:
+#   flutter test --run-skipped test/<probe>_test.dart
+tags:
+  benchmark:
+    skip: "benchmark probe; run with --run-skipped"

@@ -81,7 +81,10 @@ int main(int argc, char** argv) {
     if (fd < 0) continue;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
     pthread_t thread;
-    pthread_create(&thread, NULL, serve, (void*)(long)fd);
+    if (pthread_create(&thread, NULL, serve, (void*)(long)fd) != 0) {
+      close(fd);
+      continue;
+    }
     pthread_detach(thread);
   }
 }

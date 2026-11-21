@@ -39,8 +39,9 @@ if [ -z "$DEVICE" ]; then
 fi
 [ -n "$DEVICE" ] || { echo "no paired iPhone"; exit 1; }
 
+RUN_ID="$(basename "$OUT")"
 DEFINES=(--dart-define=NITRO_HTTP_BENCHMARK=1 --dart-define=BENCH_PROBE=remote
-         "--dart-define=BENCH_REMOTE_URL=$URL")
+         "--dart-define=BENCH_REMOTE_URL=$URL" "--dart-define=BENCH_RUN_ID=$RUN_ID")
 for name in BENCH_REMOTE_BURST BENCH_REMOTE_BURSTS BENCH_REMOTE_SERIAL \
             BENCH_REMOTE_COLD_BURSTS BENCH_REMOTE_PIN; do
   [ -n "${!name:-}" ] && DEFINES+=("--dart-define=$name=${!name}")
@@ -66,8 +67,7 @@ pull() {  # $1 = destination
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --user mobile --source "$REPORT" --destination "$1" >/dev/null 2>&1
 }
-# The previous run's report is still on the device; wait for a different one.
-pull "$OUT/before.md"
+# The previous run's report is still on the device; wait for this run's.
 
 echo "==> running"
 xcrun devicectl device process launch --device "$DEVICE" --terminate-existing "$BUNDLE_ID" \
@@ -75,8 +75,8 @@ xcrun devicectl device process launch --device "$DEVICE" --terminate-existing "$
 for _ in $(seq 1 90); do
   sleep 4
   pull "$OUT/report.tmp"
-  if grep -q "NITRO_BENCH_END\|NITRO_BENCH_FAIL" "$OUT/report.tmp" 2>/dev/null &&
-     ! cmp -s "$OUT/report.tmp" "$OUT/before.md"; then
+  if grep -qx "run: $RUN_ID" "$OUT/report.tmp" 2>/dev/null &&
+     grep -q "NITRO_BENCH_END\|NITRO_BENCH_FAIL" "$OUT/report.tmp"; then
     mv "$OUT/report.tmp" "$OUT/report.md"
     grep -v "NITRO_BENCH_END\|NITRO_BENCH_FAIL" "$OUT/report.md"
     grep -q "NITRO_BENCH_END" "$OUT/report.md"

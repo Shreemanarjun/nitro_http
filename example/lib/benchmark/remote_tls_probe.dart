@@ -60,6 +60,14 @@ List<String> _rotated(List<String> names, int round) => [
 /// One line per client: negotiated protocol, median serial GET and median
 /// time for a burst of [_burst] GETs of [resource], in milliseconds.
 Future<List<String>> runRemoteTlsProbe(String resource) async {
+  for (final (name, count) in [
+    ('BENCH_REMOTE_BURST', _burst),
+    ('BENCH_REMOTE_BURSTS', _bursts),
+    ('BENCH_REMOTE_SERIAL', _serial),
+    ('BENCH_REMOTE_COLD_BURSTS', _coldBursts),
+  ]) {
+    if (count < 1) throw ArgumentError.value(count, name, 'must be at least 1');
+  }
   final url = Uri.parse(resource);
   final selfSigned = InternetAddress.tryParse(url.host) != null;
   NitroHttpClient nitro(HttpVersionPref pref) => NitroHttpClient(

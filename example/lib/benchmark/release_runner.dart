@@ -249,10 +249,20 @@ Future<void> runReleaseBenchmark() async {
         lines = ['PROBE failed: $error'];
         exitCode = 1;
       }
-      final dir = await getApplicationDocumentsDirectory();
-      await File('${dir.path}/$reportFileName').writeAsString(
-        [...lines, if (exitCode == 0) endMarker else failMarker].join('\n'),
-      );
+      try {
+        final dir = await getApplicationDocumentsDirectory();
+        await File('${dir.path}/$reportFileName').writeAsString(
+          [
+            // Lets a harness tell this run's report from the previous one's.
+            'run: ${const String.fromEnvironment('BENCH_RUN_ID')}',
+            ...lines,
+            if (exitCode == 0) endMarker else failMarker,
+          ].join('\n'),
+        );
+      } on Object catch (error) {
+        _emit('$failMarker could not write the report file: $error');
+        exitCode = 1;
+      }
     } finally {
       await _quit();
     }

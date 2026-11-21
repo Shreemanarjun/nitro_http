@@ -25,14 +25,6 @@ import 'request_runner.dart';
 /// still alive after that would run a finalizer that no longer exists.
 final DynamicLibrary _pinnedLibrary = NitroRuntime.loadLib('nitro_http');
 
-/// Finalizer of every adopted response body; see `bodyFinalizerAddress`.
-final Pointer<NativeFinalizerFunction> _freeBody = () {
-  _pinnedLibrary;
-  return Pointer<NativeFinalizerFunction>.fromAddress(
-    NitroHttpNative.engine.bodyFinalizerAddress(),
-  );
-}();
-
 /// Finalizer of every adopted chunk and frame; see `chunkFinalizerAddress`.
 final Pointer<NativeFinalizerFunction> _freePayload = () {
   _pinnedLibrary;
@@ -95,6 +87,17 @@ final class NativeRequestExecutor implements RequestExecutor {
   @override
   void configureClient(RawClientConfig config) =>
       _native.configureClient(config);
+
+  /// Finalizer of every adopted body; see `bodyFinalizerAddress`. Asked of
+  /// this client's instance: the `engine` instance owns the stream emitter,
+  /// and creating it from a background isolate would take the streams away
+  /// from the root isolate.
+  late final Pointer<NativeFinalizerFunction> _freeBody = () {
+    _pinnedLibrary;
+    return Pointer<NativeFinalizerFunction>.fromAddress(
+      _native.bodyFinalizerAddress(),
+    );
+  }();
 
   /// Takes ownership of a body the engine detached from the record (see
   /// `RawResponse.bodyOwner`), wrapping the native bytes without copying them.

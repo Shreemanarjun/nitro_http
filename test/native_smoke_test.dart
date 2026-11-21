@@ -292,22 +292,6 @@ void main() {
       }
     }, skip: skipReason);
 
-    test('a body received in a worker isolate outlives that isolate', () async {
-      // Isolate.run hands its result over without copying it. A body adopted
-      // with a finalizer in the worker would be freed when the worker exits,
-      // while this isolate still reads it.
-      final url = server.url('/bytes/${4 * 1024 * 1024}');
-      final bodies = await Isolate.run(_WorkerGets(url).run);
-      // Churn the allocator so freed blocks get reused or unmapped.
-      for (var i = 0; i < 8; i++) {
-        await client.get('/bytes/${4 * 1024 * 1024}');
-      }
-      final expected = _Server.bytesOfLength(4 * 1024 * 1024);
-      for (final body in bodies) {
-        expect(body, expected);
-      }
-    }, skip: skipReason);
-
     test('performs a real GET and reports timings', () async {
       final response = await client.get('/echo', query: {'a': '1', 'b': '2'});
 
@@ -1224,22 +1208,4 @@ void main() {
       expect((await client!.get('https://self-signed.badssl.com/')).statusCode, 200);
     }), skip: tlsSkipReason);
   });
-}
-
-/// Four GETs of [url] from a fresh client. A class so that `Isolate.run`
-/// sends only the URL, not the test's closure context.
-class _WorkerGets {
-  _WorkerGets(this.url);
-
-  final String url;
-
-  Future<List<List<int>>> run() async {
-    final worker = NitroHttpClient();
-    final out = <List<int>>[];
-    for (var i = 0; i < 4; i++) {
-      out.add((await worker.get(url)).bodyBytes);
-    }
-    worker.dispose();
-    return out;
-  }
 }

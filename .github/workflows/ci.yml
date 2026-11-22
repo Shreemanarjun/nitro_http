@@ -38,7 +38,7 @@ concurrency:
 jobs:
   analyze:
     name: analyze + tests + coverage floor
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -85,7 +85,7 @@ jobs:
   # regeneration will silently destroy.
   codegen:
     name: nitrogen generate + link are no-ops
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -151,7 +151,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: [ubuntu-26.04, macos-26]
     steps:
       - uses: actions/checkout@v4
 
@@ -189,7 +189,7 @@ jobs:
   # a Rust crate — hence the toolchain step on every example job.
   linux:
     name: example linux (system libcurl)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -216,7 +216,7 @@ jobs:
 
   macos:
     name: macos — unit (vendored engine) + example + integration
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -268,7 +268,7 @@ jobs:
 
   windows:
     name: example windows (vendored slice)
-    runs-on: windows-2022
+    runs-on: windows-2025
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -320,7 +320,7 @@ jobs:
   # ── Example app: mobile platforms, vendored slice built in-job ─────────────
   android:
     name: example android (vendored slice)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -369,7 +369,7 @@ jobs:
 
   ios:
     name: example ios (vendored xcframework)
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -425,7 +425,7 @@ jobs:
   # all, so nothing stopped a change landing in an untested path.
   cpp-coverage:
     name: C++ engine coverage floor
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4

@@ -42,7 +42,7 @@ jobs:
   # ── Android: three ABIs, cross-compiled from x86_64 Linux with NDK r27 ──────
   android:
     name: android-${{ matrix.abi }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -94,10 +94,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
+          - runner: ubuntu-26.04
             arch: x64
             slice: linux-x64
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-26.04-arm
             arch: arm64
             slice: linux-arm64
     steps:
@@ -124,7 +124,7 @@ jobs:
   # separately and combined afterwards with lipo + xcodebuild.
   apple:
     name: apple-xcframework
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
@@ -161,7 +161,7 @@ jobs:
   # in build.ps1 once a runner exists.
   windows:
     name: windows-x64
-    runs-on: windows-2022
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
 
@@ -199,7 +199,7 @@ jobs:
     name: release ${{ github.ref_name }}
     needs: [android, linux, apple, windows]
     if: startsWith(github.ref, 'refs/tags/deps-v')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:

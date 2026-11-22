@@ -27,7 +27,7 @@ permissions:
 jobs:
   compare-macos:
     name: nitro_http vs URLSession (macOS, Apple silicon)
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4

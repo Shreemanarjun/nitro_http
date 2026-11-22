@@ -15,7 +15,7 @@
 * **Fewer copies**: response bodies, streamed chunks and WebSocket frames of
   8 KiB or more reach Dart without a copy; in-memory request bodies of 16 KiB
   or more are copied once; JSON bodies are encoded straight to bytes.
-* Upgraded to **`nitro` 0.9.0**. No API change.
+* Upgraded to **`nitro` 0.9.1**. No API change.
 
 ### Fixed
 
@@ -24,8 +24,8 @@
 * A response body received in a background isolate stays valid after that
   isolate exits.
 * `http` lower bound raised to `^1.5.0`, the first release with `Abortable`.
-* The Dart SDK floor is `^3.11.3` (was `^3.12.2`), so older Flutter stable
-  releases can use the package.
+* The Dart SDK floor is `^3.7.0` (was `^3.12.2`), so Flutter 3.29 and newer
+  can use the package.
 
 ## 0.0.7
 

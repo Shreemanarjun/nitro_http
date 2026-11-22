@@ -368,7 +368,20 @@ class NitroHttpClient {
   // ── The one path everything funnels through ────────────────────────────────
 
   /// Runs [request] through the interceptor chain and the retry policy.
-  Future<HttpResponse> request(HttpRequest request) async {
+  Future<HttpResponse> request(HttpRequest request) {
+    // Nothing can rewrite, answer or repeat the call, so skip the chain.
+    if (_interceptors.isEmpty && _retryPolicy == null) {
+      try {
+        _checkAlive();
+      } catch (error, stackTrace) {
+        return Future.error(error, stackTrace);
+      }
+      return _runner.send(request);
+    }
+    return _requestThroughChain(request);
+  }
+
+  Future<HttpResponse> _requestThroughChain(HttpRequest request) async {
     _checkAlive();
 
     var attempt = 0;

@@ -156,7 +156,7 @@ RawClientConfig toRawClientConfig(ClientSettings s) {
 
 /// Sent unless the caller overrides it. Naming the engine makes server-side
 /// debugging of a native-transport client dramatically easier.
-const String defaultUserAgent = 'nitro_http/0.0.7';
+const String defaultUserAgent = 'nitro_http/0.0.8';
 
 RawCacheConfig toRawCacheConfig(HttpCacheConfig c) => RawCacheConfig(
   enabled: c.enabled,
@@ -288,7 +288,7 @@ Future<EncodedBody> encodeBody(HttpBody? body) async {
       return EncodedBody.none;
 
     case HttpTextBody(:final text, :final contentType):
-      final bytes = Uint8List.fromList(utf8.encode(text));
+      final bytes = utf8.encode(text);
       return EncodedBody(
         kind: RawBodyKind.bytes,
         bytes: bytes,
@@ -297,7 +297,10 @@ Future<EncodedBody> encodeBody(HttpBody? body) async {
       );
 
     case HttpJsonBody(:final json):
-      final bytes = Uint8List.fromList(utf8.encode(jsonEncode(json)));
+      final encoded = _jsonToUtf8.convert(json);
+      final bytes = encoded is Uint8List
+          ? encoded
+          : Uint8List.fromList(encoded);
       return EncodedBody(
         kind: RawBodyKind.bytes,
         bytes: bytes,
@@ -314,7 +317,7 @@ Future<EncodedBody> encodeBody(HttpBody? body) async {
       );
 
     case HttpFormBody(:final fields):
-      final bytes = Uint8List.fromList(utf8.encode(encodeFormFields(fields)));
+      final bytes = utf8.encode(encodeFormFields(fields));
       return EncodedBody(
         kind: RawBodyKind.bytes,
         bytes: bytes,
@@ -398,13 +401,11 @@ HttpVersion fromRawVersion(RawHttpVersion v) => switch (v) {
   RawHttpVersion.http3 => HttpVersion.http3,
 };
 
-HttpHeaders fromRawHeaders(List<RawHeader> headers) {
-  final h = HttpHeaders();
-  for (final raw in headers) {
-    h.add(raw.name, raw.value);
-  }
-  return h;
-}
+HttpHeaders fromRawHeaders(List<RawHeader> headers) => headersFromParsedFields(
+  headers.length,
+  (i) => headers[i].name,
+  (i) => headers[i].value,
+);
 
 Duration _dur(double ms) =>
     Duration(microseconds: (ms * 1000).isFinite ? (ms * 1000).round() : 0);
@@ -419,11 +420,16 @@ HttpTimings fromRawTimings(RawTimings t) => HttpTimings(
   total: _dur(t.totalMs),
 );
 
+/// Straight to UTF-8, without the intermediate `String` of `jsonEncode`.
+final JsonUtf8Encoder _jsonToUtf8 = JsonUtf8Encoder();
+
 /// Parsed URL of the final hop. Falls back to the request URL when the engine
 /// reported something unparseable, because a response object with a broken
 /// `finalUrl` is worse than a slightly stale one.
 Uri _finalUri(String finalUrl, Uri fallback) {
-  if (finalUrl.isEmpty) return fallback;
+  // The engine sends no URL when it is the request's; the web executor and a
+  // cached response send the request's own. Either way reuse the parsed one.
+  if (finalUrl.isEmpty || finalUrl == fallback.toString()) return fallback;
   return Uri.tryParse(finalUrl) ?? fallback;
 }
 

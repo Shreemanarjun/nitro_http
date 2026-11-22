@@ -242,6 +242,16 @@ class CurlEngine {
   std::mutex inboxMtx_;
   std::deque<Op> inbox_;
 
+  /// True only while the loop thread is about to block, or is blocked, in
+  /// `curl_multi_poll` with a non-zero timeout. `push` wakes it only then: a
+  /// spinning loop (see `kSpinWindow`) drains the inbox on its next pass.
+  std::atomic<bool> loopMayBlock_{false};
+
+  /// Bumped by `configure`; the loop re-applies the multi-handle options only
+  /// when it changes.
+  std::atomic<uint64_t> configGen_{1};
+  uint64_t appliedConfigGen_ = 0;  // loop thread only
+
   /// Guards `config_` and `cookies_`. Separate from `inboxMtx_` so that setting
   /// a transfer up, which reads both, does not hold the mutex the Dart isolate
   /// needs for every submit and upload write. Never held together with it.

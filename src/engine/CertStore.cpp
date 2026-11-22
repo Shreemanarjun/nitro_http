@@ -9,11 +9,30 @@
 #include "CertStore.h"
 
 #include <cctype>
+#include <climits>
 #include <mutex>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "Wire.h"
+
+// Only a vendored slice ships the TLS library's headers, and its BoringSSL
+// exports every symbol under the prefix set in tool/deps/CMakeLists.txt.
+#if defined(__has_include) && __has_include(<openssl/prefix_symbols.h>)
+#define NITRO_HTTP_SHARES_TRUST_STORE 1
+#ifndef BORINGSSL_PREFIX
+#define BORINGSSL_PREFIX NH
+#endif
+#include <openssl/bio.h>
+#include <openssl/err.h>
+#include <openssl/pem.h>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+#else
+#define NITRO_HTTP_SHARES_TRUST_STORE 0
+#endif
 
 // Only the bundle-scanning platforms need filesystem access; keeping the
 // includes with the code they serve means an Apple build compiles neither.
@@ -121,16 +140,146 @@ bool readTrustFile(const std::string& path, std::string* out) {
 
 #endif  // NITRO_HTTP_SCANS_TRUST_FILES
 
-/// Installs a CA bundle. `ownedByProcess` selects `CURL_BLOB_NOCOPY` for the
-/// function-local statics that outlive every handle — the bundle is ~180 KB and
-/// copying it per request is pure waste. Returns false when this libcurl has no
+#if NITRO_HTTP_SHARES_TRUST_STORE
+
+/// A root list parsed once for the whole process. curl parses a
+/// `CURLOPT_CAINFO_BLOB` again on every new connection, so a handle gets
+/// `store` through the SSL-context callback instead, and `identity` as its
+/// blob: one certificate plus a tag unique to the list. curl compares the blob
+/// before it reuses a connection or a TLS session, so two root lists must
+/// never present the same one.
+struct SharedTrust {
+  X509_STORE* store = nullptr;
+  /// The certificate inside `identity`, for recognising a context curl loaded
+  /// it into.
+  X509* identityCert = nullptr;
+  std::string identity;
+};
+
+/// The first certificate block of `pem` that starts a line, which is the only
+/// kind the PEM reader takes; empty when there is none.
+std::string firstCertificateBlock(const std::string& pem) {
+  static constexpr char kEnd[] = "-----END CERTIFICATE-----";
+  size_t begin = pem.find(kPemCertBegin);
+  while (begin != std::string::npos && begin != 0 && pem[begin - 1] != '\n') {
+    begin = pem.find(kPemCertBegin, begin + 1);
+  }
+  if (begin == std::string::npos) return {};
+  const size_t end = pem.find(kEnd, begin);
+  if (end == std::string::npos) return {};
+  return pem.substr(begin, end + sizeof(kEnd) - 1 - begin);
+}
+
+/// Same acceptance rule as curl's own blob loader: every certificate and CRL
+/// must load, and there must be at least one.
+X509_STORE* parseRoots(const std::string& pem) {
+  if (pem.size() > static_cast<size_t>(INT_MAX)) return nullptr;
+  BIO* bio = BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size()));
+  if (bio == nullptr) return nullptr;
+  STACK_OF(X509_INFO)* infos =
+      PEM_X509_INFO_read_bio(bio, nullptr, nullptr, nullptr);
+  BIO_free(bio);
+  X509_STORE* store = infos != nullptr ? X509_STORE_new() : nullptr;
+  bool ok = store != nullptr;
+  size_t count = 0;
+  for (size_t i = 0; ok && i < sk_X509_INFO_num(infos); ++i) {
+    const X509_INFO* info = sk_X509_INFO_value(infos, i);
+    if (info->x509 != nullptr) {
+      ok = X509_STORE_add_cert(store, info->x509) == 1;
+      ++count;
+    }
+    if (ok && info->crl != nullptr) {
+      ok = X509_STORE_add_crl(store, info->crl) == 1;
+      ++count;
+    }
+  }
+  sk_X509_INFO_pop_free(infos, X509_INFO_free);
+  ERR_clear_error();
+  if (!ok || count == 0) {
+    X509_STORE_free(store);
+    return nullptr;
+  }
+  // The flags curl sets on the store it would have built from the blob.
+  X509_STORE_set_flags(store,
+                       X509_V_FLAG_TRUSTED_FIRST | X509_V_FLAG_PARTIAL_CHAIN);
+  return store;
+}
+
+/// `pem` must live for the rest of the process: its address is the key.
+/// Returns null when the list does not parse, so the caller hands curl the
+/// list itself and curl reports the error.
+const SharedTrust* sharedTrust(const std::string& pem) {
+  static std::mutex mutex;
+  // Never freed, for the same reason as the interned PEM pool.
+  static auto* cache =
+      new std::unordered_map<const std::string*, SharedTrust>();
+  std::lock_guard<std::mutex> lock(mutex);
+  const auto found = cache->find(&pem);
+  if (found != cache->end()) {
+    return found->second.store != nullptr ? &found->second : nullptr;
+  }
+  SharedTrust& entry = (*cache)[&pem];
+  const std::string block = firstCertificateBlock(pem);
+  if (block.empty()) return nullptr;
+  BIO* bio = BIO_new_mem_buf(block.data(), static_cast<int>(block.size()));
+  X509* cert = bio != nullptr
+                   ? PEM_read_bio_X509(bio, nullptr, nullptr, nullptr)
+                   : nullptr;
+  BIO_free(bio);
+  ERR_clear_error();
+  if (cert == nullptr) return nullptr;
+  X509_STORE* store = parseRoots(pem);
+  if (store == nullptr) {
+    X509_free(cert);
+    return nullptr;
+  }
+  entry.store = store;
+  entry.identityCert = cert;
+  entry.identity = block + "\nnitro_http trust store " +
+                   std::to_string(cache->size()) + "\n";
+  return &entry;
+}
+
+CURLcode useSharedTrust(CURL* /*easy*/, void* sslCtx, void* trust) {
+  const auto* shared = static_cast<const SharedTrust*>(trust);
+  auto* ctx = static_cast<SSL_CTX*>(sslCtx);
+  // curl calls this for every TLS handshake on the handle, an HTTPS proxy's
+  // included, and the proxy keeps its own trust. Only the origin's context
+  // holds exactly what curl loaded from `identity`.
+  STACK_OF(X509_OBJECT)* loaded =
+      X509_STORE_get1_objects(SSL_CTX_get_cert_store(ctx));
+  const X509* only = loaded != nullptr && sk_X509_OBJECT_num(loaded) == 1
+                         ? X509_OBJECT_get0_X509(sk_X509_OBJECT_value(loaded, 0))
+                         : nullptr;
+  const bool origin = only != nullptr && X509_cmp(only, shared->identityCert) == 0;
+  sk_X509_OBJECT_pop_free(loaded, X509_OBJECT_free);
+  if (!origin) return CURLE_OK;
+  X509_STORE_up_ref(shared->store);
+  SSL_CTX_set_cert_store(ctx, shared->store);
+  return CURLE_OK;
+}
+
+#endif  // NITRO_HTTP_SHARES_TRUST_STORE
+
+/// Installs a CA bundle. `ownedByProcess` says `pem` outlives every handle, so
+/// curl borrows it (`CURL_BLOB_NOCOPY`) and, where the TLS library is ours,
+/// the list is parsed once and shared. Returns false when this libcurl has no
 /// blob support at all, in which case the caller degrades to curl's default
 /// trust rather than failing the request.
 bool setCaBundleBlob(CURL* easy, const std::string& pem, bool ownedByProcess) {
 #if LIBCURL_VERSION_NUM >= 0x074D00  // 7.77.0
+  const std::string* data = &pem;
+#if NITRO_HTTP_SHARES_TRUST_STORE
+  if (const SharedTrust* shared = ownedByProcess ? sharedTrust(pem) : nullptr) {
+    curl_easy_setopt(easy, CURLOPT_SSL_CTX_FUNCTION, &useSharedTrust);
+    curl_easy_setopt(easy, CURLOPT_SSL_CTX_DATA,
+                     const_cast<SharedTrust*>(shared));
+    data = &shared->identity;
+  }
+#endif
   struct curl_blob blob;
-  blob.data = const_cast<char*>(pem.data());
-  blob.len = pem.size();
+  blob.data = const_cast<char*>(data->data());
+  blob.len = data->size();
   blob.flags = ownedByProcess ? CURL_BLOB_NOCOPY : CURL_BLOB_COPY;
   return curl_easy_setopt(easy, CURLOPT_CAINFO_BLOB, &blob) == CURLE_OK;
 #else
@@ -322,8 +471,11 @@ const std::string& CertStore::bundledRootsPem() {
 bool CertStore::usesPlatformVerifyCallback() {
 #if defined(__APPLE__)
   // Overriding CAINFO against Secure Transport would *narrow* trust, so
-  // nothing is installed there; see backendResolvesAppleTrust().
-  return certdetail::backendResolvesAppleTrust();
+  // nothing is installed there; see backendResolvesAppleTrust(). The linked
+  // backend cannot change while the process runs, and this is asked on every
+  // HTTPS request, so the string inspection runs once.
+  static const bool kResolves = certdetail::backendResolvesAppleTrust();
+  return kResolves;
 #else
   return false;
 #endif
@@ -358,8 +510,18 @@ long CertStore::curlTlsVersion(int64_t v, bool isMax) {
 
 // ── Apply ────────────────────────────────────────────────────────────────────
 
+const std::string* CertStore::internPem(const std::string& pem) {
+  static std::mutex mutex;
+  // Deliberately never freed: a handle may borrow an entry until the process
+  // ends, including during static destruction at exit.
+  static auto* pool = new std::unordered_set<std::string>();
+  std::lock_guard<std::mutex> lock(mutex);
+  return &*pool->insert(pem).first;
+}
+
 EngineError CertStore::apply(CURL* easy, const RawTlsConfig& tls,
-                             const std::string& pinOverride) {
+                             const std::string& pinOverride,
+                             const std::string* stableRootsPem) {
   // Function-local so the directive cannot leak into the next source file
   // of the unity translation unit.
   using namespace certdetail;  // NOLINT(build/namespaces)
@@ -382,6 +544,12 @@ EngineError CertStore::apply(CURL* easy, const RawTlsConfig& tls,
              "Every https connection is trivially interceptable — never ship "
              "this configuration.");
   }
+
+#if NITRO_HTTP_SHARES_TRUST_STORE
+  // A handle that last carried a shared store must not keep it when this
+  // configuration installs none.
+  curl_easy_setopt(easy, CURLOPT_SSL_CTX_FUNCTION, nullptr);
+#endif
 
   switch (static_cast<RootCaSource>(tls.rootCaSource)) {
     case RootCaSource::Platform: {
@@ -481,9 +649,12 @@ EngineError CertStore::apply(CURL* easy, const RawTlsConfig& tls,
             RawErrorKind::RAWERRORKIND_BAD_REQUEST,
             "trustedRootsPem contains no PEM certificate block");
       }
-      // COPY: the config this string lives in can be replaced while the handle
-      // is still in flight.
-      if (!setCaBundleBlob(easy, tls.trustedRootsPem, false)) {
+      // Borrowed when the caller has an interned copy, which outlives every
+      // handle. Otherwise COPY: the config this string lives in can be replaced
+      // while the handle is still in flight.
+      const bool borrowed = stableRootsPem != nullptr;
+      if (!setCaBundleBlob(easy, borrowed ? *stableRootsPem : tls.trustedRootsPem,
+                           borrowed)) {
         return EngineError::make(
             RawErrorKind::RAWERRORKIND_BAD_REQUEST,
             "this libcurl predates CURLOPT_CAINFO_BLOB, so a custom PEM trust "

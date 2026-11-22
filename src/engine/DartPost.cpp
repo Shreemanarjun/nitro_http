@@ -9,6 +9,8 @@
 
 #include "DartPost.h"
 
+#include <atomic>
+
 #include <cstdlib>
 #include <mutex>
 #include <utility>
@@ -46,13 +48,26 @@ PostHook& postHookSlot() {
   return hook;
 }
 
+std::atomic<bool>& postHookFlag() {
+  static std::atomic<bool> flag{false};
+  return flag;
+}
+
 }  // namespace
 
 bool dartPostAvailable() { return Dart_PostCObject_DL != nullptr; }
 
+// Read on every completion; an atomic instead of the hook mutex. Tests install
+// a hook before any request runs, so an acquire read is enough.
+bool postHookInstalled() {
+  return postHookFlag().load(std::memory_order_acquire);
+}
+
 void setPostHook(PostHook hook) {
   std::lock_guard<std::mutex> lock(postHookMutex());
+  const bool installed = static_cast<bool>(hook);
   postHookSlot() = std::move(hook);
+  postHookFlag().store(installed, std::memory_order_release);
 }
 
 bool postRecord(int64_t port, Blob blob) {

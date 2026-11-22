@@ -2,9 +2,9 @@
 ///
 /// Mirrors `request_runner.dart`: a per-socket executor seam plus one
 /// process-wide demultiplexer over the module-global `wsFrames` stream. Frame
-/// payloads are copied on arrival and acked through `wsGrantCredit`, for exactly
-/// the reason the chunk stream needs it — the generated release symbol frees
-/// only the struct shell.
+/// payloads are taken out of native memory on arrival and acked through
+/// `wsGrantCredit`, for exactly the reason the chunk stream needs it — the
+/// generated release symbol frees only the struct shell.
 library;
 
 import 'dart:async';
@@ -119,28 +119,38 @@ final class NativeWsExecutor implements WsExecutor {
   }
 }
 
+/// Takes a frame's payload out of native memory, or returns null when it is
+/// already gone.
+typedef WsPayloadTaker = Uint8List? Function(RawWsFrame raw);
+
 /// Exactly one instance, exactly one subscription to `wsFrames`.
 final class NativeWsFrameDemux implements WsFrameDemux {
-  NativeWsFrameDemux._() {
+  NativeWsFrameDemux._(this._take) {
     _sub = NitroHttpNative.engine.wsFrames.listen(_onFrame);
   }
 
   static NativeWsFrameDemux? _instance;
 
-  static NativeWsFrameDemux get instance =>
-      _instance ??= NativeWsFrameDemux._();
+  /// The one demux. [take] needs `dart:ffi`, which this file must not import,
+  /// so the native build passes it in; only the first call's is used.
+  static NativeWsFrameDemux instance(WsPayloadTaker take) =>
+      _instance ??= NativeWsFrameDemux._(take);
+
+  final WsPayloadTaker _take;
 
   late final StreamSubscription<RawWsFrame> _sub;
   final _controllers = <int, StreamController<WsFrameEvent>>{};
 
   void _onFrame(RawWsFrame raw) {
-    // COPY FIRST — the payload is native-owned until we ack it.
+    // The payload is native-owned until we ack it, so it is taken first.
+    final payload = _take(raw);
+    if (payload == null) return;
     final event = WsFrameEvent(
       socketId: raw.socketId,
       // The one place a wire int becomes a typed opcode.
       opcode: WsOpcode.fromWire(raw.opcode),
       fin: (raw.flags & 1) != 0,
-      payload: Uint8List.fromList(raw.payload),
+      payload: payload,
     );
     final c = _controllers[event.socketId];
     if (c != null && !c.isClosed) c.add(event);

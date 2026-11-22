@@ -216,7 +216,8 @@ TEST_F(EngineTest, BufferedGetReportsEverythingTheCallerNeeds) {
   EXPECT_EQ(r.engineErrorCode, 0);
   EXPECT_EQ(r.statusCode, 200);
   EXPECT_EQ(r.version, RAWHTTPVERSION_HTTP11);
-  EXPECT_EQ(r.finalUrl, server_.url("/echo?b=2&a=1"));
+  // No redirect was followed, so the request URL is the final one.
+  EXPECT_TRUE(r.finalUrl.empty());
   EXPECT_EQ(r.redirectCount, 0);
   EXPECT_EQ(r.primaryIp, "127.0.0.1");
   EXPECT_EQ(r.primaryPort, server_.port());

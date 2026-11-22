@@ -9,11 +9,12 @@
 ///   [NativeStreamDemux] therefore holds exactly one subscription per stream for
 ///   the whole process and fans out by `requestId`.
 ///
-/// * **Eager copy, then ack.** `nitro_http_release_RawChunk` frees only the
-///   struct shell; the payload stays native-owned. The demux copies each
-///   chunk's bytes the moment it arrives, and the runner reports the cumulative
-///   copied count back through `grantCredit(id, credits, acked)`, which is what
-///   lets native free those payloads without ever racing a Dart read.
+/// * **Take, then ack.** `nitro_http_release_RawChunk` frees only the struct
+///   shell; the payload stays native-owned. The demux takes each chunk's bytes
+///   the moment it arrives — a large chunk whole, freed later by its finalizer,
+///   a small one by copy — and the runner reports the cumulative count back
+///   through `grantCredit(id, credits, acked)`, which is what lets native free
+///   the copied payloads without ever racing a Dart read.
 ///
 /// * **Credit loop.** Native emits at most `credits` chunks then returns
 ///   `CURL_WRITEFUNC_PAUSE`, closing the TCP window. Consumer backpressure —
@@ -103,10 +104,8 @@ abstract interface class UploadWriter {
   void release();
 }
 
-/// A body chunk that has already been copied out of native memory.
-///
-/// The copy is not an optimisation failure — it is the mechanism that makes the
-/// zero-copy struct safe. See the library doc.
+/// A body chunk whose bytes no longer belong to the engine: copied out of
+/// native memory, or taken over whole when the chunk is large.
 final class ChunkEvent {
   ChunkEvent({
     required this.requestId,
@@ -243,29 +242,33 @@ class RequestRunner {
   /// Merges the body's implied headers into the caller's, without overriding
   /// anything the caller set explicitly.
   HttpHeaders _headersFor(HttpRequest request, EncodedBody body) {
-    final headers = request.headers.clone();
     final contentType = body.contentType;
-    if (contentType != null && headers.contentType == null) {
-      headers.set('content-type', contentType);
+    // Copied only when a header is added: the caller's collection is never
+    // mutated.
+    if (contentType == null || request.headers.contentType != null) {
+      return request.headers;
     }
-    return headers;
+    return request.headers.clone()..set('content-type', contentType);
   }
 
   // ── Buffered path ──────────────────────────────────────────────────────────
 
-  Future<HttpResponse> send(HttpRequest request) async {
-    _checkAlive();
-    return switch (request.expectedBody) {
-      HttpExpectedBody.stream => sendStreamed(request),
-      HttpExpectedBody.text => sendBuffered(request),
-      HttpExpectedBody.bytes => sendBuffered(request),
-    };
-  }
+  // Not `async`: both targets check liveness inside their own async bodies, so
+  // a disposed runner still fails the returned Future rather than throwing.
+  Future<HttpResponse> send(HttpRequest request) =>
+      switch (request.expectedBody) {
+        HttpExpectedBody.stream => sendStreamed(request),
+        HttpExpectedBody.text => sendBuffered(request),
+        HttpExpectedBody.bytes => sendBuffered(request),
+      };
 
   Future<HttpResponse> sendBuffered(HttpRequest request) async {
     _checkAlive();
     final requestId = Ids.nextRequest();
-    final body = await encodeBody(request.body);
+    // No body: skip the await and its microtask hop.
+    final body = request.body == null
+        ? EncodedBody.none
+        : await encodeBody(request.body);
     final headers = _headersFor(request, body);
     final reportProgress =
         request.onSendProgress != null || request.onReceiveProgress != null;
@@ -305,7 +308,8 @@ class RequestRunner {
         sentBytes: body.contentLength,
       );
     } finally {
-      await eventSub?.cancel();
+      // Only progress requests have a subscription to cancel.
+      if (eventSub != null) await eventSub.cancel();
       _demux.release(requestId);
     }
   }
@@ -358,12 +362,9 @@ class RequestRunner {
       timings: response.timings,
     );
 
-    // NOT copied: the generated record decoder builds this with `sublist`, so it
-    // is already a fresh Dart-owned `Uint8List` and a second copy bought nothing.
-    // Removing it did not move the wall clock on a 32 MiB body (437 ms either
-    // way) — the buffered path is bounded by the record codec's own passes over
-    // the payload — but it does halve this step's peak footprint, which for a
-    // large response is the difference between holding it once and twice.
+    // Not copied: a small body is a fresh Dart-owned `Uint8List` from the
+    // record decoder, and a large one is native memory the executor adopted
+    // with a finalizer. Either way it is the response's own.
     final bytes = response.body;
 
     // Progress events are lossy by design, so the terminal values are

@@ -9,13 +9,83 @@ import 'dart:async';
 import 'dart:ffi';
 import 'dart:typed_data';
 
-import 'package:nitro/nitro.dart' show NitroBuffer;
+import 'package:nitro/nitro.dart'
+    show NitroBuffer, NitroConfig, NitroRuntime, nitroRegisterZeroCopyView;
 
 import '../nitro_http.native.dart';
 import 'instance_keys.dart';
+import 'isolate_name_io.dart';
 import 'native_attach.dart';
 import '../api/settings.dart';
 import 'request_runner.dart';
+
+// ── Zero-copy response bodies ────────────────────────────────────────────────
+
+/// Held for good once the first body is adopted. On Android, Linux and Windows
+/// `NitroRuntime.releaseLib` unmaps the library at refcount zero, and a body
+/// still alive after that would run a finalizer that no longer exists.
+final DynamicLibrary _pinnedLibrary = NitroRuntime.loadLib('nitro_http');
+
+/// Finalizer of every adopted chunk and frame; see `chunkFinalizerAddress`.
+final Pointer<NativeFinalizerFunction> _freePayload = () {
+  _pinnedLibrary;
+  return Pointer<NativeFinalizerFunction>.fromAddress(
+    NitroHttpNative.engine.chunkFinalizerAddress(),
+  );
+}();
+
+/// Whether this is the root isolate. A list adopted with a finalizer anywhere
+/// else is freed when its isolate exits, even if `Isolate.exit` handed it to
+/// another isolate that still reads it (dart-lang/sdk#55800), so only the root
+/// isolate, which outlives every other, adopts native memory.
+final bool _adopts = currentIsolateName() == 'main';
+
+/// [adopted], or a Dart-heap copy of it off the root isolate; see [_adopts].
+/// The copy leaves [adopted] unreachable, so its finalizer frees the block.
+Uint8List _keep(Uint8List adopted) =>
+    _adopts ? adopted : Uint8List.fromList(adopted);
+
+/// Takes [view], native memory the engine frees once it is acked, out of the
+/// engine's hands: whole when the engine offered it under [owner], by copy
+/// otherwise. Null when the engine released an offered block first, which it
+/// only does for a request or socket it has already torn down.
+Uint8List? takeNativeBytes(Uint8List view, int owner) {
+  if (owner == 0) return Uint8List.fromList(view);
+  final address = NitroHttpNative.engine.adoptChunk(owner);
+  if (address == 0) return null;
+  return _keep(
+    Pointer<Uint8>.fromAddress(address)
+        .asTypedList(view.length, finalizer: _freePayload),
+  );
+}
+
+/// Request bodies at least this large are written straight into a block the
+/// engine keeps; below it the generated copy is as fast or faster.
+const int _ownedBodyMinBytes = 16 * 1024;
+
+// ── Completion spin ──────────────────────────────────────────────────────────
+
+/// Runs [call] with nitro's completion spin and completion timeout off, then
+/// restores both. The spin busy-waits for a result that is already there,
+/// which an HTTP response never is. A nitro timeout would drop a late response
+/// unread, leaking a body Dart was handed; the engine enforces the request's
+/// own timeouts instead. nitro reads both when the call is made, so other
+/// nitro plugins keep their own.
+T _withoutSpin<T>(T Function() call) {
+  final cfg = NitroConfig.instance;
+  final spin = cfg.nativeAsyncSpinUs;
+  final timeout = cfg.nativeAsyncTimeoutMs;
+  cfg
+    ..nativeAsyncSpinUs = 0
+    ..nativeAsyncTimeoutMs = 0;
+  try {
+    return call();
+  } finally {
+    cfg
+      ..nativeAsyncSpinUs = spin
+      ..nativeAsyncTimeoutMs = timeout;
+  }
+}
 
 // ── Native implementations ───────────────────────────────────────────────────
 
@@ -32,13 +102,86 @@ final class NativeRequestExecutor implements RequestExecutor {
   void configureClient(RawClientConfig config) =>
       _native.configureClient(config);
 
+  /// Finalizer of every adopted body; see `bodyFinalizerAddress`. Asked of
+  /// this client's instance: the `engine` instance owns the stream emitter,
+  /// and creating it from a background isolate would take the streams away
+  /// from the root isolate.
+  late final Pointer<NativeFinalizerFunction> _freeBody = () {
+    _pinnedLibrary;
+    return Pointer<NativeFinalizerFunction>.fromAddress(
+      _native.bodyFinalizerAddress(),
+    );
+  }();
+
+  /// Takes ownership of a body the engine detached from the record (see
+  /// `RawResponse.bodyOwner`), wrapping the native bytes without copying them.
+  RawResponse _adoptBody(RawResponse r) {
+    if (r.bodyOwner == 0) return r;
+    final bytes = _keep(
+      Pointer<Uint8>.fromAddress(r.bodyAddress).asTypedList(
+        r.bodyLength,
+        finalizer: _freeBody,
+        token: Pointer<Void>.fromAddress(r.bodyOwner),
+      ),
+    );
+    // Every field but the three that described the detached body, which this
+    // list now owns. test/adopt_body_fields_test.dart fails when a field is
+    // added to RawResponse and not here.
+    return RawResponse(
+      requestId: r.requestId,
+      errorKind: r.errorKind,
+      errorMessage: r.errorMessage,
+      engineErrorCode: r.engineErrorCode,
+      statusCode: r.statusCode,
+      reasonPhrase: r.reasonPhrase,
+      version: r.version,
+      finalUrl: r.finalUrl,
+      redirectCount: r.redirectCount,
+      headers: r.headers,
+      body: bytes,
+      fromCache: r.fromCache,
+      revalidated: r.revalidated,
+      primaryIp: r.primaryIp,
+      primaryPort: r.primaryPort,
+      timings: r.timings,
+    );
+  }
+
+  /// Runs [send] with a large [body] in a block the engine keeps. The
+  /// generated call passes a registered native view by address.
+  Future<T> _withOwnedBody<T>(
+    Uint8List body,
+    Future<T> Function(Uint8List body) send,
+  ) {
+    if (body.length < _ownedBodyMinBytes) return send(body);
+    final address = _native.allocRequestBody(body.length);
+    if (address == 0) return send(body);
+    final block = Pointer<Uint8>.fromAddress(address);
+    final view = block.asTypedList(body.length)..setAll(0, body);
+    // Released as soon as the call returns. The engine takes the block during
+    // the call, or never: the bridge can fail it without reaching the engine.
+    // Either way the block is still allocated here, so no later allocation can
+    // share its address, and a taken block makes this a no-op.
+    try {
+      return send(nitroRegisterZeroCopyView(view, block.cast()));
+    } finally {
+      _native.freeRequestBody(address);
+    }
+  }
+
   @override
   Future<RawResponse> sendBuffered(RawRequest request, Uint8List body) =>
-      _native.sendBuffered(request, body);
+      _withOwnedBody(
+        body,
+        (body) => _withoutSpin(() => _native.sendBuffered(request, body)),
+      ).then(_adoptBody);
 
   @override
   Future<RawResponseHead> startStreamed(RawRequest request, Uint8List body) =>
-      _native.startStreamed(request, body);
+      _withOwnedBody(
+        body,
+        (body) => _withoutSpin(() => _native.startStreamed(request, body)),
+      );
 
   @override
   RawResponse cachedResponse(RawRequest request) =>
@@ -154,18 +297,20 @@ final class NativeStreamDemux implements StreamDemux {
   final _eventControllers = <int, StreamController<RawEvent>>{};
 
   void _onChunk(RawChunk raw) {
-    // COPY FIRST. `raw` is a proxy over native memory whose payload is freed
-    // once we ack it; reading it later would be a use-after-free.
-    final event = ChunkEvent(
-      requestId: raw.requestId,
-      kind: raw.kind,
-      aux: raw.aux,
-      bytes: Uint8List.fromList(raw.bytes),
+    final c = _chunkControllers[raw.requestId];
+    // A cancelled request's tail can arrive after its controller is gone.
+    // The engine frees it.
+    if (c == null || c.isClosed) return;
+    final bytes = takeNativeBytes(raw.bytes, raw.owner);
+    if (bytes == null) return;
+    c.add(
+      ChunkEvent(
+        requestId: raw.requestId,
+        kind: raw.kind,
+        aux: raw.aux,
+        bytes: bytes,
+      ),
     );
-    final c = _chunkControllers[event.requestId];
-    // An unknown id is not an error: a cancelled request's tail can still be
-    // in flight when its controller is already gone.
-    if (c != null && !c.isClosed) c.add(event);
   }
 
   void _onEvent(RawEvent raw) {

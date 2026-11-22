@@ -110,6 +110,13 @@ class NitroHttpCompatClient extends http.BaseClient {
         }),
       );
     }
+    if (request case http.Abortable(abortTrigger: _?)) {
+      // A trigger completed in the same turn as `send` must win over the
+      // request, which is otherwise submitted without yielding. Its callback
+      // runs in the microtask after the first of these yields.
+      await null;
+      await null;
+    }
 
     // Which cancellation this was is only known at throw time, so the mapper is
     // a closure over the flag rather than a static.

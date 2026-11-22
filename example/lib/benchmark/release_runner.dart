@@ -52,7 +52,9 @@ import '../server/h2_server.dart';
 import '../server/in_app_sink.dart';
 import '../server/local_server.dart';
 import 'benchmark.dart';
+import 'detach_probe.dart';
 import 'execution.dart';
+import 'remote_tls_probe.dart';
 
 /// Whether this build was compiled to run the benchmark instead of the UI.
 ///
@@ -237,6 +239,35 @@ Future<void> _writeReport(
 /// Never throws: a release build that dies in `main` cannot say why, so failures
 /// are printed and marked instead.
 Future<void> runReleaseBenchmark() async {
+  const probe = String.fromEnvironment('BENCH_PROBE');
+  if (probe == 'detach' || probe == 'sizes' || probe == 'remote') {
+    try {
+      var lines = <String>[];
+      try {
+        lines = await _runProbe(probe);
+      } on Object catch (error) {
+        lines = ['PROBE failed: $error'];
+        exitCode = 1;
+      }
+      try {
+        final dir = await getApplicationDocumentsDirectory();
+        await File('${dir.path}/$reportFileName').writeAsString(
+          [
+            // Lets a harness tell this run's report from the previous one's.
+            'run: ${const String.fromEnvironment('BENCH_RUN_ID')}',
+            ...lines,
+            if (exitCode == 0) endMarker else failMarker,
+          ].join('\n'),
+        );
+      } on Object catch (error) {
+        _emit('$failMarker could not write the report file: $error');
+        exitCode = 1;
+      }
+    } finally {
+      await _quit();
+    }
+    return;
+  }
   Future<void> Function()? stopServer;
   try {
     NitroHttp.reset();
@@ -308,6 +339,21 @@ Future<void> runReleaseBenchmark() async {
   } finally {
     await stopServer?.call();
     await _quit();
+  }
+}
+
+/// One of the `BENCH_PROBE` runs that replace the benchmark.
+Future<List<String>> _runProbe(String probe) async {
+  if (probe == 'detach') return runDetachProbe();
+  if (probe == 'remote') {
+    return runRemoteTlsProbe(const String.fromEnvironment('BENCH_REMOTE_URL'));
+  }
+  NitroHttp.reset();
+  final server = await IsolatedServer.start();
+  try {
+    return await runSizeProbe(server.baseUrl);
+  } finally {
+    await server.stop();
   }
 }
 

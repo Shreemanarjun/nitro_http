@@ -189,6 +189,24 @@ void main() {
       ]);
     });
 
+    test('a DateTime header matches dart:io HttpDate.format', () async {
+      for (final when in [
+        DateTime.utc(1994, 11, 6, 8, 49, 37),
+        DateTime.utc(2000, 2, 29, 0, 0, 5),
+        DateTime(2026, 1, 1, 23, 59, 59), // local time, converted to UTC
+      ]) {
+        final h = Harness();
+        await readBody(
+          await h.adapter.fetch(
+            opts(headers: <String, dynamic>{'Date': when}),
+            null,
+            null,
+          ),
+        );
+        expect(h.executor.lastHeaders, [('Date', HttpDate.format(when))]);
+      }
+    });
+
     test('an Iterable header value becomes one field per element', () async {
       final h = Harness();
       await readBody(

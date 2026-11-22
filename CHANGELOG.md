@@ -1,3 +1,30 @@
+## 0.0.8
+
+### Added
+
+* **DartNative support.** The package resolves and builds under DartNative
+  (`dn`) as well as Flutter: SDK floor `^3.12.0-0`, no `flutter_web_plugins`
+  dependency (web still works through `fetch`), no Kotlin plugin needed.
+* **WASM-compatible.** The public libraries no longer import `dart:io` or
+  `dart:isolate`, so `flutter build web --wasm` works.
+
+### Changed
+
+* **Faster new HTTPS connections**: the root list is parsed once per process
+  instead of per connection, about 2 ms less per new connection.
+* **Fewer copies**: response bodies, streamed chunks and WebSocket frames of
+  8 KiB or more reach Dart without a copy; in-memory request bodies of 16 KiB
+  or more are copied once; JSON bodies are encoded straight to bytes.
+* Upgraded to **`nitro` 0.9.0**. No API change.
+
+### Fixed
+
+* An HTTPS proxy is no longer verified against the origin's custom roots.
+* CR, LF and NUL inside a response header value become a space.
+* A response body received in a background isolate stays valid after that
+  isolate exits.
+* `http` lower bound raised to `^1.5.0`, the first release with `Abortable`.
+
 ## 0.0.7
 
 ### Breaking

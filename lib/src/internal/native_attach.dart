@@ -21,10 +21,10 @@
 /// and every later touch is a single already-true bool test.
 library;
 
-import 'dart:isolate';
-
 import '../nitro_http.native.dart';
 import 'instance_keys.dart';
+import 'isolate_name_stub.dart'
+    if (dart.library.ffi) 'isolate_name_io.dart';
 
 bool _attached = false;
 
@@ -58,7 +58,7 @@ void ensureNativeAttached() {
   //
   // (The bridge's stream registry is module-global with a single subscriber, so
   // driving this plugin from several isolates is unsupported anyway.)
-  if (Isolate.current.debugName != 'main') return;
+  if (currentIsolateName() != 'main') return;
 
   NitroHttpNative.forKey(kEngineKey).resetNative();
 }

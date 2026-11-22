@@ -3,8 +3,8 @@
 ### Added
 
 * **DartNative support.** The package resolves and builds under DartNative
-  (`dn`) as well as Flutter: SDK floor `^3.12.0-0`, no `flutter_web_plugins`
-  dependency (web still works through `fetch`), no Kotlin plugin needed.
+  (`dn`) as well as Flutter: no `flutter_web_plugins` dependency (web still
+  works through `fetch`), no Kotlin plugin needed.
 * **WASM-compatible.** The public libraries no longer import `dart:io` or
   `dart:isolate`, so `flutter build web --wasm` works.
 
@@ -24,6 +24,8 @@
 * A response body received in a background isolate stays valid after that
   isolate exits.
 * `http` lower bound raised to `^1.5.0`, the first release with `Abortable`.
+* The Dart SDK floor is `^3.11.3` (was `^3.12.2`), so older Flutter stable
+  releases can use the package.
 
 ## 0.0.7
 

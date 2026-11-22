@@ -189,10 +189,11 @@ const int kUploadHighWaterMark = 1 << 20;
 
 class RequestRunner {
   RequestRunner({
-    required this._executor,
-    required this._demux,
+    required RequestExecutor executor,
+    required StreamDemux demux,
     required this.settings,
-  });
+  }) : _executor = executor,
+       _demux = demux;
 
 
   final RequestExecutor _executor;
@@ -728,10 +729,12 @@ class RequestRunner {
 class _UploadPump {
   _UploadPump({
     required this.requestId,
-    required this._executor,
-    required this._events,
-    required this._contentLength,
-  });
+    required RequestExecutor executor,
+    required Stream<RawEvent> events,
+    required int? contentLength,
+  }) : _executor = executor,
+       _events = events,
+       _contentLength = contentLength;
 
   final int requestId;
   final RequestExecutor _executor;

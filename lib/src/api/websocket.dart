@@ -45,13 +45,17 @@ const int _kFrameCreditBatch = 16;
 /// libcurl-established (and libcurl-TLS-terminated) connection.
 final class NitroWebSocket implements WebSocket {
   NitroWebSocket._({
-    required this._socketId,
-    required this._executor,
-    required this._demux,
+    required int socketId,
+    required WsExecutor executor,
+    required WsFrameDemux demux,
     required this.protocol,
-    required this._responseHeaders,
-    required this._statusCode,
-  });
+    required HttpHeaders responseHeaders,
+    required int statusCode,
+  }) : _socketId = socketId,
+       _executor = executor,
+       _demux = demux,
+       _responseHeaders = responseHeaders,
+       _statusCode = statusCode;
 
   /// Opens a connection.
   ///

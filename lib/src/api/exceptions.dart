@@ -58,10 +58,10 @@ sealed class NitroHttpException implements Exception {
   /// diagnostic text.
   NitroHttpException({
     this.request,
-    this._message,
+    String? message,
     this.engineMessage,
     this.engineErrorCode = 0,
-  });
+  }) : _message = message;
 
 
   /// The request that failed, when the failure happened after one was built.

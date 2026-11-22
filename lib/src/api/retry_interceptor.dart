@@ -48,15 +48,23 @@ class RetryPolicy {
   /// injectable so tests get a deterministic sequence.
   const RetryPolicy({
     this.maxRetries = 3,
-    this._delay,
-    this._shouldRetry,
-    this._beforeRetry,
-    this._random,
+    Duration Function(int attempt)? delay,
+    bool Function(
+      HttpResponse? response,
+      NitroHttpException? error,
+      int attempt,
+    )? shouldRetry,
+    FutureOr<HttpRequest?> Function(HttpRequest request, int attempt)?
+        beforeRetry,
+    Random? random,
     this.baseDelay = const Duration(milliseconds: 200),
     this.maxDelay = const Duration(seconds: 30),
     this.respectRetryAfter = true,
     this.maxRetryAfter = const Duration(seconds: 60),
-  });
+  }) : _delay = delay,
+       _shouldRetry = shouldRetry,
+       _beforeRetry = beforeRetry,
+       _random = random;
 
   /// How many retries are allowed after the initial attempt.
   ///

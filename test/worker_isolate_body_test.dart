@@ -1,5 +1,6 @@
-// A body adopted with a finalizer in a worker isolate must stay valid after
-// `Isolate.run` hands it over and the worker exits. Its own file: a second
+// A body received in a worker isolate must stay valid after `Isolate.run`
+// hands it over and the worker exits: a list adopted there with a finalizer
+// would be freed at the worker's exit (dart-lang/sdk#55800). Its own file: a second
 // isolate using the plugin takes the stream registry with it, so it must not
 // share a process with the streaming tests.
 import 'dart:ffi';
@@ -12,7 +13,7 @@ import 'package:nitro_http/nitro_http.dart';
 
 const int _size = 4 * 1024 * 1024;
 
-Uint8List _body() => Uint8List(_size)..fillRange(0, _size, 0x5a);
+Uint8List _body(int byte) => Uint8List(_size)..fillRange(0, _size, byte);
 
 /// Four GETs of [url] from a fresh client. A class so that `Isolate.run`
 /// sends only the URL.
@@ -37,11 +38,14 @@ void main() {
 
   test('a body received in a worker isolate outlives that isolate', () async {
     DynamicLibrary.open(lib.absolute.path);
-    final body = _body();
+    // The churn below gets other bytes, so a worker body whose block was
+    // freed and reused cannot still compare equal.
+    final body = _body(0x5a);
+    final churn = _body(0xa5);
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(() => server.close(force: true));
     server.listen((request) async {
-      request.response.add(body);
+      request.response.add(request.uri.path == '/churn' ? churn : body);
       await request.response.close();
     });
     final url = 'http://127.0.0.1:${server.port}/';
@@ -51,7 +55,7 @@ void main() {
     final client = NitroHttpClient();
     addTearDown(client.dispose);
     for (var i = 0; i < 8; i++) {
-      await client.get(url);
+      await client.get('${url}churn');
     }
     for (final received in bodies) {
       expect(received, body);

@@ -14,6 +14,7 @@ import 'package:nitro/nitro.dart'
 
 import '../nitro_http.native.dart';
 import 'instance_keys.dart';
+import 'isolate_name_io.dart';
 import 'native_attach.dart';
 import '../api/settings.dart';
 import 'request_runner.dart';
@@ -33,6 +34,17 @@ final Pointer<NativeFinalizerFunction> _freePayload = () {
   );
 }();
 
+/// Whether this is the root isolate. A list adopted with a finalizer anywhere
+/// else is freed when its isolate exits, even if `Isolate.exit` handed it to
+/// another isolate that still reads it (dart-lang/sdk#55800), so only the root
+/// isolate, which outlives every other, adopts native memory.
+final bool _adopts = currentIsolateName() == 'main';
+
+/// [adopted], or a Dart-heap copy of it off the root isolate; see [_adopts].
+/// The copy leaves [adopted] unreachable, so its finalizer frees the block.
+Uint8List _keep(Uint8List adopted) =>
+    _adopts ? adopted : Uint8List.fromList(adopted);
+
 /// Takes [view], native memory the engine frees once it is acked, out of the
 /// engine's hands: whole when the engine offered it under [owner], by copy
 /// otherwise. Null when the engine released an offered block first, which it
@@ -41,8 +53,10 @@ Uint8List? takeNativeBytes(Uint8List view, int owner) {
   if (owner == 0) return Uint8List.fromList(view);
   final address = NitroHttpNative.engine.adoptChunk(owner);
   if (address == 0) return null;
-  return Pointer<Uint8>.fromAddress(address)
-      .asTypedList(view.length, finalizer: _freePayload);
+  return _keep(
+    Pointer<Uint8>.fromAddress(address)
+        .asTypedList(view.length, finalizer: _freePayload),
+  );
 }
 
 /// Request bodies at least this large are written straight into a block the
@@ -103,10 +117,12 @@ final class NativeRequestExecutor implements RequestExecutor {
   /// `RawResponse.bodyOwner`), wrapping the native bytes without copying them.
   RawResponse _adoptBody(RawResponse r) {
     if (r.bodyOwner == 0) return r;
-    final bytes = Pointer<Uint8>.fromAddress(r.bodyAddress).asTypedList(
-      r.bodyLength,
-      finalizer: _freeBody,
-      token: Pointer<Void>.fromAddress(r.bodyOwner),
+    final bytes = _keep(
+      Pointer<Uint8>.fromAddress(r.bodyAddress).asTypedList(
+        r.bodyLength,
+        finalizer: _freeBody,
+        token: Pointer<Void>.fromAddress(r.bodyOwner),
+      ),
     );
     // Every field but the three that described the detached body, which this
     // list now owns. test/adopt_body_fields_test.dart fails when a field is
@@ -142,17 +158,14 @@ final class NativeRequestExecutor implements RequestExecutor {
     if (address == 0) return send(body);
     final block = Pointer<Uint8>.fromAddress(address);
     final view = block.asTypedList(body.length)..setAll(0, body);
-    // The bridge can fail a call without ever reaching the engine, so the
-    // block is released on every outcome; once a request took it this frees
-    // nothing.
-    void release() => _native.freeRequestBody(address);
+    // Released as soon as the call returns. The engine takes the block during
+    // the call, or never: the bridge can fail it without reaching the engine.
+    // Either way the block is still allocated here, so no later allocation can
+    // share its address, and a taken block makes this a no-op.
     try {
-      return send(
-        nitroRegisterZeroCopyView(view, block.cast()),
-      ).whenComplete(release);
-    } on Object {
-      release();
-      rethrow;
+      return send(nitroRegisterZeroCopyView(view, block.cast()));
+    } finally {
+      _native.freeRequestBody(address);
     }
   }
 

@@ -46,6 +46,10 @@ run_suite() {  # $1 = suite; returns flutter's status, or 124 when stopped
         --predicate 'process == "Runner"' 2>/dev/null | tail -40 || true
       pkill -P "$pid" 2>/dev/null || true
       kill "$pid" 2>/dev/null || true
+      # The test runner's own cleanup can stall too, so it gets a grace period.
+      for _ in 1 2 3 4 5 6; do kill -0 "$pid" 2>/dev/null || break; sleep 5; done
+      pkill -9 -P "$pid" 2>/dev/null || true
+      kill -9 "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
       xcrun simctl terminate "$UDID" dev.shreeman.nitroHttpExample 2>/dev/null || true
       return 124

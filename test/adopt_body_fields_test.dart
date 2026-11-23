@@ -3,7 +3,7 @@
 // to its default, but only for bodies large enough to be adopted.
 import 'dart:io';
 
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 
 void main() {
   test('_adoptBody carries every RawResponse field', () {

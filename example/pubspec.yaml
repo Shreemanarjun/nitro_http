@@ -64,6 +64,7 @@ dev_dependencies:
   # mean, and a mean is the statistic a lone GC pause destroys.
   benchmark_harness: ^2.4.0
 
+  stream_channel: ^2.1.2
   flutter_test:
     sdk: flutter
   integration_test:

@@ -5,7 +5,7 @@
 // `NitroHttpException` variant that has to become a `ClientException`, and the
 // body assembler's behaviour when `Content-Length` lies.
 
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:http/http.dart' as http;
 import 'package:nitro_http/nitro_http.dart';
 import 'package:nitro_http/src/nitro_http.native.dart';

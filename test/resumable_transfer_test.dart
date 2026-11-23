@@ -2,7 +2,7 @@ import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:nitro_http/nitro_http.dart';
 
 /// Range requests are how a download or upload picks up where it left off, so
@@ -11,7 +11,6 @@ import 'package:nitro_http/nitro_http.dart';
 /// and a partial body is delivered as-is instead of being stitched back into a
 /// whole one.
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
 
   const dylib = 'build/lib/libnitro_http.dylib';
   final available = File(dylib).existsSync();

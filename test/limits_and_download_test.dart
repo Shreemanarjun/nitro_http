@@ -5,7 +5,7 @@ import 'dart:io';
 // wants the `dart:io` ones.
 import 'dart:io' as io;
 
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:nitro_http/nitro_http.dart';
 
 import 'support/tls_server.dart';
@@ -13,7 +13,6 @@ import 'support/tls_server.dart';
 /// The response size ceiling, downloads that bypass the Dart heap, and the
 /// three connection settings that decide which socket a request leaves on.
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
 
   const dylib = 'build/lib/libnitro_http.dylib';
   final available = File(dylib).existsSync();

@@ -3,7 +3,7 @@
 // a server that answers `Access-Control-Allow-Origin: *`, which is why
 // cross-origin credentials are opt-in.
 //
-//   flutter test --platform chrome test/web_cors_browser_test.dart
+//   cd example && flutter test --platform chrome test/web_cors_browser_test.dart
 @TestOn('browser')
 library;
 

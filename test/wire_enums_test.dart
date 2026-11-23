@@ -5,7 +5,7 @@
 // fail to compile, it silently mislabels a frame. So every documented opcode is
 // asserted, and so is the unknown fallback.
 
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:nitro_http/src/internal/ws_runner.dart';
 
 void main() {

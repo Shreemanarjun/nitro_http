@@ -4,7 +4,7 @@ import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:nitro_http/nitro_http.dart';
 
 /// `websocket_test.dart` drives the Dart half against fakes, which is where the
@@ -12,7 +12,6 @@ import 'package:nitro_http/nitro_http.dart';
 /// that is exactly the gap the `wss://` segfault went through: the engine, the
 /// demux and the close handshake only meet a real peer here.
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
 
   const dylib = 'build/lib/libnitro_http.dylib';
   final available = File(dylib).existsSync();

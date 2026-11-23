@@ -11,7 +11,7 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:nitro_http/nitro_http.dart';
 
 /// Captures the request head a client writes, by answering nothing.

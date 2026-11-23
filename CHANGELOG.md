@@ -1,3 +1,11 @@
+## 0.8.1
+
+### Fixed
+
+* `dn publish` works: the package no longer lists `flutter_test` or
+  `integration_test` as dev dependencies, which DartNative does not provide.
+  No change to the library.
+
 ## 0.0.8
 
 ### Added

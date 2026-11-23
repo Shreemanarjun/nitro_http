@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:nitro_http/nitro_http.dart';
 import 'package:nitro_http/src/internal/ws_browser.dart';
 import 'package:nitro_http/src/internal/ws_runner.dart';

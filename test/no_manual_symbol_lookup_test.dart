@@ -4,7 +4,7 @@
 // functions are reached through the spec, lib/src/nitro_http.native.dart.
 import 'dart:io';
 
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 
 void main() {
   test('hand-written Dart looks up no native symbol by name', () {

@@ -12,7 +12,7 @@ library;
 import 'dart:ffi';
 import 'dart:io';
 
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:nitro_http/nitro_http.dart';
 
 const int _mib = 256;

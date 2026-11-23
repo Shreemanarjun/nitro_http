@@ -2,14 +2,13 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:nitro_http/nitro_http.dart';
 
 /// Edges that are easy to get wrong and expensive to get wrong: a redirect that
 /// must keep its body, a server that lies about how much it will send, and user
 /// data reaching a header.
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
 
   const dylib = 'build/lib/libnitro_http.dylib';
   final available = File(dylib).existsSync();

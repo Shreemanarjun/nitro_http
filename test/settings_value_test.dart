@@ -6,7 +6,7 @@
 // compared (a client rebuilds its native config when they change) and printed
 // (they land in logs and error messages).
 
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:nitro_http/nitro_http.dart';
 
 void main() {

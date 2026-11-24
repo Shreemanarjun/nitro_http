@@ -32,8 +32,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final watch = Stopwatch()..start();
     try {
       final response = await _client.get('https://example.com');
-      _result = '${response.statusCode} over ${response.version.label}, '
-          '${response.bodyBytes.length} bytes in ${watch.elapsedMilliseconds} ms';
+
+      _result =
+          '${response.request.url} ${response.statusCode} over ${response.version.label}, '
+          '${response.bodyBytes.length} bytes in ${watch.elapsedMilliseconds} ms \n${response.timings}';
     } on NitroHttpException catch (e) {
       _result = 'Failed: $e';
     }
@@ -46,9 +48,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final watch = Stopwatch()..start();
     try {
       final response = await _client.get('https://badssl.com');
-      _result = '${response.statusCode} over ${response.version.label}, '
-          '${response.bodyBytes.length} bytes in ${watch.elapsedMilliseconds} ms';
-        
+      _result =
+          '${response.request.url} ${response.statusCode} over ${response.version.label}, '
+          '${response.bodyBytes.length} bytes in ${watch.elapsedMilliseconds} ms \n${response.timings}\n ${response.body.toString()}';
     } on NitroHttpException catch (e) {
       _result = 'Failed: $e';
     }
@@ -66,23 +68,25 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('nitro_http')),
-      body: Container(
-        alignment: Alignment.center,
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(_result, textAlign: TextAlign.center),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _busy ? null : _fetch,
-              child: const Text('GET https://example.com'),
-            ),
-            ElevatedButton(
-              onPressed: _busy ? null : _badSSL,
-              child: const Text('GET https://badssl.com'),
-            ),
-          ],
+      body: SingleChildScrollView(
+        child: Container(
+          alignment: Alignment.center,
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(_result, textAlign: TextAlign.center),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _busy ? null : _fetch,
+                child: const Text('GET https://example.com'),
+              ),
+              ElevatedButton(
+                onPressed: _busy ? null : _badSSL,
+                child: const Text('GET https://badssl.com'),
+              ),
+            ],
+          ),
         ),
       ),
     );

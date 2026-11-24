@@ -472,8 +472,9 @@ try {
 }
 ```
 
-A 4xx or 5xx is **returned, not thrown**, so check `res.statusCode`. Set
-`throwOnStatusCode: true` in `ClientSettings` if you would rather have it thrown.
+A 4xx or 5xx is **thrown** as `NitroHttpStatusCodeException` by default. Set
+`throwOnStatusCode: false` in `ClientSettings` to get those responses back
+instead, and check `res.statusCode`.
 
 Three of these are easy to confuse, and the distinction is deliberate:
 
@@ -1054,7 +1055,7 @@ The settings you are most likely to touch:
 | `httpVersionPref` | `auto` | Negotiate, prefer, or require a version |
 | `headers` | none | Default headers a request can override |
 | `userAgent` | package default | `User-Agent` |
-| `throwOnStatusCode` | `false` | Throw on 4xx/5xx instead of returning |
+| `throwOnStatusCode` | `true` | Throw on 4xx/5xx instead of returning |
 | `enableCompression` | `true` | Advertise and decode gzip/deflate/br/zstd |
 | `redirectSettings` | follow, max 5 | Whether and how far to follow 3xx |
 | `poolSettings` | 64 total, 6 per host | Pool size and connection lifetimes |

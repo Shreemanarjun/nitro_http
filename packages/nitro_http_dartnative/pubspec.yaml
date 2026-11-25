@@ -1,0 +1,31 @@
+name: nitro_http_dartnative
+description: A fast HTTP client for DartNative backed by a native libcurl C++ engine over Nitro FFI, with HTTP/1.1, HTTP/2, HTTP/3, streaming and WebSockets.
+version: 0.0.8
+homepage: https://github.com/Shreemanarjun/nitro_http/tree/main/packages/nitro_http_dartnative
+repository: https://github.com/Shreemanarjun/nitro_http
+issue_tracker: https://github.com/Shreemanarjun/nitro_http/issues
+documentation: https://github.com/Shreemanarjun/nitro_http/blob/main/doc/ADVANCED.md
+funding:
+  - https://buymeacoffee.com/shreemanarjun
+topics:
+  - http
+  - network
+  - ffi
+  - websocket
+  - dartnative
+
+# DartNative builds apps for these two.
+platforms:
+  android:
+  ios:
+
+environment:
+  # Same floor as nitro_http.
+  sdk: ^3.7.0
+
+dependencies:
+  # Pinned: this package's version always equals the nitro_http it ships.
+  nitro_http: 0.0.8
+
+dev_dependencies:
+  test: ^1.25.0

@@ -21,6 +21,9 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+    # DartNative packages: their dependencies resolve only with `dn pub get`,
+    # so they are analyzed and tested with `dn`, not from this root.
+    - packages/**
   language:
     strict-casts: true
     strict-inference: true
